@@ -176,4 +176,9 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_executable(galaxyquest platform/linux/launcher.c)
   target_link_libraries(galaxyquest PRIVATE dl)
   add_dependencies(galaxyquest game)
+
+  # The headless test runner (tools/run_headless.sh on Android), run directly.
+  add_executable(petari_headless platform/android/headless.c)
+  target_link_libraries(petari_headless PRIVATE dl m)
+  target_include_directories(petari_headless PRIVATE platform/include)
 endif()

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "JSystem/JMath/JMATrigonometric.hpp"
+#include <cfloat>
 #include <cmath>
 #include <revolution/types.h>
 

@@ -36,7 +36,7 @@ void __DSPHandler(__OSInterrupt interrupt, OSContext* context);
 }
 
 static std::mutex sMailMutex;
-static std::deque<u32> sMailFromDsp;
+static std::deque<u32, PortHostAllocator<u32>> sMailFromDsp;  // shared with host threads: host heap
 
 static std::vector<u32> sPacket;
 static u32 sPacketExpected = 0;

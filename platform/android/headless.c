@@ -10,7 +10,11 @@
 //
 // Controller 0 is a connected Wii remote + Nunchuk at rest.  PETARI_INPUT
 // scripts it (see port/input_script.h).
+#ifdef __ANDROID__
 #include <android/dlext.h>
+#else
+#define _GNU_SOURCE
+#endif
 #include <dlfcn.h>
 #include <errno.h>
 #include <math.h>
@@ -94,27 +98,52 @@ int main(int argc, char** argv) {
     }
     int seconds = argc > 3 ? atoi(argv[3]) : 60;
 
+#ifdef __ANDROID__
     void* win = mmap((void*)kWindowBase, kWindowSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
     if (win != (void*)kWindowBase) {
         fprintf(stderr, "cannot reserve %p: got %p errno %d\n", (void*)kWindowBase, win, errno);
         return 1;
     }
+#else
+    // Linux (see platform/linux/launcher.c): the window but the library slot,
+    // which libgame.so takes as its image base.
+    uintptr_t parts[2][2] = {{kWindowBase, kLibBase}, {kLibBase + kLibSize, kWindowBase + kWindowSize}};
+    for (int i = 0; i < 2; i++) {
+        void* p = mmap((void*)parts[i][0], parts[i][1] - parts[i][0], PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE,
+                       -1, 0);
+        if (p != (void*)parts[i][0]) {
+            fprintf(stderr, "cannot reserve %p: got %p errno %d\n", (void*)parts[i][0], p, errno);
+            return 1;
+        }
+    }
+#endif
 
     char path[512];
     snprintf(path, sizeof(path), "%s", argv[0]);
     char* slash = strrchr(path, '/');
     snprintf(slash ? slash + 1 : path, sizeof(path) - (slash ? (size_t)(slash + 1 - path) : 0), "libgame.so");
 
+#ifdef __ANDROID__
     android_dlextinfo ext;
     memset(&ext, 0, sizeof(ext));
     ext.flags = ANDROID_DLEXT_RESERVED_ADDRESS;
     ext.reserved_addr = (void*)kLibBase;
     ext.reserved_size = kLibSize;
     void* lib = android_dlopen_ext(path, RTLD_NOW | RTLD_LOCAL, &ext);
+#else
+    void* lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+#endif
     if (!lib) {
         fprintf(stderr, "dlopen %s: %s\n", path, dlerror());
         return 1;
     }
+#ifndef __ANDROID__
+    Dl_info info;
+    if (!dladdr(dlsym(lib, "port_boot"), &info) || (uintptr_t)info.dli_fbase != kLibBase) {
+        fprintf(stderr, "libgame.so is not at %p\n", (void*)kLibBase);
+        return 1;
+    }
+#endif
 
     int* toStderr = (int*)dlsym(lib, "port_log_to_stderr");
     if (toStderr) {

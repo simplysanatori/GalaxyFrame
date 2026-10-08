@@ -327,8 +327,9 @@ struct ReadRequest {
 
 static std::mutex sQueueMutex;
 static std::condition_variable sQueueCv;
-static std::deque<ReadRequest> sPending;       // not yet started
-static std::deque<DVDCommandBlock*> sDone;     // finished, callbacks pending
+// Filled on game threads, emptied on the worker: host heap (heap_routing.h).
+static std::deque<ReadRequest, PortHostAllocator<ReadRequest>> sPending;          // not yet started
+static std::deque<DVDCommandBlock*, PortHostAllocator<DVDCommandBlock*>> sDone;  // finished, callbacks pending
 static DVDCommandBlock* sActive = nullptr;     // being read by the worker
 static OSThreadQueue sSyncQueue;
 

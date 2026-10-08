@@ -14,13 +14,16 @@
 #include <stdio.h>
 #if defined(__GLIBC__)
 // glibc declares its (32-bit) wide-string functions noexcept, and libstdc++'s
-// <cwchar> #undefs the renames below: both go in before the renames, so that
-// later includes find them done.
+// <cwchar> and <cstdio> #undef the renames below: they go in before the
+// renames, so that later includes find them done.
 #ifdef __cplusplus
+#include <cstdio>
 #include <cwchar>
 #else
 #include <wchar.h>
 #endif
+// bionic's name for va_list, which some decomp headers use.
+typedef va_list __va_list;
 #endif
 
 #ifdef __cplusplus
@@ -63,6 +66,15 @@ int port_sprintf(char* dst, const char* fmt, ...);
 #define snprintf port_snprintf
 #define vsprintf port_vsprintf
 #define sprintf port_sprintf
+#if defined(__cplusplus) && defined(__GLIBCXX__)
+// libstdc++'s own headers call std::vsnprintf (std::to_string) and so on.
+namespace std {
+using ::port_snprintf;
+using ::port_sprintf;
+using ::port_vsnprintf;
+using ::port_vsprintf;
+}  // namespace std
+#endif
 #endif
 
 // Renderer hooks called from game code (platform/src/gx/gx_recorder.cpp):
