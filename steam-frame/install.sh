@@ -25,9 +25,11 @@ TARBALL=$1
 if [ -n "$TARBALL" ] && [ -f "$TARBALL" ]; then
   echo "installing $TARBALL"
   tar -xzf "$TARBALL" -C "$DEST" galaxyquest libgame.so
+  tar -xzf "$TARBALL" -C "$DEST" petari_headless 2> /dev/null || true  # releases before frame.2 had none
 elif [ -x "$HERE/../build-linux/galaxyquest" ]; then
   echo "installing the build in build-linux/"
   cp "$HERE/../build-linux/galaxyquest" "$DEST/galaxyquest"
+  cp "$HERE/../build-linux/petari_headless" "$DEST/petari_headless"
   # The game may be running: the library is replaced in one step.
   strip --strip-unneeded -o "$DEST/libgame.so.new" "$HERE/../build-linux/libgame.so"
   mv "$DEST/libgame.so.new" "$DEST/libgame.so"
@@ -63,5 +65,6 @@ cat << MSG
 Installed. Steam library entry "$NAME" (appid $APPID) runs $DEST/galaxyquest.sh.
 Game files: steam-frame/prepare-game.sh <your Super Mario Galaxy disc image>  (once)
 Then launch it from the library with SteamVR running.
+Optional, after your first save: steam-frame/warm-shaders.sh compiles the galaxies' shaders ahead (about 45 minutes, no headset needed).
 Logs: ~/.local/share/GalaxyQuest/petari_log.txt (the game) and launch.log
 MSG
