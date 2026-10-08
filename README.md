@@ -1,3 +1,5 @@
+> **Steam Frame:** this fork runs GalaxyQuest natively on Valve's Steam Frame, on its own SteamVR, with no Android layer. See [STEAM_FRAME.md](STEAM_FRAME.md). The rest of this file is the upstream README for the Meta Quest build.
+
 > **Disclaimer: this project is 100% made by AI.** All of GalaxyQuest,
 > its code, the changes it makes to the decompilation, its tools and this
 > documentation, was written by AI: Claude Opus 5.5 with Max thinking, in
