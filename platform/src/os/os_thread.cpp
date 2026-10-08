@@ -12,6 +12,8 @@
 // re-enabled, at explicit port_irq_poll() calls, and whenever the CPU idles.
 #include <pthread.h>
 #include <signal.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 #include <unwind.h>
 #include <string.h>
@@ -239,6 +241,32 @@ BOOL OSRestoreInterrupts(BOOL level) {
 // ---------------------------------------------------------------------------
 static void* hostThreadMain(void* arg);
 
+// Scheduling priority for the threads the frame depends on (the emulated
+// game threads and the headset frame loop).  On the Steam Frame the process
+// has five of the eight cores and shares them with its own workers (disc,
+// sound, the frame preparation, the driver's); the game thread, which has
+// 8 ms to produce a frame, lost the CPU for 10 ms and more now and then,
+// a repeated frame each time.  The system allows nice -8 (its hard limit),
+// not real-time scheduling.
+extern "C" void port_boost_thread(void) {
+#ifndef __ANDROID__
+    static int sNice = 1;  // decided once: the lowest nice the limit allows, 0 if none
+    if (sNice == 1) {
+        struct rlimit rl;
+        if (getrlimit(RLIMIT_NICE, &rl) == 0 && rl.rlim_max > rl.rlim_cur) {
+            rl.rlim_cur = rl.rlim_max;
+            setrlimit(RLIMIT_NICE, &rl);
+        }
+        int allowed = (getrlimit(RLIMIT_NICE, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY) ? 20 - (int)rl.rlim_cur : -20;
+        sNice = allowed < -8 ? -8 : allowed > 0 ? 0 : allowed;
+        port_log("threads: nice %d for the game threads and the frame loop (limit allows %d)", sNice, allowed);
+    }
+    if (sNice < 0) {
+        setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), sNice);
+    }
+#endif
+}
+
 static void startHostThread(OSThread* t, HostThread* h) {
     size_t stackSize = h->stackSize ? h->stackSize : (2u << 20);
     void* stack = port_low_alloc(stackSize);
@@ -296,6 +324,7 @@ static void switchTo(OSThread* next, bool callerExiting) {
 }
 
 static void* hostThreadMain(void* arg) {
+    port_boost_thread();
     OSThread* self = (OSThread*)arg;
     tlsSelf = self;
     HostThread* h = hostOf(self);
@@ -874,6 +903,7 @@ extern "C" void port_debug_dump_threads(void) {
 static void (*sBootEntry)(void);
 
 static void* defaultThreadMain(void*) {
+    port_boost_thread();
     OSThread* thread = &DefaultThread;
     tlsSelf = thread;
     hostOf(thread)->pt = pthread_self();

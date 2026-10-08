@@ -47,9 +47,15 @@ if [ -n "$EXISTING" ] && [ "$EXISTING" != "0" ]; then
 else
   APPID=$($CEF "(async () => { const id = await SteamClient.Apps.AddShortcut('$NAME', '$DEST/galaxyquest.sh', '$DEST', ''); SteamClient.Apps.SetShortcutName(id, '$NAME'); return id; })()")
 fi
-# 120 Hz: each 60 fps game frame is shown for exactly two refreshes.
+# 120 Hz: each 60 fps game frame is shown for exactly two refreshes.  No
+# throttling to every other refresh (SteamVR does that to an app that missed
+# frames, and the game's pacing then ran it at half speed) and no motion
+# smoothing (its synthesized frames ghost; the game paces its own 60 fps).
 if [ -x "$VRCMD" ]; then
-  "$VRCMD" --set-settings-int "steam.app.$APPID.preferredRefreshRate" 120 > /dev/null 2>&1 || echo "warning: could not set the refresh rate (is SteamVR running?); set 120 Hz for the game in SteamVR's per-app video settings"
+  for kv in preferredRefreshRate=120 framesToThrottle=0 additionalFramesToPredict=0 motionSmoothingOverride=2; do
+    "$VRCMD" --set-settings-int "steam.app.$APPID.${kv%=*}" "${kv#*=}" > /dev/null 2>&1 ||
+      echo "warning: could not set SteamVR's ${kv%=*} for the game (is SteamVR running?); see STEAM_FRAME.md"
+  done
 fi
 
 cat << MSG
