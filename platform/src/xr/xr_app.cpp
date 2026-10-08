@@ -140,7 +140,12 @@ struct App {
     // Two sets of eye swapchains, [set][eye]: consecutive game frames are
     // rendered into alternate sets, so one set can be on display while the
     // other is being rendered (see renderFrame).
-    Swapchain eyes[2][2];
+    // Three sets: a set is on show for two refreshes starting two refreshes
+    // after its second eye was rendered (showRendered), so with two sets the
+    // next frame would be drawn into a swapchain whose image is on display
+    // (and SteamVR on the Frame showed the half-drawn one).
+    static const int kEyeSets = 3;
+    Swapchain eyes[kEyeSets][2];
     XrViewConfigurationView viewConfig[2]{};
 
     // Frame pacing (renderFrame).
@@ -148,15 +153,18 @@ struct App {
     int shownSet = -1;       // set submitted
     int renderedSet = -1;    // paired refreshes: set finished, its images still acquired; released and submitted from the next refresh on
     GLsync renderedFence = nullptr;  // signalled when the GPU has finished that set
-    int fenceWaits = 0;              // times the set was not finished by then (logged)
+    int64_t renderedFenceAt = 0;     // host time the fence was placed
+    int fenceWaits = 0, fenceChecks = 0;  // times the set was not finished by then (logged), checks
+    int64_t fenceWaitNs = 0, fenceWaitMaxNs = 0, fenceGapNs = 0;  // waited, and the time the GPU had
     bool renderDue = false;  // paired refreshes: the right eye of the game frame picked up is due
     int heldSet = -1;        // paired refreshes: set whose left eye image is acquired and rendered, not yet released
     uint32_t heldIdx = 0;
     XrTime setTime = 0;      // display time the game frame picked up is rendered for
-    XrPosef setPose[2][2];  // [set][eye] pose and field of view each image was rendered with
-    XrFovf setFov[2][2];
-    XrExtent2Di setRect[2][2];  // [set][eye] part of each image rendered (vr::renderEye)
+    XrPosef setPose[kEyeSets][2];  // [set][eye] pose and field of view each image was rendered with
+    XrFovf setFov[kEyeSets][2];
+    XrExtent2Di setRect[kEyeSets][2];  // [set][eye] part of each image rendered (vr::renderEye)
     vr::FrameInfo setFrame{};  // the game frame picked up (from its update refresh)
+    XrView setViews[2]{};      // the head pose both its eyes are rendered from
     bool paired = false;       // the display refreshes at 120 Hz: game frames take two refreshes each
     XrTime lastDisplayTime = 0;
     int skippedRefreshes = 0;  // refreshes the frame loop missed (logged)
@@ -739,7 +747,7 @@ void initSession(App& a) {
         int32_t h = (int32_t)lroundf(vc.recommendedImageRectHeight * scale);
         w = w < (int32_t)vc.maxImageRectWidth ? w : (int32_t)vc.maxImageRectWidth;
         h = h < (int32_t)vc.maxImageRectHeight ? h : (int32_t)vc.maxImageRectHeight;
-        for (int s = 0; s < 2; s++) {
+        for (int s = 0; s < App::kEyeSets; s++) {
             Swapchain& sc = a.eyes[s][e];
             sc.width = w;
             sc.height = h;
@@ -1501,10 +1509,16 @@ void showRendered(App& a) {
     if (a.renderedSet < 0) return;
     if (a.renderedFence) {
         // Normally long signalled; a wait here is a GPU running a refresh behind.
-        if (glClientWaitSync(a.renderedFence, 0, 0) == GL_TIMEOUT_EXPIRED) {
+        int64_t t0 = port_host_time_ns();
+        a.fenceGapNs += t0 - a.renderedFenceAt;
+        if (glClientWaitSync(a.renderedFence, GL_SYNC_FLUSH_COMMANDS_BIT, 0) == GL_TIMEOUT_EXPIRED) {
             a.fenceWaits++;
             glClientWaitSync(a.renderedFence, GL_SYNC_FLUSH_COMMANDS_BIT, 50000000);
+            int64_t waited = port_host_time_ns() - t0;
+            a.fenceWaitNs += waited;
+            if (waited > a.fenceWaitMaxNs) a.fenceWaitMaxNs = waited;
         }
+        a.fenceChecks++;
         glDeleteSync(a.renderedFence);
         a.renderedFence = nullptr;
     }
@@ -1560,11 +1574,12 @@ void renderPair(App& a, int s, const vr::FrameInfo& frame, const XrView views[2]
 // two refreshes.  Refreshes alternate between two steps: the first picks up
 // the newest game frame, moves the rig, signals the game's next retrace and
 // renders the left eye into the free set of swapchains, keeping that image
-// acquired; the second renders the right eye, keeping both acquired.  On
-// the refresh after that both images are released (the GPU has finished
-// them by then; SteamVR on the Frame would otherwise read a half-drawn
-// eye) and the set is submitted, for two refreshes, while the other set is
-// rendered.  So each refresh carries one
+// acquired; the second renders the right eye from the same head pose,
+// keeping both acquired.  Two refreshes after that (the second step of the
+// next game frame) both images are released and the set is submitted, for
+// two refreshes, while the other set is rendered: SteamVR on the Frame
+// reads a released image at once, so it has to be finished by then, and a
+// refresh later the GPU (shared with the compositor) often was not.  So each refresh carries one
 // eye of GPU work (the runtime holds the frame loop back when a refresh's
 // work takes longer than the refresh), and the compositor only ever gets a
 // set whose two eyes are finished and show the same game frame (submitting
@@ -1647,11 +1662,14 @@ void renderFrame(App& a) {
     a.lastDisplayTime = fs.predictedDisplayTime;
     int64_t now = port_host_time_ns();
     if (a.skippedRefreshes > 0 && now - a.skipLogAt > 10000000000ll) {
-        port_log("vr: the frame loop missed %d refreshes in the last 10 s (%d with its own work late); %d sets not finished a refresh after rendering",
-                 a.skippedRefreshes, a.lateRefreshes, a.fenceWaits);
+        port_log("vr: the frame loop missed %d refreshes in the last 10 s (%d with its own work late); %d of %d sets not finished when due "
+                 "(GPU had %.1f ms; waited %.2f ms avg %.2f max)",
+                 a.skippedRefreshes, a.lateRefreshes, a.fenceWaits, a.fenceChecks, a.fenceChecks ? a.fenceGapNs / 1e6 / a.fenceChecks : 0.0,
+                 a.fenceWaits ? a.fenceWaitNs / 1e6 / a.fenceWaits : 0.0, a.fenceWaitMaxNs / 1e6);
         a.skippedRefreshes = 0;
         a.lateRefreshes = 0;
-        a.fenceWaits = 0;
+        a.fenceWaits = a.fenceChecks = 0;
+        a.fenceWaitNs = a.fenceWaitMaxNs = a.fenceGapNs = 0;
         a.skipLogAt = now;
     }
 
@@ -1716,16 +1734,16 @@ void renderFrame(App& a) {
             releaseImage(a.depth[e]);
         }
         a.shownSet = s;
-        a.renderSet = s ^ 1;  // for the paired refreshes, should SpaceWarp stop
+        a.renderSet = (s + 1) % App::kEyeSets;  // for the paired refreshes, should SpaceWarp stop
         warpFrame = true;
     } else if (paired && !a.renderDue) {
-        // First step.  The set finished on the last refresh goes up now.
-        showRendered(a);
-        // The newest game frame is finished on the next refresh and shown on
-        // the two after it: rendered for the time between those.
-        a.setTime = fs.predictedDisplayTime + refresh * 5 / 2;
+        // First step.  The newest game frame is finished on the next refresh,
+        // handed over on the one after (showRendered, in the second step,
+        // when the GPU has had a whole refresh more to finish it) and shown
+        // on the two after that: rendered for the time between those.
+        a.setTime = fs.predictedDisplayTime + refresh * 7 / 2;
         updateInput(a, a.setTime);
-        XrView views[2];
+        XrView* views = a.setViews;
         locateViews(a, a.setTime, views);
         a.setFrame = frameInfo(a, views, a.setTime);
         a.setFrame.eyeBudgetMs = refresh / 1e6f;  // one eye per refresh
@@ -1740,10 +1758,12 @@ void renderFrame(App& a) {
         a.heldSet = a.renderSet;
         a.renderDue = true;
     } else if (paired && a.heldSet >= 0) {
-        // Second step: the right eye, for the same display time with the
-        // freshest prediction of it; then both images go out together.
-        XrView views[2];
-        locateViews(a, a.setTime, views);
+        // Second step.  The set finished on the last refresh goes up now,
+        // then the right eye of this one, from the same head pose as its
+        // left eye (a fresher prediction for one eye only had the two eyes
+        // disagree, see the eyes jitter against each other).
+        showRendered(a);
+        XrView* views = a.setViews;
         vr::FrameInfo frame = a.setFrame;
         frame.eyes[1] = eyeInfo(a, views[1], 1);
         int s = a.heldSet;
@@ -1758,9 +1778,10 @@ void renderFrame(App& a) {
         // the compositor would read them before the GPU is done.
         a.renderedFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         glFlush();
+        a.renderedFenceAt = port_host_time_ns();
         a.heldSet = -1;
         a.renderedSet = s;
-        a.renderSet = s ^ 1;
+        a.renderSet = (s + 1) % App::kEyeSets;
         a.renderDue = false;
     } else {
         dropHeldEye(a);
@@ -1773,7 +1794,7 @@ void renderFrame(App& a) {
         vr::beginFrame(frame);
         renderPair(a, a.renderSet, frame, views);
         a.shownSet = a.renderSet;
-        a.renderSet ^= 1;
+        a.renderSet = (a.renderSet + 1) % App::kEyeSets;
     }
 
     XrCompositionLayerProjectionView projViews[2] = {{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}, {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
