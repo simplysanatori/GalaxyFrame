@@ -13,6 +13,7 @@
 #include <jni.h>
 #else
 #include <signal.h>
+#include <unistd.h>
 #include <stdlib.h>
 #endif
 #include <math.h>
@@ -2122,5 +2123,15 @@ extern "C" __attribute__((visibility("default"))) void port_linux_main(const cha
         }
     }
     port_log("exiting");
+#ifdef __ANDROID__
     exit(0);
+#else
+    // exit() would run the static destructors with the game's threads still
+    // running and hang on a lock one of them holds: tell the runtime the app
+    // is gone, then leave at once (saves are written when made, the log line
+    // by line).
+    if (a.session != XR_NULL_HANDLE) xrDestroySession(a.session);
+    if (a.instance != XR_NULL_HANDLE) xrDestroyInstance(a.instance);
+    _exit(0);
+#endif
 }
