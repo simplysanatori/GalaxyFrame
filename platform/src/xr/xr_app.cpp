@@ -1748,7 +1748,6 @@ void renderFrame(App& a) {
         a.setFrame = frameInfo(a, views, a.setTime);
         a.setFrame.eyeBudgetMs = refresh / 1e6f;  // one eye per refresh
         vr::beginFrame(a.setFrame);
-        if (gBooted) port_vi_retrace();  // the game starts its next frame now
         Swapchain& sc = a.eyes[a.renderSet][0];
         a.heldIdx = acquireImage(sc);
         vr::Extent used = vr::renderEye(0, a.setFrame, sc.fbos[a.heldIdx], sc.width, sc.height);
@@ -1763,6 +1762,12 @@ void renderFrame(App& a) {
         // left eye (a fresher prediction for one eye only had the two eyes
         // disagree, see the eyes jitter against each other).
         showRendered(a);
+        // The game starts its next frame now, a refresh later than in the
+        // first step as upstream has it: it takes 3-4 ms (7-17 at worst) and
+        // is picked up on the next first step, so the frame shown is 8 ms
+        // fresher, which makes up for the later hand-over here.  A frame
+        // the game has not finished by then is shown once more instead.
+        if (gBooted) port_vi_retrace();
         XrView* views = a.setViews;
         vr::FrameInfo frame = a.setFrame;
         frame.eyes[1] = eyeInfo(a, views[1], 1);
