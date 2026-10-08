@@ -32,7 +32,7 @@ int gDebugStopAfterDraws = debugEnv("PETARI_GLSTOP") ? atoi(debugEnv("PETARI_GLS
 // Deferred GL deletes (texture images die on whichever thread drops them)
 // ---------------------------------------------------------------------------
 static std::mutex sDeleteLock;
-static std::vector<GLuint> sDeleteTextures;
+static std::vector<GLuint, PortHostAllocator<GLuint>> sDeleteTextures;  // pushed on any thread, freed on the GL one
 
 void queueGlTextureDelete(uint32_t tex) {
     if (tex) {
@@ -46,7 +46,7 @@ TexImage::~TexImage() {
 }
 
 static void flushDeletes() {
-    std::vector<GLuint> list;
+    std::vector<GLuint, PortHostAllocator<GLuint>> list;
     {
         std::lock_guard<std::mutex> lock(sDeleteLock);
         list.swap(sDeleteTextures);

@@ -1,5 +1,5 @@
 #include "JSystem/JAudio2/dspproc.hpp"
-#include "JSystem/JAudio2/JASDSPInterface.hpp"
+#include "JSystem/JAudio2/JASDspInterface.hpp"
 #include "JSystem/JAudio2/dsptask.hpp"
 
 void DSPReleaseHalt2(u32 msg) {

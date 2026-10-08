@@ -36,6 +36,12 @@ static inline unsigned int __rlwimi(unsigned int a, unsigned int s, int sh, int 
 }
 
 static inline int __abs(int x) { return x < 0 ? -x : x; }
+#ifdef __GLIBC__
+// glibc's <math.h> (included above) declares its own extern __fabs and
+// __fabsf, which would make these global: the port's take other names.
+#define __fabsf port_fabsf
+#define __fabs port_fabs
+#endif
 static inline float __fabsf(float x) { return fabsf(x); }
 static inline double __fabs(double x) { return fabs(x); }
 static inline float __fnabsf(float x) { return -fabsf(x); }

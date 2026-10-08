@@ -228,7 +228,7 @@ namespace NrvMeramera {
     NEW_NERVE(MerameraNrvReadyRestart, Meramera, ReadyRestart);
 }  // namespace NrvMeramera
 
-f32 lerp(f32 start, f32 end, f32 t) {
+f32 merameraLerp(f32 start, f32 end, f32 t) {
     return start + (end - start) * t;
 }
 

@@ -576,7 +576,7 @@ GLuint compile(GLenum type, const char* fmt, bool withCommon) {
     return s;
 }
 
-GLuint link(const char* vs, const char* fs) {
+GLuint linkProgram(const char* vs, const char* fs) {
     GLuint p = glCreateProgram();
     glAttachShader(p, compile(GL_VERTEX_SHADER, vs, false));
     glAttachShader(p, compile(GL_FRAGMENT_SHADER, fs, true));
@@ -590,7 +590,7 @@ BlitProgram linkBlit(const char* source) {
     char fs[8192];
     snprintf(fs, sizeof(fs), kBlitFs, "%s", source);
     BlitProgram b;
-    b.program = link(kBlitVs, fs);
+    b.program = linkProgram(kBlitVs, fs);
     b.tex = glGetUniformLocation(b.program, "uTex");
     b.brightness = glGetUniformLocation(b.program, "uBrightness");
     b.vignette = glGetUniformLocation(b.program, "uVignette");
@@ -1454,29 +1454,29 @@ void init() {
     sBlit[kBlitPlainProgram] = linkBlit(kBlitPlain);
     sBlit[kBlitCas1Program] = linkBlit(kBlitCas1);
     sBlit[kBlitCasScaledProgram] = linkBlit(kBlitCasScaled);
-    sQuadProgram = link(kQuadVs, kQuadFs);
+    sQuadProgram = linkProgram(kQuadVs, kQuadFs);
     sQuadTex = glGetUniformLocation(sQuadProgram, "uTex");
     sQuadMvp = glGetUniformLocation(sQuadProgram, "uMvp");
     sQuadOpaque = glGetUniformLocation(sQuadProgram, "uOpaque");
     sQuadBrightness = glGetUniformLocation(sQuadProgram, "uBrightness");
     sQuadAlpha = glGetUniformLocation(sQuadProgram, "uAlpha");
-    sLayerProgram = link(kQuadVs, kLayerFs);
+    sLayerProgram = linkProgram(kQuadVs, kLayerFs);
     sLayerTex = glGetUniformLocation(sLayerProgram, "uTex");
     sLayerMvp = glGetUniformLocation(sLayerProgram, "uMvp");
     sLayerUvScale = glGetUniformLocation(sLayerProgram, "uUvScale");
-    sLaserProgram = link(kLaserVs, kLaserFs);
+    sLaserProgram = linkProgram(kLaserVs, kLaserFs);
     sLaserMvp = glGetUniformLocation(sLaserProgram, "uMvp");
     sLaserCorners = glGetUniformLocation(sLaserProgram, "uCorners");
     sLaserColor = glGetUniformLocation(sLaserProgram, "uColor");
     sLaserShape = glGetUniformLocation(sLaserProgram, "uShape");
     sLaserRing = glGetUniformLocation(sLaserProgram, "uRing");
-    sMotionProgram = link(kBlitVs, kMotionFs);
+    sMotionProgram = linkProgram(kBlitVs, kMotionFs);
     sMotionDepth = glGetUniformLocation(sMotionProgram, "uDepth");
     sMotionMatrix = glGetUniformLocation(sMotionProgram, "uCurToPrev");
     sMotionDepthOverride = glGetUniformLocation(sMotionProgram, "uDepthOverride");
     sMotionMaxDepth = glGetUniformLocation(sMotionProgram, "uMaxDepth");
     sMotionTag = glGetUniformLocation(sMotionProgram, "uTag");
-    sMotionQuadProgram = link(kQuadVs, kMotionQuadFs);
+    sMotionQuadProgram = linkProgram(kQuadVs, kMotionQuadFs);
     sMotionQuadTex = glGetUniformLocation(sMotionQuadProgram, "uTex");
     sMotionQuadMvp = glGetUniformLocation(sMotionQuadProgram, "uMvp");
     sMotionQuadAlphaMin = glGetUniformLocation(sMotionQuadProgram, "uAlphaMin");

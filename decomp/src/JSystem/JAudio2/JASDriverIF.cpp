@@ -1,6 +1,6 @@
 #include "JSystem/JAudio2/JASDriverIF.hpp"
 #include "JSystem/JAudio2/JASAiCtrl.hpp"
-#include "JSystem/JAudio2/JASDSPInterface.hpp"
+#include "JSystem/JAudio2/JASDspInterface.hpp"
 
 void JASDriver::setDSPLevel(f32 param_0) {
     JASDsp::setDSPMixerLevel(param_0);

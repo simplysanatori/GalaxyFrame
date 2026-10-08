@@ -1,6 +1,6 @@
 #pragma once
 
-#include <JSystem/JAudio2/JASDSPInterface.hpp>
+#include <JSystem/JAudio2/JASDspInterface.hpp>
 
 class JKRHeap;
 

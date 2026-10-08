@@ -31,4 +31,21 @@ struct PortHostAllocScope {
     PortHostAllocScope(const PortHostAllocScope&) = delete;
     PortHostAllocScope& operator=(const PortHostAllocScope&) = delete;
 };
+
+// Allocator for containers shared between game and host threads: always the
+// host heap, whichever thread grows or shrinks them (a game heap block freed
+// on a host thread would take the heap's OS mutex without an OS thread).
+template <class T>
+struct PortHostAllocator {
+    typedef T value_type;
+    PortHostAllocator() noexcept {}
+    template <class U>
+    PortHostAllocator(const PortHostAllocator<U>&) noexcept {}
+    T* allocate(size_t n) { return (T*)port_host_alloc(n * sizeof(T), (int)alignof(T)); }
+    void deallocate(T* p, size_t) noexcept { port_host_free(p); }
+    template <class U>
+    bool operator==(const PortHostAllocator<U>&) const noexcept { return true; }
+    template <class U>
+    bool operator!=(const PortHostAllocator<U>&) const noexcept { return false; }
+};
 #endif
