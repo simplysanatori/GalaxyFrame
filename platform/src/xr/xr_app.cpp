@@ -1559,8 +1559,12 @@ void renderFrame(App& a) {
     }
     // The display's refresh (the runtime's frame period may be the frame
     // loop's instead while SpaceWarp halves it).
-    XrDuration refresh = warp ? (XrDuration)(1e9 / a.displayHz) : period;
-    bool paired = !warp && period > 7900000 && period < 8800000;  // 120 Hz
+    XrDuration refresh = (warp || a.displayHz > 0.0f) ? (XrDuration)(1e9 / a.displayHz) : period;
+    // 120 Hz.  Decided from the display's rate when the runtime tells it
+    // (SteamVR's predicted period is 16.7 or 25 ms for the frame after a
+    // late one, and taking that for a rate change dropped a game frame and
+    // held the last one for three refreshes, a hitch every few seconds).
+    bool paired = !warp && (a.displayHz > 0.0f ? fabsf(a.displayHz - 120.0f) < 5.0f : period > 7900000 && period < 8800000);
     if (paired != a.paired) {
         port_log("vr: display period %.2f ms: %s", period / 1e6,
                  paired ? "each game frame spans two refreshes" : warp ? "SpaceWarp" : "game frames follow the display loosely");
@@ -1666,12 +1670,12 @@ void renderFrame(App& a) {
         }
         // The newest game frame is finished on the next refresh and shown on
         // the two after it: rendered for the time between those.
-        a.setTime = fs.predictedDisplayTime + period * 5 / 2;
+        a.setTime = fs.predictedDisplayTime + refresh * 5 / 2;
         updateInput(a, a.setTime);
         XrView views[2];
         locateViews(a, a.setTime, views);
         a.setFrame = frameInfo(a, views, a.setTime);
-        a.setFrame.eyeBudgetMs = period / 1e6f;  // one eye per refresh
+        a.setFrame.eyeBudgetMs = refresh / 1e6f;  // one eye per refresh
         vr::beginFrame(a.setFrame);
         if (gBooted) port_vi_retrace();  // the game starts its next frame now
         Swapchain& sc = a.eyes[a.renderSet][0];
