@@ -75,10 +75,10 @@ You need a Steam Frame with SteamVR, and your own Super Mario Galaxy disc as an 
 | A | A | Jump, talk, confirm. Hold to float as Boo Mario or to skip a cutscene or dialogue |
 | B | B | Shoot star bits, cancel, back out of menus |
 | Right trigger | B | The same as B, if you prefer the trigger for shooting |
-| Y, right bumper, or a flick of either controller | Shake | Spin |
+| X or Y, right bumper, or a flick of either controller | Shake | Spin |
 | Left trigger | Z | Crouch, ground pound, long and back flip jumps |
 | Left grip or left bumper | C | Put the game camera behind Mario |
-| Menu, X or View | + / − | Pause menu, with the VR settings panel beside it |
+| Menu (right) or View (left) | + / − | Pause menu, with the VR settings panel beside it |
 | D-pad (left controller) | D-pad | The Wii D-pad. Left and right turn the diorama in steps, as the right stick does |
 | Right stick left / right | D-pad left / right | Turn the diorama round Mario, or the game camera on the giant screen |
 | Right stick up | D-pad up | First-person look |

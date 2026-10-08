@@ -593,8 +593,8 @@ void suggest(App& a, const char* profile, bool touchPlus) {
 // B, X, Y and Menu, the left one the D-pad and View; both have a stick, a
 // trigger, a grip and a bumper.  A and B are the Wii Remote's A and B, as
 // the game's prompts name them (B also shoots and backs out, like the right
-// trigger); Y, the right bumper or a flick spin; left trigger Z, left grip
-// or bumper C, Menu pause (+), X or View minus (pause too), right stick the
+// trigger); X, Y, the right bumper or a flick spin; left trigger Z, left
+// grip or bumper C, Menu pause (+), View minus (pause too), right stick the
 // D-pad, right stick click first person; the D-pad is the Wii Remote's own.
 bool suggestFrame(App& a, const char* squeeze) {
     char left[96], right[96];
@@ -605,9 +605,9 @@ bool suggestFrame(App& a, const char* squeeze) {
         {a.lookAction, path(a, "/user/hand/right/input/thumbstick")},
         {a.aAction, path(a, "/user/hand/right/input/a/click")},
         {a.wiiBAction, path(a, "/user/hand/right/input/b/click")},
-        {a.xAction, path(a, "/user/hand/right/input/x/click")},
-        {a.xAction, path(a, "/user/hand/left/input/view/click")},
+        {a.yAction, path(a, "/user/hand/right/input/x/click")},
         {a.yAction, path(a, "/user/hand/right/input/y/click")},
+        {a.xAction, path(a, "/user/hand/left/input/view/click")},
         {a.menuAction, path(a, "/user/hand/right/input/menu/click")},
         {a.triggerAction, path(a, "/user/hand/left/input/trigger/value")},
         {a.triggerAction, path(a, "/user/hand/right/input/trigger/value")},
@@ -1462,7 +1462,21 @@ uint32_t acquireImage(Swapchain& sc) {
     return idx;
 }
 
+// Waits for the GPU before an image is handed to the compositor.  SteamVR
+// on the Steam Frame reads a GLES swapchain image as soon as it is
+// released, finished or not: the right eye, released right after its draws
+// were queued, showed half-drawn and jittered (the left eye, held for a
+// refresh, was fine).  Quest's runtime waits by itself.  PETARI_NO_GPU_WAIT=1
+// turns the wait off, to compare.
+void finishGpu() {
+#ifndef __ANDROID__
+    static const bool off = getenv("PETARI_NO_GPU_WAIT") != nullptr;
+    if (!off) glFinish();
+#endif
+}
+
 void releaseImage(Swapchain& sc) {
+    finishGpu();
     XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     XR_CHECK(xrReleaseSwapchainImage(sc.handle, &ri));
 }
@@ -1498,6 +1512,7 @@ void renderPair(App& a, int s, const vr::FrameInfo& frame, const XrView views[2]
         a.setFov[s][e] = views[e].fov;
     }
     maybeSaveShot(a, s, idx);
+    finishGpu();
     for (int e = 0; e < 2; e++) {
         XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
         XR_CHECK(xrReleaseSwapchainImage(a.eyes[s][e].handle, &ri));
