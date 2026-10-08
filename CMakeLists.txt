@@ -12,6 +12,8 @@ if(ANDROID)
   set(PORT_PLATFORM android)
 else()
   set(PORT_PLATFORM desktop)
+  # libgame.so is a shared library on Linux too (platform/linux/launcher.c).
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -149,4 +151,29 @@ if(ANDROID)
   add_executable(petari_headless platform/android/headless.c)
   target_link_libraries(petari_headless PRIVATE log dl m)
   target_include_directories(petari_headless PRIVATE platform/include)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # Linux arm64 (the Steam Frame): GLES through EGL, OpenXR through the
+  # SteamVR runtime's own loader, sound through SDL2.  Build with clang and
+  # lld (see build_linux.sh).
+  set(OPENXR_INCLUDE ${CMAKE_SOURCE_DIR}/third_party/openxr/prefab/modules/headers/include)
+  set(OPENXR_LOADER /opt/steamvr/bin/linuxarm64/libopenxr_loader.so CACHE FILEPATH "OpenXR loader (libopenxr_loader.so)")
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(SDL2 REQUIRED sdl2)
+
+  add_library(openxr_loader SHARED IMPORTED)
+  set_target_properties(openxr_loader PROPERTIES IMPORTED_LOCATION ${OPENXR_LOADER} IMPORTED_NO_SONAME ON)
+
+  target_include_directories(game PRIVATE ${OPENXR_INCLUDE} ${SDL2_INCLUDE_DIRS})
+  target_link_libraries(game PRIVATE openxr_loader EGL GLESv2 ${SDL2_LIBRARIES} pthread dl m)
+  # Loaded at the 0x98000000 slot of the game's address window (its image
+  # base), its own references bound to itself (the port's operator new and
+  # delete), as on Android.  The OpenXR loader is SteamVR's (it has no soname,
+  # so it is found by file name: beside libgame.so, else in SteamVR).
+  get_filename_component(OPENXR_LOADER_DIR ${OPENXR_LOADER} DIRECTORY)
+  target_link_options(game PRIVATE -fuse-ld=lld -Wl,--image-base=0x98000000 -Wl,-Bsymbolic -Wl,--gc-sections
+    "-Wl,-rpath,\$ORIGIN:${OPENXR_LOADER_DIR}")
+
+  add_executable(galaxyquest platform/linux/launcher.c)
+  target_link_libraries(galaxyquest PRIVATE dl)
+  add_dependencies(galaxyquest game)
 endif()

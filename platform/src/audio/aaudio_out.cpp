@@ -2,8 +2,12 @@
 // first, normally 32 kHz) played through AAudio.  Blocks go into a ring that
 // AAudio's data callback drains at the device's pace; the AI clock
 // (ai_dsp.cpp) keeps the ring topped up.  PETARI_WAV=<path> also records the
-// stream to a WAV file.
+// stream to a WAV file.  On Linux SDL2 plays the ring instead of AAudio.
+#ifdef __ANDROID__
 #include <aaudio/AAudio.h>
+#else
+#include <SDL2/SDL.h>
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,7 +23,11 @@
 namespace {
 
 std::mutex sLock;  // the stream, the resampler and the WAV file
+#ifdef __ANDROID__
 AAudioStream* sStream = nullptr;
+#else
+SDL_AudioDeviceID sStream = 0;
+#endif
 bool sOpenFailed = false;
 std::atomic<bool> sDisconnected{false};
 int32_t sDeviceRate = 0;
@@ -138,10 +146,9 @@ void writeWavHeader(FILE* f, u32 frames, u32 rate) {
     fseek(f, 0, SEEK_END);
 }
 
-// AAudio's real-time thread: copies queued frames out, silence when there
+// The device's real-time thread: copies queued frames out, silence when there
 // are none.
-aaudio_data_callback_result_t dataCallback(AAudioStream*, void*, void* audioData, int32_t numFrames) {
-    s16* out = (s16*)audioData;
+void fillOutput(s16* out, int32_t numFrames) {
     u32 r = sRingRead.load(std::memory_order_relaxed);
     u32 avail = sRingWrite.load(std::memory_order_acquire) - r;
     u32 n = avail < (u32)numFrames ? avail : (u32)numFrames;
@@ -160,6 +167,11 @@ aaudio_data_callback_result_t dataCallback(AAudioStream*, void*, void* audioData
         sPlaying = true;
     }
     sRingRead.store(r + n, std::memory_order_release);
+}
+
+#ifdef __ANDROID__
+aaudio_data_callback_result_t dataCallback(AAudioStream*, void*, void* audioData, int32_t numFrames) {
+    fillOutput((s16*)audioData, numFrames);
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
 
@@ -205,6 +217,45 @@ bool openStream(u32 rate) {
     return true;
 }
 
+void closeStream() {
+    AAudioStream_close(sStream);
+    sStream = nullptr;
+}
+#else
+void sdlCallback(void*, Uint8* stream, int len) { fillOutput((s16*)stream, len / 4); }
+
+bool openStream(u32 rate) {
+    (void)rate;
+    if (!SDL_WasInit(SDL_INIT_AUDIO) && SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
+        port_log("audio: SDL audio init failed: %s", SDL_GetError());
+        return false;
+    }
+    // 48 kHz (PipeWire's own rate on the Frame), 256-frame periods: ~5 ms.
+    SDL_AudioSpec want{}, have{};
+    want.freq = 48000;
+    want.format = AUDIO_S16SYS;
+    want.channels = 2;
+    want.samples = 256;
+    want.callback = sdlCallback;
+    sStream = SDL_OpenAudioDevice(nullptr, 0, &want, &have, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
+    if (sStream == 0) {
+        port_log("audio: SDL open failed: %s", SDL_GetError());
+        return false;
+    }
+    sDeviceRate = have.freq;
+    sRingRead.store(sRingWrite.load());
+    sResampler = Resampler();
+    SDL_PauseAudioDevice(sStream, 0);
+    port_log("audio: SDL %s, %d Hz (source %u Hz), %d-frame periods", SDL_GetCurrentAudioDriver(), sDeviceRate, rate, have.samples);
+    return true;
+}
+
+void closeStream() {
+    SDL_CloseAudioDevice(sStream);
+    sStream = 0;
+}
+#endif
+
 }  // namespace
 
 extern "C" void port_audio_submit(const s16* rightLeft, u32 frames, u32 rate) {
@@ -237,8 +288,7 @@ extern "C" void port_audio_submit(const s16* rightLeft, u32 frames, u32 rate) {
 
     if (sStream && sDisconnected.exchange(false)) {
         port_log("audio: output device disconnected, reopening");
-        AAudioStream_close(sStream);
-        sStream = nullptr;
+        closeStream();
     }
     if (!sStream && !sOpenFailed) {
         sOpenFailed = !openStream(rate);

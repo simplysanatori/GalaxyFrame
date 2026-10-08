@@ -12,6 +12,16 @@
 // Declare the C library's printf family (including bionic's FORTIFY inline
 // wrappers) before the renames below, so the macros only affect game code.
 #include <stdio.h>
+#if defined(__GLIBC__)
+// glibc declares its (32-bit) wide-string functions noexcept, and libstdc++'s
+// <cwchar> #undefs the renames below: both go in before the renames, so that
+// later includes find them done.
+#ifdef __cplusplus
+#include <cwchar>
+#else
+#include <wchar.h>
+#endif
+#endif
 
 #ifdef __cplusplus
 extern "C" {
