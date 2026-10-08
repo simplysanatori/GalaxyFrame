@@ -11,10 +11,10 @@ VERSION=${1:-$(git describe --tags --always 2> /dev/null || echo dev)}
 ./build_linux.sh
 mkdir -p steam-frame/release
 STAGE=$(mktemp -d)
-cp build-linux/galaxyquest "$STAGE/"
+cp build-linux/galaxyquest build-linux/petari_headless "$STAGE/"
 strip --strip-unneeded -o "$STAGE/libgame.so" build-linux/libgame.so
 cp steam-frame/galaxyquest.sh "$STAGE/"
 OUT=steam-frame/release/GalaxyQuest-steam-frame-$VERSION.tar.gz
-tar -czf "$OUT" -C "$STAGE" galaxyquest libgame.so galaxyquest.sh
+tar -czf "$OUT" -C "$STAGE" galaxyquest petari_headless libgame.so galaxyquest.sh
 rm -rf "$STAGE"
 sha256sum "$OUT"
