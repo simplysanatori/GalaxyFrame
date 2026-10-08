@@ -4,8 +4,9 @@
 # "Super Mario Galaxy VR" entry to the Steam library, set to 120 Hz in
 # SteamVR.  Steam must be running.
 #   steam-frame/install.sh [GalaxyQuest-steam-frame-*.tar.gz]
-# Without an argument it looks in steam-frame/release/, then at the build
-# output (build-linux/, from build_linux.sh).
+# Without an argument it installs the build output (build-linux/, from
+# build_linux.sh) if there is one, else the newest tarball in
+# steam-frame/release/.
 # The game files are a separate step: steam-frame/prepare-game.sh.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -19,7 +20,8 @@ curl -s --max-time 3 127.0.0.1:8080/json > /dev/null || {
 }
 
 mkdir -p "$DEST"
-TARBALL=${1:-$(ls "$HERE"/release/GalaxyQuest-steam-frame*.tar.gz 2> /dev/null | sort -V | tail -1)}
+TARBALL=$1
+[ -n "$TARBALL" ] || [ -x "$HERE/../build-linux/galaxyquest" ] || TARBALL=$(ls "$HERE"/release/GalaxyQuest-steam-frame*.tar.gz 2> /dev/null | sort -V | tail -1)
 if [ -n "$TARBALL" ] && [ -f "$TARBALL" ]; then
   echo "installing $TARBALL"
   tar -xzf "$TARBALL" -C "$DEST" galaxyquest libgame.so
