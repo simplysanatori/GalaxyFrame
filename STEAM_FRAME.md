@@ -23,8 +23,9 @@ Android glue has a Linux counterpart.
 |---|---|
 | Left stick | Move |
 | A | Jump (hold: float, skip) |
-| B, Y or right bumper (or a flick) | Spin |
-| Right trigger | Shoot star bits |
+| B | B (shoot star bits, back out of menus) |
+| Y or right bumper (or a flick) | Spin |
+| Right trigger | B too (shoot star bits) |
 | Left trigger | Crouch |
 | Left grip or left bumper | Camera behind Mario |
 | Menu, X or View | Pause menu (VR settings beside it) |

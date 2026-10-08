@@ -177,6 +177,7 @@ struct App {
     bool hasFrameController = false;
     XrAction dpadUpAction = XR_NULL_HANDLE, dpadDownAction = XR_NULL_HANDLE, dpadLeftAction = XR_NULL_HANDLE,
              dpadRightAction = XR_NULL_HANDLE, bumperAction = XR_NULL_HANDLE;
+    XrAction wiiBAction = XR_NULL_HANDLE;  // the B button as the Wii Remote's B (shoot, back), as the game's prompts say
     uint32_t padDpad = 0;        // D-pad direction held on the left controller's D-pad
     bool padDpadTurned = false;  // that press was a snap turn of the diorama, not the D-pad
     XrPath handPath[2];
@@ -590,11 +591,11 @@ void suggest(App& a, const char* profile, bool touchPlus) {
 
 // The Steam Frame controllers: a gamepad split in two.  The right one has A,
 // B, X, Y and Menu, the left one the D-pad and View; both have a stick, a
-// trigger, a grip and a bumper.  The Touch layout carries over: A jump, B or
-// Y spin, triggers B and Z, left grip C, Menu pause (+), X or View minus
-// (pause too), right stick the D-pad, right stick click first person.  The
-// D-pad is the Wii Remote's own, the left bumper centres the camera like the
-// left grip, and the right bumper spins.
+// trigger, a grip and a bumper.  A and B are the Wii Remote's A and B, as
+// the game's prompts name them (B also shoots and backs out, like the right
+// trigger); Y, the right bumper or a flick spin; left trigger Z, left grip
+// or bumper C, Menu pause (+), X or View minus (pause too), right stick the
+// D-pad, right stick click first person; the D-pad is the Wii Remote's own.
 bool suggestFrame(App& a, const char* squeeze) {
     char left[96], right[96];
     snprintf(left, sizeof(left), "/user/hand/left/input/%s", squeeze);
@@ -603,7 +604,7 @@ bool suggestFrame(App& a, const char* squeeze) {
         {a.moveAction, path(a, "/user/hand/left/input/thumbstick")},
         {a.lookAction, path(a, "/user/hand/right/input/thumbstick")},
         {a.aAction, path(a, "/user/hand/right/input/a/click")},
-        {a.bAction, path(a, "/user/hand/right/input/b/click")},
+        {a.wiiBAction, path(a, "/user/hand/right/input/b/click")},
         {a.xAction, path(a, "/user/hand/right/input/x/click")},
         {a.xAction, path(a, "/user/hand/left/input/view/click")},
         {a.yAction, path(a, "/user/hand/right/input/y/click")},
@@ -664,6 +665,7 @@ void initActions(App& a) {
         a.dpadLeftAction = makeAction(a, "dpad_left", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
         a.dpadRightAction = makeAction(a, "dpad_right", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
         a.bumperAction = makeAction(a, "bumper", XR_ACTION_TYPE_BOOLEAN_INPUT, true);
+        a.wiiBAction = makeAction(a, "wii_b", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
         // SteamVR has taken the grip as squeeze/value and as grip/value.
         if (!suggestFrame(a, "squeeze/value")) {
             suggestFrame(a, "grip/value");
@@ -952,6 +954,7 @@ void updateInput(App& a, XrTime time) {
     //   X = minus, right stick = D-pad, right stick click = first-person look (D-pad up).
     if (getBool(a, a.aAction)) pad.buttons |= W_A;
     if (getFloat(a, a.triggerAction, a.handPath[1]) > 0.5f) pad.buttons |= W_B;
+    if (a.wiiBAction != XR_NULL_HANDLE && getBool(a, a.wiiBAction)) pad.buttons |= W_B;
     if (getFloat(a, a.triggerAction, a.handPath[0]) > 0.5f) pad.buttons |= W_Z;
     if (getFloat(a, a.gripAction, a.handPath[0]) > 0.6f) pad.buttons |= W_C;
     // Menu and X are + and -; a press of either also asks for the pause
