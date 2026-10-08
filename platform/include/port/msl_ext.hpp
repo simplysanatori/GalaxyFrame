@@ -7,6 +7,31 @@
 #include <functional>
 #include <iterator>
 
+#ifdef __GLIBCXX__
+// libstdc++ (Linux) still declares the C++98 adaptors, with other template
+// parameters than MSL's: the MSL ones below take other names, which game
+// code and any later library header then use.
+#define unary_function msl_unary_function
+#define binary_function msl_binary_function
+#define binder1st msl_binder1st
+#define bind1st msl_bind1st
+#define binder2nd msl_binder2nd
+#define bind2nd msl_bind2nd
+#define mem_fun_t msl_mem_fun_t
+#define mem_fun_ref_t msl_mem_fun_ref_t
+#define const_mem_fun_t msl_const_mem_fun_t
+#define mem_fun1_t msl_mem_fun1_t
+#define mem_fun1_ref_t msl_mem_fun1_ref_t
+#define const_mem_fun1_t msl_const_mem_fun1_t
+#define mem_fun msl_mem_fun
+#define mem_fun_ref msl_mem_fun_ref
+#define unary_negate msl_unary_negate
+#define not1 msl_not1
+#define pointer_to_unary_function msl_pointer_to_unary_function
+#define pointer_to_binary_function msl_pointer_to_binary_function
+#define ptr_fun msl_ptr_fun
+#endif
+
 namespace std {
 
     // ---- MSL extensions -------------------------------------------------

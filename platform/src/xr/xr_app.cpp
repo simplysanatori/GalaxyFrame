@@ -7,23 +7,40 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES3/gl32.h>
+#ifdef __ANDROID__
 #include <android/log.h>
 #include <android_native_app_glue.h>
 #include <jni.h>
+#else
+#include <signal.h>
+#include <stdlib.h>
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
+#ifdef __ANDROID__
 #define XR_USE_PLATFORM_ANDROID
+#else
+// Linux (the Steam Frame's own SteamVR runtime): the GLES context is handed
+// to the runtime through XR_MNDX_egl_enable.
+#define XR_USE_PLATFORM_EGL
+#endif
 #define XR_USE_GRAPHICS_API_OPENGL_ES
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
+
+#ifndef XR_VALVE_FRAME_CONTROLLER_INTERACTION_EXTENSION_NAME
+// SteamVR's Steam Frame controller profile (not in the Khronos headers yet).
+#define XR_VALVE_FRAME_CONTROLLER_INTERACTION_EXTENSION_NAME "XR_VALVE_frame_controller_interaction"
+#endif
 
 #include "port/heap_routing.h"
 #include "port/input.h"
@@ -57,7 +74,9 @@ struct Swapchain {
 };
 
 struct App {
+#ifdef __ANDROID__
     android_app* android = nullptr;
+#endif
 
     // EGL
     EGLDisplay display = EGL_NO_DISPLAY;
@@ -152,6 +171,13 @@ struct App {
     XrActionSet actionSet = XR_NULL_HANDLE;
     XrAction moveAction, lookAction, aAction, bAction, xAction, yAction, triggerAction, gripAction, menuAction, stickClickAction,
         aimPoseAction, hapticAction;
+    // The Steam Frame controllers' own controls (XR_VALVE_frame_controller_interaction):
+    // the left controller's D-pad and the bumpers.
+    bool hasFrameController = false;
+    XrAction dpadUpAction = XR_NULL_HANDLE, dpadDownAction = XR_NULL_HANDLE, dpadLeftAction = XR_NULL_HANDLE,
+             dpadRightAction = XR_NULL_HANDLE, bumperAction = XR_NULL_HANDLE;
+    uint32_t padDpad = 0;        // D-pad direction held on the left controller's D-pad
+    bool padDpadTurned = false;  // that press was a snap turn of the diorama, not the D-pad
     XrPath handPath[2];
     XrSpace aimSpace[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};
 
@@ -213,8 +239,25 @@ void loadDebugEnv(const std::string& path) {
 // EGL
 // ---------------------------------------------------------------------------
 void initEgl(App& a) {
+#ifdef __ANDROID__
     a.display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    eglInitialize(a.display, nullptr, nullptr);
+#else
+    // No window of our own: Mesa's surfaceless platform renders on the GPU's
+    // render node whatever the desktop (gamescope, X, Wayland or none).
+    a.display = EGL_NO_DISPLAY;
+    auto getPlatformDisplay = (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
+    if (getPlatformDisplay) {
+        a.display = getPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, nullptr);
+    }
+    if (a.display == EGL_NO_DISPLAY) {
+        port_log("EGL: no surfaceless platform, using the default display");
+        a.display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    }
+    eglBindAPI(EGL_OPENGL_ES_API);
+#endif
+    if (!eglInitialize(a.display, nullptr, nullptr)) {
+        port_fatal("eglInitialize failed: 0x%x", eglGetError());
+    }
     const EGLint cfgAttr[] = {EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_DEPTH_SIZE, 0, EGL_STENCIL_SIZE, 0,
                               EGL_SAMPLES, 0, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_NONE};
     EGLint num = 0;
@@ -228,7 +271,9 @@ void initEgl(App& a) {
     }
     const EGLint pbAttr[] = {EGL_WIDTH, 16, EGL_HEIGHT, 16, EGL_NONE};
     a.surface = eglCreatePbufferSurface(a.display, a.config, pbAttr);
-    eglMakeCurrent(a.display, a.surface, a.surface, a.context);
+    if (!eglMakeCurrent(a.display, a.surface, a.surface, a.context)) {
+        port_fatal("eglMakeCurrent failed: 0x%x", eglGetError());
+    }
     port_log("GL: %s / %s / %s", glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION));
 }
 
@@ -245,19 +290,32 @@ bool hasExtension(const std::vector<XrExtensionProperties>& exts, const char* na
 }
 
 void initInstance(App& a) {
+#ifdef __ANDROID__
     PFN_xrInitializeLoaderKHR initLoader = nullptr;
     XR_CHECK(xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrInitializeLoaderKHR", (PFN_xrVoidFunction*)&initLoader));
     XrLoaderInitInfoAndroidKHR loaderInfo{XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR};
     loaderInfo.applicationVM = a.android->activity->vm;
     loaderInfo.applicationContext = a.android->activity->clazz;
     XR_CHECK(initLoader((const XrLoaderInitInfoBaseHeaderKHR*)&loaderInfo));
+#endif
 
     uint32_t count = 0;
     XR_CHECK(xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr));
     std::vector<XrExtensionProperties> exts(count, {XR_TYPE_EXTENSION_PROPERTIES});
     XR_CHECK(xrEnumerateInstanceExtensionProperties(nullptr, count, &count, exts.data()));
 
+#ifdef __ANDROID__
     std::vector<const char*> enable = {XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME, XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME};
+#else
+    if (!hasExtension(exts, XR_MNDX_EGL_ENABLE_EXTENSION_NAME) || !hasExtension(exts, XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME)) {
+        port_fatal("the OpenXR runtime has no OpenGL ES through EGL (XR_MNDX_egl_enable + XR_KHR_opengl_es_enable)");
+    }
+    std::vector<const char*> enable = {XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME, XR_MNDX_EGL_ENABLE_EXTENSION_NAME};
+    a.hasFrameController = hasExtension(exts, XR_VALVE_FRAME_CONTROLLER_INTERACTION_EXTENSION_NAME);
+    if (a.hasFrameController) {
+        enable.push_back(XR_VALVE_FRAME_CONTROLLER_INTERACTION_EXTENSION_NAME);
+    }
+#endif
     a.hasRefreshRate = hasExtension(exts, XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
     if (a.hasRefreshRate) {
         enable.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
@@ -307,12 +365,13 @@ void initInstance(App& a) {
         port_log("XR runtime extensions:%s", names.substr(i, 900).c_str());
     }
 
+    XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
+#ifdef __ANDROID__
     XrInstanceCreateInfoAndroidKHR androidInfo{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
     androidInfo.applicationVM = a.android->activity->vm;
     androidInfo.applicationActivity = a.android->activity->clazz;
-
-    XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
     ci.next = &androidInfo;
+#endif
     strcpy(ci.applicationInfo.applicationName, "GalaxyQuest");
     ci.applicationInfo.applicationVersion = 1;
     strcpy(ci.applicationInfo.engineName, "Petari");
@@ -528,6 +587,52 @@ void suggest(App& a, const char* profile, bool touchPlus) {
     port_log("bindings for %s: %d", profile, (int)r);
 }
 
+// The Steam Frame controllers: a gamepad split in two.  The right one has A,
+// B, X, Y and Menu, the left one the D-pad and View; both have a stick, a
+// trigger, a grip and a bumper.  The Touch layout carries over: A jump, B or
+// Y spin, triggers B and Z, left grip C, Menu pause (+), X or View minus
+// (pause too), right stick the D-pad, right stick click first person.  The
+// D-pad is the Wii Remote's own, the left bumper centres the camera like the
+// left grip, and the right bumper spins.
+bool suggestFrame(App& a, const char* squeeze) {
+    char left[96], right[96];
+    snprintf(left, sizeof(left), "/user/hand/left/input/%s", squeeze);
+    snprintf(right, sizeof(right), "/user/hand/right/input/%s", squeeze);
+    std::vector<XrActionSuggestedBinding> b = {
+        {a.moveAction, path(a, "/user/hand/left/input/thumbstick")},
+        {a.lookAction, path(a, "/user/hand/right/input/thumbstick")},
+        {a.aAction, path(a, "/user/hand/right/input/a/click")},
+        {a.bAction, path(a, "/user/hand/right/input/b/click")},
+        {a.xAction, path(a, "/user/hand/right/input/x/click")},
+        {a.xAction, path(a, "/user/hand/left/input/view/click")},
+        {a.yAction, path(a, "/user/hand/right/input/y/click")},
+        {a.menuAction, path(a, "/user/hand/right/input/menu/click")},
+        {a.triggerAction, path(a, "/user/hand/left/input/trigger/value")},
+        {a.triggerAction, path(a, "/user/hand/right/input/trigger/value")},
+        {a.gripAction, path(a, left)},
+        {a.gripAction, path(a, right)},
+        {a.bumperAction, path(a, "/user/hand/left/input/bumper/click")},
+        {a.bumperAction, path(a, "/user/hand/right/input/bumper/click")},
+        {a.stickClickAction, path(a, "/user/hand/left/input/thumbstick/click")},
+        {a.stickClickAction, path(a, "/user/hand/right/input/thumbstick/click")},
+        {a.dpadUpAction, path(a, "/user/hand/left/input/dpad_up/click")},
+        {a.dpadDownAction, path(a, "/user/hand/left/input/dpad_down/click")},
+        {a.dpadLeftAction, path(a, "/user/hand/left/input/dpad_left/click")},
+        {a.dpadRightAction, path(a, "/user/hand/left/input/dpad_right/click")},
+        {a.aimPoseAction, path(a, "/user/hand/left/input/aim/pose")},
+        {a.aimPoseAction, path(a, "/user/hand/right/input/aim/pose")},
+        {a.hapticAction, path(a, "/user/hand/left/output/haptic")},
+        {a.hapticAction, path(a, "/user/hand/right/output/haptic")},
+    };
+    XrInteractionProfileSuggestedBinding s{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+    s.interactionProfile = path(a, "/interaction_profiles/valve/frame_controller");
+    s.suggestedBindings = b.data();
+    s.countSuggestedBindings = (uint32_t)b.size();
+    XrResult r = xrSuggestInteractionProfileBindings(a.instance, &s);
+    port_log("bindings for the Steam Frame controllers (grip on %s): %d", squeeze, (int)r);
+    return XR_SUCCEEDED(r);
+}
+
 void initActions(App& a) {
     a.handPath[0] = path(a, "/user/hand/left");
     a.handPath[1] = path(a, "/user/hand/right");
@@ -552,10 +657,26 @@ void initActions(App& a) {
         suggest(a, "/interaction_profiles/meta/touch_controller_plus", true);
     }
     suggest(a, "/interaction_profiles/oculus/touch_controller", false);
+    if (a.hasFrameController) {
+        a.dpadUpAction = makeAction(a, "dpad_up", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
+        a.dpadDownAction = makeAction(a, "dpad_down", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
+        a.dpadLeftAction = makeAction(a, "dpad_left", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
+        a.dpadRightAction = makeAction(a, "dpad_right", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
+        a.bumperAction = makeAction(a, "bumper", XR_ACTION_TYPE_BOOLEAN_INPUT, true);
+        // SteamVR has taken the grip as squeeze/value and as grip/value.
+        if (!suggestFrame(a, "squeeze/value")) {
+            suggestFrame(a, "grip/value");
+        }
+    }
 }
 
 void initSession(App& a) {
+#ifdef __ANDROID__
     XrGraphicsBindingOpenGLESAndroidKHR binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR};
+#else
+    XrGraphicsBindingEGLMNDX binding{XR_TYPE_GRAPHICS_BINDING_EGL_MNDX};
+    binding.getProcAddress = (PFN_xrEglGetProcAddressMNDX)eglGetProcAddress;
+#endif
     binding.display = a.display;
     binding.config = a.config;
     binding.context = a.context;
@@ -860,6 +981,19 @@ void updateInput(App& a, XrTime time) {
         a.dpadTurned = false;
     }
     if (!a.dpadTurned) pad.buttons |= a.dpad;
+    // The Steam Frame's D-pad: the Wii Remote's, left and right turning the
+    // diorama like the right stick.  Bumpers: left centres the camera (C),
+    // right spins (below).
+    if (a.dpadUpAction != XR_NULL_HANDLE) {
+        uint32_t held = getBool(a, a.dpadUpAction) ? W_UP : getBool(a, a.dpadDownAction) ? W_DOWN
+                        : getBool(a, a.dpadLeftAction) ? W_LEFT : getBool(a, a.dpadRightAction) ? W_RIGHT : 0;
+        if (held != a.padDpad) {
+            a.padDpadTurned = (held == W_LEFT || held == W_RIGHT) && vr::snapTurn((held == W_LEFT ? -1 : 1) * (vr::invertCamera() ? -1 : 1));
+            a.padDpad = held;
+        }
+        if (!a.padDpadTurned) pad.buttons |= held;
+        if (getBool(a, a.bumperAction, a.handPath[0])) pad.buttons |= W_C;
+    }
 
     // Spin: B or Y, or flicking the right controller like a Wii Remote,
     // produces the acceleration spike the game reads as a remote shake (some
@@ -867,7 +1001,8 @@ void updateInput(App& a, XrTime time) {
     // Nunchuk, which also spins.
     static int spinFrames = 0, nunSpinFrames = 0;
     static XrTime lastFlick[2] = {0, 0};
-    if (getBool(a, a.bAction) || getBool(a, a.yAction)) {
+    if (getBool(a, a.bAction) || getBool(a, a.yAction) ||
+        (a.bumperAction != XR_NULL_HANDLE && getBool(a, a.bumperAction, a.handPath[1]))) {
         spinFrames = 6;
     }
     for (int h = 0; h < 2; h++) {
@@ -1749,6 +1884,7 @@ void renderFrame(App& a) {
     }
 }
 
+#ifdef __ANDROID__
 // Android's all files access (MANAGE_EXTERNAL_STORAGE), through JNI (the app
 // has no Java code): whether the app has it, and opening the settings page
 // where the player grants it.
@@ -1807,6 +1943,15 @@ void requestAllFilesAccess(App& a) {
     }
     port_log("setup: all files access settings %s", ok ? "opened" : "could not be opened");
 }
+#else
+// Linux: the files are the player's own; nothing to grant.
+bool hasAllFilesAccess(App&) { return true; }
+void requestAllFilesAccess(App&) {}
+
+// SIGTERM (Steam stopping the game) or SIGINT: end the session cleanly.
+volatile sig_atomic_t gQuitSignal = 0;
+void onQuitSignal(int) { gQuitSignal = 1; }
+#endif
 
 void bootGame(const std::string& dataRoot) {
     port_log("game files: %s", dataRoot.c_str());
@@ -1814,6 +1959,7 @@ void bootGame(const std::string& dataRoot) {
     port_boot(dataRoot.c_str(), gSaveRoot.c_str());
 }
 
+#ifdef __ANDROID__
 void onAppCmd(android_app* app, int32_t cmd) {
     (void)app;
     switch (cmd) {
@@ -1830,9 +1976,11 @@ void onAppCmd(android_app* app, int32_t cmd) {
         break;
     }
 }
+#endif
 
 }  // namespace
 
+#ifdef __ANDROID__
 extern "C" __attribute__((visibility("default"))) void port_android_main(android_app* app, uintptr_t windowBase, size_t windowSize) {
     PortHostAllocScope scope;
     App& a = gApp;
@@ -1843,7 +1991,25 @@ extern "C" __attribute__((visibility("default"))) void port_android_main(android
     // Cooked game data is pushed to the app's external files dir; saves go to
     // internal storage.
     std::string ext = app->activity->externalDataPath ? app->activity->externalDataPath : "/sdcard/Android/data/com.galaxy.quest/files";
-    std::string saveRoot = std::string(app->activity->internalDataPath) + "/nand";
+    std::string internal = app->activity->internalDataPath;
+    const char* gameDir = nullptr;
+#else
+// Linux (platform/linux/launcher.c): `home` holds everything the app keeps,
+// as the Android app's two storage folders do (the game files in game/, the
+// saves in nand/, the settings, the log and the shader cache); `gameDir`, if
+// given, is the game files' folder.
+extern "C" __attribute__((visibility("default"))) void port_linux_main(const char* home, const char* gameDir, uintptr_t windowBase,
+                                                                     size_t windowSize) {
+    PortHostAllocScope scope;
+    App& a = gApp;
+    port_mem_set_reserved_window(windowBase, windowSize);
+    signal(SIGTERM, onQuitSignal);
+    signal(SIGINT, onQuitSignal);
+    std::string ext = home;
+    std::string internal = home;
+    mkdir(ext.c_str(), 0770);
+#endif
+    std::string saveRoot = internal + "/nand";
     mkdir(saveRoot.c_str(), 0770);
 
     port_log_file((ext + "/petari_log.txt").c_str());
@@ -1865,7 +2031,7 @@ extern "C" __attribute__((visibility("default"))) void port_android_main(android
     initInstance(a);
     initActions(a);
     initSession(a);
-    gpu::setShaderCachePath((std::string(app->activity->internalDataPath) + "/shaders.bin").c_str());
+    gpu::setShaderCachePath((internal + "/shaders.bin").c_str());
     vr::init();
     initUiLayers(a);
     initPerfMetrics(a);
@@ -1880,7 +2046,9 @@ extern "C" __attribute__((visibility("default"))) void port_android_main(android
     // game would stop at its first file).
     std::string dataRoot;
     bool ready = false;
-    if (const char* only = getenv("PETARI_GAME_ROOT")) {
+    if (gameDir && vr::isGameFolder(gameDir, &ready) && ready) {
+        dataRoot = gameDir;
+    } else if (const char* only = getenv("PETARI_GAME_ROOT")) {
         // Debug (petari_debug.env): look only there, e.g. a missing folder
         // to see the setup screen without moving the player's files.
         if (vr::isGameFolder(only, &ready) && ready) dataRoot = only;
@@ -1897,6 +2065,7 @@ extern "C" __attribute__((visibility("default"))) void port_android_main(android
     }
 
     bool quit = false;
+#ifdef __ANDROID__
     while (!quit && !app->destroyRequested) {
         int events;
         android_poll_source* source;
@@ -1910,6 +2079,27 @@ extern "C" __attribute__((visibility("default"))) void port_android_main(android
             }
             timeout = 0;
         }
+#else
+    bool exitRequested = false;
+    int64_t exitRequestedAt = 0;
+    while (!quit) {
+        if (gQuitSignal && !exitRequested) {
+            // The runtime takes the session down (STOPPING, EXITING), then
+            // handleEvents ends the loop; without a running session at once.
+            port_log("quit signal: ending the session");
+            exitRequested = true;
+            exitRequestedAt = port_host_time_ns();
+            if (!a.sessionRunning || XR_FAILED(xrRequestExitSession(a.session))) {
+                break;
+            }
+        }
+        if (exitRequested && port_host_time_ns() - exitRequestedAt > 3000000000ll) {
+            break;  // the runtime never got there
+        }
+        if (!a.sessionRunning) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+#endif
         handleEvents(a, quit);
         if (!gBooted) {
             std::string chosen;
