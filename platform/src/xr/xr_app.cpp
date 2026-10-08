@@ -52,6 +52,7 @@
 #include "xmath.h"
 
 extern "C" void port_boot(const char* dataRoot, const char* saveRoot);
+extern "C" void port_boost_thread(void);  // os_thread.cpp: scheduling priority for this thread
 extern "C" void port_mem_set_reserved_window(uintptr_t base, size_t size);
 extern "C" void port_headless_write_png(const char* path, const unsigned char* rgba, int w, int h);
 extern "C" int port_vr_diorama(void);  // the diorama is on show (vr_game.cpp)
@@ -166,6 +167,8 @@ struct App {
     vr::FrameInfo setFrame{};  // the game frame picked up (from its update refresh)
     XrView setViews[2]{};      // the head pose both its eyes are rendered from
     bool paired = false;       // the display refreshes at 120 Hz: game frames take two refreshes each
+    int shortPeriods = 0, longPeriods = 0;  // runs of 120 Hz and of longer frame periods seen (not our own doing)
+    bool throttled = false;                 // the runtime paces the loop at every other refresh: no paired steps
     XrTime lastDisplayTime = 0;
     int skippedRefreshes = 0;  // refreshes the frame loop missed (logged)
     int lateRefreshes = 0;     // of those, missed while the frame loop's own work ran late
@@ -1503,6 +1506,16 @@ void dropHeldEye(App& a) {
     a.renderDue = false;
 }
 
+// The game's retrace in the first step, as upstream has it (16 ms for a game
+// frame).  PETARI_RETRACE_STEP=2 raises it in the second step instead: the
+// frame picked up is 8 ms fresher (a refresh less latency), but the game has
+// 8 ms for a frame and its occasional 10-19 ms frames are then shown twice,
+// which on the Frame read as jitter.
+bool retraceInFirstStep() {
+    static const bool second = getenv("PETARI_RETRACE_STEP") && atoi(getenv("PETARI_RETRACE_STEP")) == 2;
+    return !second;
+}
+
 // The set finished on the last refresh (both eyes rendered, images still
 // acquired): released, once the GPU is done with it, and put on show.
 void showRendered(App& a) {
@@ -1632,7 +1645,35 @@ void renderFrame(App& a) {
     // (SteamVR's predicted period is 16.7 or 25 ms for the frame after a
     // late one, and taking that for a rate change dropped a game frame and
     // held the last one for three refreshes, a hitch every few seconds).
-    bool paired = !warp && (a.displayHz > 0.0f ? fabsf(a.displayHz - 120.0f) < 5.0f : period > 7900000 && period < 8800000);
+    // ... and from the frame loop's own period as the runtime paces it:
+    // SteamVR throttles an app that missed frames to every other refresh
+    // (its "frames to throttle" setting), and paired steps on such a loop
+    // would take two of its frames per game frame, halving the game's
+    // speed.  A single long period follows any late frame, so the loop
+    // leaves paired steps only after 8 long periods in a row, and comes
+    // back after 8 short ones.
+    // Only long periods that are not this loop's own doing count (a late
+    // frame of ours is followed by a long period too; the unpaired path
+    // cannot keep up at 120 Hz, so waiting for 8 short periods there before
+    // pairing never ended).
+    bool shortPeriod = period > 7900000 && period < 8800000;
+    bool ownLate = a.lastWorkNs > (a.displayHz > 0.0f ? (int64_t)(1e9 / a.displayHz) : period) * 3 / 4;
+    if (shortPeriod) {
+        a.shortPeriods = a.shortPeriods < 8 ? a.shortPeriods + 1 : 8;
+        a.longPeriods = 0;
+    } else if (!ownLate) {
+        a.longPeriods = a.longPeriods < 8 ? a.longPeriods + 1 : 8;
+        a.shortPeriods = 0;
+    }
+    if (a.longPeriods >= 8 && !a.throttled) {
+        a.throttled = true;
+        port_log("vr: the runtime paces the loop at every other refresh (throttled)");
+    } else if (a.shortPeriods >= 8 && a.throttled) {
+        a.throttled = false;
+        port_log("vr: the runtime paces the loop at every refresh again");
+    }
+    bool rate120 = a.displayHz > 0.0f ? fabsf(a.displayHz - 120.0f) < 5.0f : shortPeriod;
+    bool paired = !warp && rate120 && !a.throttled;
     if (paired != a.paired) {
         port_log("vr: display period %.2f ms: %s", period / 1e6,
                  paired ? "each game frame spans two refreshes" : warp ? "SpaceWarp" : "game frames follow the display loosely");
@@ -1746,11 +1787,35 @@ void renderFrame(App& a) {
         XrView* views = a.setViews;
         locateViews(a, a.setTime, views);
         a.setFrame = frameInfo(a, views, a.setTime);
-        a.setFrame.eyeBudgetMs = refresh / 1e6f;  // one eye per refresh
+        // One eye per refresh, but the GPU is shared with SteamVR's
+        // compositor (whose time the runtime does not report): at the full
+        // refresh as a budget the eyes filled the GPU in heavy scenes and the
+        // compositor missed its own refreshes, which shows as ghosting.
+        a.setFrame.eyeBudgetMs = refresh * 0.65f / 1e6f;
+        int64_t t0 = port_host_time_ns();
         vr::beginFrame(a.setFrame);
+        int64_t t1 = port_host_time_ns();
+        if (gBooted && retraceInFirstStep()) port_vi_retrace();
         Swapchain& sc = a.eyes[a.renderSet][0];
         a.heldIdx = acquireImage(sc);
+        int64_t t2 = port_host_time_ns();
         vr::Extent used = vr::renderEye(0, a.setFrame, sc.fbos[a.heldIdx], sc.width, sc.height);
+        int64_t t3 = port_host_time_ns();
+        // A late first step, broken down (a few per 10 s): picking up the
+        // game frame (texture uploads, new shaders), acquiring the image,
+        // rendering the eye.
+        static int lateLogged = 0;
+        static int64_t lateLogWindow = 0;
+        if (t3 - a.workStartNs > refresh * 3 / 4) {
+            if (t3 - lateLogWindow > 10000000000ll) {
+                lateLogWindow = t3;
+                lateLogged = 0;
+            }
+            if (lateLogged++ < 3) {
+                port_log("vr: late first step: %.1f ms (before pickup %.1f, pickup %.1f, acquire %.1f, left eye %.1f)", (t3 - a.workStartNs) / 1e6,
+                         (t0 - a.workStartNs) / 1e6, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6);
+            }
+        }
         a.setRect[a.renderSet][0] = {used.width, used.height};
         a.setPose[a.renderSet][0] = views[0].pose;
         a.setFov[a.renderSet][0] = views[0].fov;
@@ -1767,7 +1832,7 @@ void renderFrame(App& a) {
         // is picked up on the next first step, so the frame shown is 8 ms
         // fresher, which makes up for the later hand-over here.  A frame
         // the game has not finished by then is shown once more instead.
-        if (gBooted) port_vi_retrace();
+        if (gBooted && !retraceInFirstStep()) port_vi_retrace();
         XrView* views = a.setViews;
         vr::FrameInfo frame = a.setFrame;
         frame.eyes[1] = eyeInfo(a, views[1], 1);
@@ -2089,6 +2154,7 @@ extern "C" __attribute__((visibility("default"))) void port_linux_main(const cha
     PortHostAllocScope scope;
     App& a = gApp;
     port_mem_set_reserved_window(windowBase, windowSize);
+    port_boost_thread();  // the frame loop runs on this thread
     signal(SIGTERM, onQuitSignal);
     signal(SIGINT, onQuitSignal);
     std::string ext = home;

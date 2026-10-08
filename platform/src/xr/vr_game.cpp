@@ -411,7 +411,15 @@ bool sCutawayTest = false;
 // Comfort settings (see vr::loadSettings).
 bool sCutawayOn = true;
 float sVignetteStrength = 1.0f;
+#ifdef __ANDROID__
 float sResolution = 1.6f;     // largest eye size, relative to the headset's recommended one
+#else
+// Steam Frame: the eyes cost the GPU about the same at any size (per-frame
+// overhead, not pixels), the GPU is shared with SteamVR's compositor, and
+// each step of the dynamic resolution was a visible change in sharpness:
+// held at 0.8 by default (min_resolution = resolution), where it has room.
+float sResolution = 0.8f;
+#endif
 float sRefreshRate = 120.0f;  // requested display refresh rate, Hz
 bool sHighClocks = true;      // ask for Meta's SustainedHigh CPU/GPU levels
 bool sSpaceWarp = true;       // Application SpaceWarp at 120 Hz
@@ -601,11 +609,30 @@ BlitProgram linkBlit(const char* source) {
     return b;
 }
 
+// Targets of sizes no longer in use are kept for a while rather than
+// destroyed: the dynamic resolution steps between a handful of sizes, and
+// making a target anew stalled the render thread for 10 ms and more each
+// time (a missed refresh, with the held frame ghosting).  About 24 MB each
+// at the eyes' size; at most a dozen are kept.
+std::vector<gpu::EfbTarget> sSpareTargets;
+
 void ensureTarget(gpu::EfbTarget& t, int w, int h) {
-    if (t.width != w || t.height != h) {
-        if (t.fbo) gpu::renderer().destroyTarget(t);
-        t = gpu::renderer().createTarget(w, h);
+    if (t.width == w && t.height == h) return;
+    if (t.fbo) {
+        if (sSpareTargets.size() >= 12) {
+            gpu::renderer().destroyTarget(sSpareTargets.front());
+            sSpareTargets.erase(sSpareTargets.begin());
+        }
+        sSpareTargets.push_back(t);
     }
+    for (size_t i = 0; i < sSpareTargets.size(); i++) {
+        if (sSpareTargets[i].width == w && sSpareTargets[i].height == h) {
+            t = sSpareTargets[i];
+            sSpareTargets.erase(sSpareTargets.begin() + (long)i);
+            return;
+        }
+    }
+    t = gpu::renderer().createTarget(w, h);
 }
 
 // A panel of the given width (height from the texture aspect) at `center`,
@@ -1514,8 +1541,20 @@ void beginFrame(const FrameInfo& frame) {
     gpu::Renderer& r = gpu::renderer();
     // Frames are prepared on the renderer's worker thread; this picks up the
     // newest finished one.
+    // A game frame not finished in time is shown again (counted, logged
+    // every 10 s: with the game's retrace in the second step it has 8 ms).
+    static int sRepeats = 0, sPickups = 0;
+    static double sRepeatLogAt = 0.0;
     if (r.update()) {
         sLastFrame = r.frameNumber();
+    } else if (r.hasFrame()) {
+        sRepeats++;
+    }
+    sPickups++;
+    if (frame.time - sRepeatLogAt >= 10.0) {
+        if (sRepeatLogAt > 0.0 && sRepeats > 0) port_log("vr: %d of %d game frames shown twice (not finished in time)", sRepeats, sPickups);
+        sRepeatLogAt = frame.time;
+        sRepeats = sPickups = 0;
     }
     sUploadNs = port_host_time_ns() - frameStartNs;
     bool wantVr = r.hasFrame() && r.camera().valid && (r.camera().flags & PORT_GX_CAMERA_DIORAMA) && !sGiantScreen;
