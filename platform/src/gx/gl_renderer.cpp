@@ -737,6 +737,30 @@ GLuint Renderer::Impl::sampler(u32 mode0, u32 mode1, u32 levels) {
     glSamplerParameteri(s, GL_TEXTURE_MIN_FILTER, min);
     glSamplerParameterf(s, GL_TEXTURE_MIN_LOD, (mode1 & 0xFF) / 16.0f);
     glSamplerParameterf(s, GL_TEXTURE_MAX_LOD, ((mode1 >> 8) & 0xFF) / 16.0f);
+    // Anisotropic filtering on mipmapped textures (GL_EXT_texture_filter_anisotropic),
+    // where the GPU has it: the Wii's mip selection by distance alone blurs
+    // floors and walls seen at an angle, far more visibly at an eye's
+    // resolution than on a TV.  PETARI_ANISO=<n> sets the degree (0 off).
+    static const float maxAniso = [] {
+        GLint n = 0;
+        glGetIntegerv(GL_NUM_EXTENSIONS, &n);
+        bool has = false;
+        for (GLint i = 0; i < n && !has; i++) {
+            const char* e = (const char*)glGetStringi(GL_EXTENSIONS, (GLuint)i);
+            has = e && strcmp(e, "GL_EXT_texture_filter_anisotropic") == 0;
+        }
+        if (!has) return 0.0f;
+        GLfloat max = 1.0f;
+        glGetFloatv(0x84FF /* GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT */, &max);
+        const char* want = debugEnv("PETARI_ANISO");
+        float aniso = want ? (float)atof(want) : 8.0f;
+        aniso = aniso > max ? max : aniso;
+        port_log("gl: anisotropic filtering %.0fx (GPU allows %.0fx)", aniso, max);
+        return aniso;
+    }();
+    if (mips && maxAniso > 1.0f) {
+        glSamplerParameterf(s, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY_EXT */, maxAniso);
+    }
     samplers[key] = s;
     return s;
 }
