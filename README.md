@@ -166,6 +166,10 @@ Open an issue on this repository with:
 
 These logs hold file paths under your home folder, the Steam shortcut's app id and the SteamVR settings. They hold no account names, network addresses or headset serial numbers. SteamVR's own logs can contain device serial numbers, so check them before you attach them.
 
+## Support
+
+If you would like more Steam Frame ports, you can [buy me a coffee](https://ko-fi.com/sana748653). It pays for the Claude API credits these ports are built with, spent as carefully as I can. The credit for the games themselves belongs to the upstream projects named above.
+
 ## Credits
 
 - Super Mario Galaxy is Nintendo's game.
