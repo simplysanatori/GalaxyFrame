@@ -1,28 +1,38 @@
 # GalaxyQuest for the Steam Frame
 
-**Super Mario Galaxy in VR, running natively on Valve's Steam Frame.**
+Super Mario Galaxy in VR, running natively on Valve's Steam Frame.
 
-This is a fork of [GalaxyQuest](https://github.com/bigmak94/GalaxyQuest), a native VR port of Super Mario Galaxy built on the [Petari](https://github.com/SMGCommunity/Petari) decompilation. Upstream targets the Meta Quest. This fork builds the same game as a Linux arm64 program for the Steam Frame, running on the headset's own SteamVR: no Android layer (Lepton), no APK, no adb, no PC. You get the upstream port as it is, the diorama and the giant screen, its VR settings panel, and a control layout made for the Frame's controllers.
+This is a fork of [GalaxyQuest](https://github.com/bigmak94/GalaxyQuest) by bigmak94, a VR port of Super Mario Galaxy built on the [Petari](https://github.com/SMGCommunity/Petari) decompilation. Upstream targets the Meta Quest. This fork builds the same game as a Linux arm64 program that runs on the Frame's own SteamVR. You do not need Lepton, an APK, adb or a PC.
 
-You need your own Super Mario Galaxy disc. Nothing of the game is in this repository or its releases.
+You need your own Super Mario Galaxy disc. No game data is in this repository or its releases.
 
-> **AI disclosure.** This port, its scripts and its documentation were written by an AI: Anthropic's Claude (Claude Opus 5.5 and Claude Fable 5.1, through Claude Code), running on the Steam Frame itself. The human owner of this repository decided what to attempt, supplied the disc, played every build in the headset and reported what they saw; the AI read the logs and changed the code. Upstream GalaxyQuest is itself an AI-written project, as its own README says. Nothing here has been reviewed by the upstream author or the Petari team. It works on one Steam Frame as of October 2026; read the code before trusting it, and expect rough edges. [STEAM_FRAME.md](STEAM_FRAME.md) has the full account of what was done and what was tried and rejected.
+## What this fork adds
+
+- A Linux arm64 build of the game for SteamVR on the Frame (launcher, EGL and OpenXR session, SDL2 sound, plain folders for storage).
+- A control layout for the Steam Frame controllers, bound through SteamVR's Frame controller profile.
+- Frame pacing reworked for SteamVR. Both eyes are rendered from one head pose and handed over once the GPU has finished them.
+- SteamVR per-app settings for the game (120 Hz, no throttling, no motion smoothing), set at install and again at every launch.
+- A steady default resolution of 0.8 of SteamVR's recommended size.
+- Scripts to install the game, add it to Steam, convert your disc and compile shaders ahead of play.
+
+The game itself, the renderer, the diorama, the giant screen and the VR settings panel are upstream's code. [STEAM_FRAME.md](STEAM_FRAME.md) lists every change and the reasons for it.
 
 ## Status
 
-Played on a Steam Frame, in the headset: the game runs at its 60 frames per second on the 120 Hz display, both eyes complete and in step, through the Comet Observatory and into levels in the diorama. It took several rounds to get there (the first builds jittered, ghosted, or stuttered in one eye; the causes and fixes are in [STEAM_FRAME.md](STEAM_FRAME.md)).
+Played on a Steam Frame in the headset, October 2026. The game runs at 60 frames per second on the 120 Hz display with both eyes in step. It has been played through the Comet Observatory and into levels in the diorama.
 
-Known:
+Known issues:
 
-- A hitch of about a second when a new area loads, while its textures upload and its shaders compile. The shader cache fills as you play, and `steam-frame/warm-shaders.sh` fills it ahead of time (below).
-- Not available on the Frame: SpaceWarp (Meta's frame extrapolation; not needed at 120 Hz) and passthrough. The *Smooth motion* and *Passthrough* switches in the VR settings do nothing.
-- Not yet checked: haptics, long sessions, every switch of the VR settings panel.
+- A hitch of about a second when a new area loads, while its textures upload and its shaders compile. `steam-frame/warm-shaders.sh` reduces it (see Install, step 5).
+- SpaceWarp and passthrough do not work on the Frame. SteamVR does not offer them to this kind of app. The *Smooth motion* and *Passthrough* switches in the VR settings have no effect.
+- Not yet checked: haptics, long sessions, every switch of the VR settings panel, discs other than the US one.
 
-## What you need
+## Requirements
 
-- A **Steam Frame** with SteamVR, about 4 GB free.
-- Your **Super Mario Galaxy disc** as an ISO, RVZ or WBFS image. The US disc (RMGE01) is the one tested here; upstream also tested the European one (RMGP01).
-- A way to type a few commands on the Frame: SSH, or Konsole from the desktop (SteamVR dashboard → Launch a program → Desktop). Steam must be running.
+- A Steam Frame with SteamVR and about 4 GB free.
+- Your Super Mario Galaxy disc as an ISO, RVZ or WBFS image. The US disc (RMGE01) is the one tested on the Frame. Upstream also tested the European disc (RMGP01).
+- A terminal on the Frame: SSH, or Konsole from the desktop (SteamVR dashboard, Launch a program, Desktop).
+- Steam running while you install.
 
 ## Install
 
@@ -33,67 +43,141 @@ Known:
    cd GalaxyQuest-steam-frame
    ```
 
-2. Download `GalaxyQuest-steam-frame-*.tar.gz` from the [Releases](https://github.com/simplysanatori/GalaxyQuest-steam-frame/releases) page and install it:
+2. Download the newest `GalaxyQuest-steam-frame-*.tar.gz` from the [Releases](https://github.com/simplysanatori/GalaxyQuest-steam-frame/releases) page and install it:
 
    ```sh
    steam-frame/install.sh ~/Downloads/GalaxyQuest-steam-frame-v0.1.8-frame.2.tar.gz
    ```
 
-   This puts the program in `~/Games/GalaxyQuest/app`, adds **Super Mario Galaxy VR** to your Steam library and sets SteamVR up for it (120 Hz, no throttling, no motion smoothing). Library artwork appears after Steam's next restart.
+   This copies the program to `~/Games/GalaxyQuest/app`. It adds **Super Mario Galaxy VR** to your Steam library as a non-Steam shortcut, or updates the entry if it is already there. It also sets the SteamVR per-app settings for that shortcut. The script talks to Steam through its local debugging port (127.0.0.1:8080), which SteamOS has on by default.
 
-3. Convert your disc, once (a few minutes, 3.3 GB; `--no-movies` saves 2.3 GB and plays the prologue and ending movies as black):
+3. Convert your disc, once. This takes a few minutes and 3.3 GB. With `--no-movies` it takes 2.3 GB less, and the prologue and ending movies play as black.
 
    ```sh
-   steam-frame/prepare-game.sh ~/Documents/Roms/wii/SuperMarioGalaxy.rvz
+   steam-frame/prepare-game.sh /path/to/SuperMarioGalaxy.rvz
    ```
 
-4. Put the headset on and launch **Super Mario Galaxy VR** from your Steam library. It starts on a giant virtual screen; the VR settings panel (below) switches it to the diorama.
+   The script downloads [nodtool](https://github.com/encounter/nod) once to `~/.cache/galaxyquest`, checks its sha256, extracts the disc and converts it to `~/.local/share/GalaxyQuest/game`. The extracted copy is deleted afterwards.
 
-5. Optional, after you have made a save: compile the galaxies' shaders ahead so new areas do not hitch (about 45 minutes, no headset needed, the game not running):
+4. Put the headset on and launch **Super Mario Galaxy VR** from your Steam library.
+
+5. Optional, after you have made a save: compile the galaxies' shaders ahead of play so new areas hitch less. It takes about 45 minutes. The headset is not needed and the game must not be running.
 
    ```sh
    steam-frame/warm-shaders.sh
    ```
 
-Game files, saves, settings and the log live in `~/.local/share/GalaxyQuest`. To build the program yourself instead of downloading it, see [Building](STEAM_FRAME.md#building) (it builds on the Frame in about 35 minutes).
+   It boots the game headless into 20 galaxies, one after another, and adds their shaders to `~/.local/share/GalaxyQuest/shaders.bin`. Your saves are copied first and left as they are. To do other galaxies, name them: `steam-frame/warm-shaders.sh FlipPanelGalaxy`.
+
+To update, download the new tarball and run `install.sh` again. Your game files, saves and settings stay where they are.
+
+To build the program yourself, see [Building](STEAM_FRAME.md#building). It builds on the Frame in about 35 minutes.
+
+## First run
+
+The game starts on a giant virtual screen, as on a TV. To play in the diorama, open the VR settings panel (below) and turn off *Giant screen* on the *Screen* tab.
+
+If the headset shows a setup screen asking for the game files, the game did not find them in `~/.local/share/GalaxyQuest/game`. Run `prepare-game.sh` (Install, step 3).
 
 ## Controls
 
-The Steam Frame's controllers are bound directly (through SteamVR's Frame controller profile), not translated from Quest controls.
+The game sees a Wii Remote with a Nunchuk. The Frame controllers are mapped onto them as below. The mapping is in `updateInput()` and `suggestFrame()` in `platform/src/xr/xr_app.cpp`.
 
 | Steam Frame | Wii | In the game |
 |---|---|---|
 | Left stick | Nunchuk stick | Move |
-| **A** | A | Jump, talk, confirm. Hold to float as Boo Mario, or to skip a cutscene or a dialogue |
-| **B** | B | Shoot star bits, cancel, back out of menus |
-| Right trigger | B | The same as B, if you prefer the trigger for shooting |
-| **X** or **Y**, right bumper, or a flick of either controller | Shake | Spin |
-| Left trigger | Z | Crouch, ground pound, long jump, backflip |
+| **A** (right) | A | Jump, talk, confirm. Hold to float as Boo Mario. Hold to skip a cutscene or a dialogue |
+| **B** (right) | B | Shoot star bits, cancel, back out of menus |
+| Right trigger | B | Same as B |
+| **X** or **Y** (right) | Shake the Remote | Spin |
+| Right bumper | Shake the Remote | Spin |
+| Flick the right controller | Shake the Remote | Spin |
+| Flick the left controller | Shake the Nunchuk | Spin |
+| Left trigger | Z | Crouch, ground pound, long jump and backflip (with A) |
 | Left grip or left bumper | C | Put the game camera behind Mario |
-| **Menu** (right) or **View** (left) | + / − | Pause menu, with the VR settings panel beside it |
-| D-pad (left controller) | D-pad | The Wii D-pad; left and right turn the diorama in steps |
-| Right stick left / right | D-pad left / right | Turn the diorama round Mario (or the game camera on the giant screen) |
-| Right stick up | D-pad up | First-person look |
-| Right controller aim | Pointer | Collect star bits, grab Pull Stars, point at menus |
+| **Menu** (right) | Plus (+) | Pause menu, with the VR settings panel beside it |
+| **View** (left) | Minus (-) | Pause menu, as Menu does |
+| D-pad (left) | D-pad | The Wii D-pad. In the diorama, left and right turn it 45 degrees round Mario |
+| Right stick left / right | D-pad left / right | In the diorama, turn it 45 degrees round Mario behind a short blink. On the giant screen, turn the game camera where the level allows it |
+| Right stick up, or click the right stick | D-pad up | First-person look. Page up in lists |
+| Right stick down | D-pad down | Page down in lists |
+| Right controller aim | Pointer | Collect star bits, grab Pull Stars, point at menus and the VR settings panel |
+| Right controller tilt | Remote tilt | Steer the Star Ball and the Ray |
 
-**The VR settings panel.** Press Menu (or View). The pause menu opens on the panel in front of you, and GalaxyQuest's VR settings panel sits to the right of its buttons. Aim the right controller at it and press A or pull the trigger. Its four tabs hold every setting: *Giant screen* (the switch between the TV-style screen and the diorama) is on the *Screen* tab. [docs/CONTROLS.md](docs/CONTROLS.md) explains every setting.
+The right grip and the left stick click are not used.
 
-**Recentring.** Use SteamVR's own recentre (hold the system button, or the dashboard); the game follows it.
+**Pausing.** One press of Menu or View opens the pause menu. Where the game does not allow pausing for a moment, the menu opens as soon as it can, up to 1.5 seconds after the press. Opening the SteamVR dashboard pauses the game. When you return during play, the pause menu is open.
 
-## Settings worth knowing
+**Skipping.** Hold A during a cutscene or a dialogue. A ring fills at the lower right of your view, and the cutscene is skipped when it is full. `skip_hold` in `petari_vr.ini` sets how long to hold (1 second by default).
 
-- **Resolution** is held at 0.8 of what SteamVR recommends (`min_resolution` and `resolution` in `~/.local/share/GalaxyQuest/petari_vr.ini`, or the *Picture* tab). The GPU cost hardly changes with the size, but at full size in heavy areas the game and SteamVR's compositor together filled the GPU and the picture ghosted on head movement. Raise it if you like; keep the two values equal.
-- **120 Hz** is set per app by the installer and re-applied at every launch; the game cannot be paced on 72 or 90 Hz (its 60 fps does not divide them).
-- **Lower latency, more hitches:** `PETARI_RETRACE_STEP=2` in `~/.local/share/GalaxyQuest/petari_debug.env` moves the game's frame timing a refresh later (8 ms less latency); the game then has 8 ms for a frame, and its occasional slow frames are shown twice.
+**Tilt.** For the Star Ball, hold the right controller level, tip it down to roll forward and roll it to steer. For the Ray, point the right controller ahead and twist it to turn.
 
-## How it works, in short
+**Recentring.** Use SteamVR's recentre (hold the system button, or use the dashboard). The game puts the screen or the diorama in front of you again.
 
-The Android glue of upstream's platform layer has a Linux counterpart: a launcher that loads the game at the fixed address the decompiled code assumes, EGL through Mesa's surfaceless platform (zink on Turnip), an OpenXR session through SteamVR's `XR_MNDX_egl_enable`, SDL2 for sound, plain folders for storage. Everything else (the game, the renderer, the VR presentation and panels) is upstream's code. The frame pacing was reworked for SteamVR, which reads an eye image the instant the game releases it and shares the GPU with the game: both eyes are rendered from one head pose, kept until the GPU has finished them, and handed over together. Details, the dead ends, and the runtime facts are in [STEAM_FRAME.md](STEAM_FRAME.md).
+**The VR settings panel.** Press Menu or View. The pause menu opens, and the VR settings panel appears to the right of its buttons. Aim the right controller at it and press A or pull the right trigger. Its four tabs hold every setting of `petari_vr.ini`. [docs/CONTROLS.md](docs/CONTROLS.md) explains each setting, pointing, tilt and skipping in detail. That page was written for the Quest's Touch Plus controllers. Its button table does not apply to the Frame, and the rest does.
 
-## Credit
+## Settings
 
-The game is Nintendo's. The source is the **Petari** team's decompilation (CC0); the port to a modern GPU and to VR is **GalaxyQuest by bigmak94** (Unlicense), whose README is kept here as [README.upstream.md](README.upstream.md). Disc extraction uses [nod](https://github.com/encounter/nod) by encounter. This fork adds the Linux target, the Steam Frame controls and the SteamVR pacing. Super Mario Galaxy, Mario and their logos are trademarks of Nintendo; this is an unofficial fan project, not affiliated with or endorsed by Nintendo, Valve, the Petari team or the GalaxyQuest author.
+Game files, saves, settings and logs are in `~/.local/share/GalaxyQuest`:
 
-## License
+| Path | What it is |
+|---|---|
+| `game/` | The converted disc |
+| `nand/` | Your saves |
+| `petari_vr.ini` | The VR settings (also changed from the VR settings panel) |
+| `shaders.bin` | The shader cache |
+| `petari_log.txt` | The game's log for the current or last session |
+| `petari_log.txt.prev` | The log of the session before |
+| `launch.log` | Output of the launch wrapper and the game |
+| `warm-shaders.log` | Output of `warm-shaders.sh` |
+| `petari_debug.env` | Optional `NAME=value` lines read at start, for testing |
 
-GalaxyQuest and this fork's changes are in the public domain under [The Unlicense](LICENSE). The decompilation in `decomp/` is the Petari team's work under CC0 1.0 (`decomp/LICENSE-Petari.txt`). Third-party parts keep their own licenses: see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). No Nintendo game data is included.
+Settings that matter on the Frame:
+
+- **SteamVR per-app settings.** `install.sh` sets these for the shortcut, and `galaxyquest.sh` sets them again at every launch: refresh rate 120 Hz, no throttling, no extra prediction frames, motion smoothing off. SteamVR has dropped them from its settings file before, which put the display at 72 Hz. The game's 60 fps divides 120 Hz evenly, so each game frame is shown for two refreshes. At 72 or 90 Hz motion is uneven. The game's own *Refresh rate* setting cannot change SteamVR's rate.
+- **Resolution.** Held at 0.8 of SteamVR's recommended size (`min_resolution` and `resolution` in `petari_vr.ini`, or the *Picture* tab). At 1.0 in heavy areas, the game and SteamVR's compositor together filled the GPU, and the picture ghosted on head movement. You can raise it. Keep the two values equal, since each step of the dynamic resolution is a visible change in sharpness.
+- **Lower latency.** `PETARI_RETRACE_STEP=2` in `petari_debug.env` moves the game's frame timing one refresh later, for about 8 ms less latency. The game then has 8 ms per frame, and a slow frame is shown twice, which happens as areas load.
+- **Sound** goes to the default PipeWire output.
+
+## How it works
+
+Upstream's Android glue has a Linux counterpart. A launcher loads the game at the fixed address the decompiled code expects. The GL context is EGL on Mesa's surfaceless platform (zink on Turnip). The OpenXR session is created through SteamVR's `XR_MNDX_egl_enable`. Sound goes through SDL2.
+
+The frame pacing was reworked for SteamVR. SteamVR reads an eye image as soon as the game releases it, and its compositor shares the GPU with the game. So both eyes are rendered from one head pose, kept until a fence shows the GPU has finished them, and handed over together. This adds one refresh of latency compared with upstream. [STEAM_FRAME.md](STEAM_FRAME.md) has the details, the approaches that were tried and dropped, and notes on the SteamVR runtime.
+
+## Troubleshooting
+
+- **`install.sh` says Steam's debugging port is not reachable.** Start Steam and run it again. The script needs Steam's local debugging port to add the shortcut.
+- **`install.sh` warns it could not set a SteamVR setting.** SteamVR was probably not running. The launch wrapper sets these settings at every launch, so you can ignore it.
+- **The headset shows a setup screen.** The game files are missing. Run `steam-frame/prepare-game.sh` with your disc image.
+- **Motion is uneven, or the picture ghosts when you turn your head.** Check that SteamVR runs the game at 120 Hz with motion smoothing off. `petari_log.txt` logs the refresh rate at start and the pacing every 10 seconds. If you raised the resolution, set it back to 0.8.
+- **New areas hitch for about a second.** This is known. Run `steam-frame/warm-shaders.sh` once after your first save.
+- **`warm-shaders.sh` stops at once.** It needs the game files, a save, and the game closed. The message says which is missing.
+- **The Steam overlay does not appear in the game.** Steam's overlay does not inject into this program. The `LD_PRELOAD` warnings in `launch.log` come from that and are harmless.
+- **No controller models are shown.** Upstream draws none either. The laser shows while you point at the settings panel.
+
+## Reporting problems
+
+Open an issue on this repository with:
+
+- what you did and what you saw,
+- the release you installed and your disc's region,
+- `~/.local/share/GalaxyQuest/petari_log.txt` and `launch.log`. If the problem was in the session before your last one, attach `petari_log.txt.prev` instead.
+
+These logs hold file paths under your home folder, the Steam shortcut's app id and the SteamVR settings. They hold no account names, network addresses or headset serial numbers. SteamVR's own logs can contain device serial numbers, so check them before you attach them.
+
+## Credits
+
+- Super Mario Galaxy is Nintendo's game.
+- The [Petari](https://github.com/SMGCommunity/Petari) team made the decompilation (CC0).
+- [bigmak94](https://github.com/bigmak94/GalaxyQuest) made GalaxyQuest, the port to a modern GPU and to VR (Unlicense). Upstream's README is kept as [README.upstream.md](README.upstream.md).
+- [encounter](https://github.com/encounter/nod) made nod, which extracts the disc.
+- The Steam Frame port was built by simplysanatori.
+
+The code, scripts and documentation of this fork were written with Anthropic's Claude (Claude Opus 5.5 and Claude Fable 5.1, through Claude Code), running on the Frame. simplysanatori chose what to attempt, supplied the disc, tested every build in the headset and reported the results. Upstream GalaxyQuest is also AI-written, as its README says. The upstream author and the Petari team have not reviewed this fork. Read the code before trusting it.
+
+Super Mario Galaxy, Mario and their logos are trademarks of Nintendo. This is an unofficial fan project. It is not affiliated with or endorsed by Nintendo, Valve, the Petari team or the GalaxyQuest author.
+
+## Licence
+
+GalaxyQuest and this fork's changes are in the public domain under [The Unlicense](LICENSE). The decompilation in `decomp/` is the Petari team's work under CC0 1.0 (`decomp/LICENSE-Petari.txt`). Third-party parts keep their own licences: see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). No Nintendo game data is included.

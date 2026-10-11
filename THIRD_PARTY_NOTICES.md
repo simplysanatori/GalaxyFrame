@@ -151,6 +151,18 @@ The app's launcher (`libmain.so`) is built with `android_native_app_glue.c`
 from the Android NDK, Copyright (C) 2010 The Android Open Source Project,
 licensed under the Apache License 2.0 (below).
 
+## Steam Frame (Linux arm64) build
+
+The Steam Frame build is compiled against the same Khronos OpenXR headers
+(Apache License 2.0, above) and does not use the Android loader or the
+native app glue. At run time it links to libraries already on the Frame:
+SteamVR's OpenXR loader, SDL2 (zlib license), and Mesa's EGL and OpenGL ES.
+None of them is included in the release tarball.
+
+`steam-frame/prepare-game.sh` downloads nodtool from nod
+(https://github.com/encounter/nod) to extract your disc. It is used under
+its own license and is not part of this repository or its releases.
+
 ## Apache License 2.0
 
 ```
