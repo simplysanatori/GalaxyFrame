@@ -90,6 +90,7 @@ struct RigState {
     // The extra tilt (radians, like pitch) that gives the game camera's height
     // during a transit; eases back to 0 afterwards.
     float transitPitch = 0.0f;
+    float floorLeft = 0.0f;  // seconds the tilt may still rise to the minimum eye elevation after a scene
     // The stick's click: the stick tilt eases back to level over half a
     // second, unless the stick tilts again.  Set by the caller, cleared here.
     bool resetTilt = false;

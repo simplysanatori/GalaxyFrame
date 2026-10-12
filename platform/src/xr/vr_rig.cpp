@@ -60,7 +60,8 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
     // A transit or an arrival kept in the diorama (diorama_transitions): the
     // game camera drives the view as the screen would show it: its up, its
     // watch point as the pivot, its yaw and its pitch, all smoothed.  When it
-    // ends the rig settles back to Mario's up without blinks.
+    // ends the pivot returns to Mario and the up settles to his without
+    // blinks; the yaw and the tilt stay as the scene left them.
     const bool transit = (cam.flags & kCameraTransit) != 0;
     if (!rig.valid) {
         rig.inTransit = rig.settle = false;
@@ -76,6 +77,16 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
     // elsewhere, then re-level in one step (behind a blink, below).
     const bool smoothGravity = params.gravityTurns == 0;
     const bool handBack = rig.valid && rig.inTransit && !transit;
+    // The view the scene set up stays: its yaw is the rig's already, and its
+    // tilt becomes the player's own (within the usual range, never from
+    // below Mario's horizon), instead of easing back to the old one.
+    if (handBack && rig.tiltOn) {
+        const float baseElevation = atan2f(-params.anchor.y, -params.anchor.z);
+        const float hi = fminf(params.maxPitch, 1.5359f - baseElevation);
+        rig.pitch = fminf(hi, fmaxf(params.minPitch, rig.pitch + rig.transitPitch));  // the view as it is, no jump
+        rig.transitPitch = 0.0f;
+        rig.floorLeft = 2.0f;
+    }
     if (handBack && smoothGravity) {
         rig.settle = true;
         rig.settleLeft = 3.0f;
@@ -244,6 +255,14 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
             if (t >= 1.0f) rig.resetT = -1.0f;
         } else if (rig.tiltOn) {
             rig.pitch += rig.stickTilt * dt;
+            // A scene that looked up at Mario from below leaves the view
+            // there; for two seconds it rises (20 degrees a second, unless the
+            // stick tilts) until the eye is above his horizon again.
+            if (rig.floorLeft > 0.0f) {
+                rig.floorLeft -= dt;
+                const float lo = params.minEyeElevation - baseElevation;
+                if (rig.stickTilt == 0.0f && rig.pitch < lo) rig.pitch += fminf(lo - rig.pitch, 0.35f * dt);
+            }
         } else {
             float step = 1.0472f * dt;  // back to level at 60 deg/s
             rig.pitch = fabsf(rig.pitch) <= step ? 0.0f : rig.pitch - (rig.pitch > 0.0f ? step : -step);
