@@ -225,6 +225,7 @@ const Item kControlItems[] = {
     {"turn_speed", "Turn speed", "Top speed of the stick's turn", kSlider, 30.0f, 240.0f, 10.0f, "%.0f deg/s", smoothOn},
     {"tilt_speed", "Tilt speed", "Top speed of the stick's tilt", kSlider, 15.0f, 120.0f, 5.0f, "%.0f deg/s", smoothOn},
     {"invert_camera", "Invert camera", nullptr, kSwitch, 0, 0, 0, nullptr, nullptr, hintInvert},
+    {"star_bit_speed", "Star Bit speed", "How fast shot Star Bits fly", kSlider, 1.0f, 3.0f, 0.25f, "%.2f x"},
     {"left_handed", "Left-handed", "The left controller points; sticks swap", kSwitch},
 };
 const Item kComfortItems[] = {
@@ -306,18 +307,24 @@ void itemHint(const Item& item, char* out, size_t size) {
 // ---------------------------------------------------------------------------
 // The panel
 // ---------------------------------------------------------------------------
-const int kTexW = 640, kTexH = 1300;
-const float kWidthM = 0.42f;  // metres; height from the texture's aspect
+// 880 pixels wide so the longest hint (the Resolution row's "Now 1.00 = 1234
+// px; 1.00 is SteamVR's setting (1234 px)", about 775 px) fits under the
+// 32 px margin; the right-hand controls sit kExtraW further right than they
+// did at 640.  The size in metres keeps the pixel density (1524 px/m).
+const int kExtraW = 240;
+const int kTexW = 640 + kExtraW, kTexH = 1300;
+const float kWidthM = 0.5775f;  // metres; height from the texture's aspect
 // Right of the HUD panel (see kHudCenter in vr_game.cpp: 1.45 m wide, 1 m
 // away, the pause menu on it) and in front of it.  The panel is turned
 // towards the player, so its left edge is the far one; with its centre at
 // x 0.78 and z -0.72 that edge is still 0.12 m before the HUD plane, and the
-// two never intersect.
-const xm::Vec3 kCenter{0.78f, -0.12f, -0.72f};
+// two never intersect.  Widened by 0.1575 m from the first 0.42 m, so the
+// centre is half of that further right and the left edge has not moved.
+const xm::Vec3 kCenter{0.8588f, -0.12f, -0.72f};
 
 // Layout, in texture pixels (top-down rows).  Under the title, the tabs;
 // under them the tab's settings, one row each (a slider takes two).
-const float kDefaultsX0 = 448.0f, kDefaultsX1 = 608.0f, kDefaultsY0 = 24.0f, kDefaultsY1 = 70.0f;
+const float kDefaultsX0 = 448.0f + kExtraW, kDefaultsX1 = 608.0f + kExtraW, kDefaultsY0 = 24.0f, kDefaultsY1 = 70.0f;
 // The tabs: three to a row, in as many rows as that takes.
 const int kTabsPerRow = 3;
 const int kTabRows = (kTabCount + kTabsPerRow - 1) / kTabsPerRow;
@@ -328,9 +335,9 @@ float tabX0(int t) { return kTabsX0 + kTabW * (t % kTabsPerRow); }
 float tabY0(int t) { return kTabsY0 + kTabRowStep * (t / kTabsPerRow); }
 const float kControlY = 42.0f;  // a row's control, below the row's top
 const float kButtonR = 30.0f;
-const float kStepMinusX = 388.0f, kStepPlusX = 580.0f;
-const float kSwitchX0 = 520.0f, kSwitchX1 = 608.0f, kSwitchR = 22.0f;
-const float kSliderY = 166.0f, kSliderMinusX = 60.0f, kSliderPlusX = 580.0f, kTrackX0 = 116.0f, kTrackX1 = 524.0f;
+const float kStepMinusX = 388.0f + kExtraW, kStepPlusX = 580.0f + kExtraW;
+const float kSwitchX0 = 520.0f + kExtraW, kSwitchX1 = 608.0f + kExtraW, kSwitchR = 22.0f;
+const float kSliderY = 166.0f, kSliderMinusX = 60.0f, kSliderPlusX = 580.0f + kExtraW, kTrackX0 = 116.0f, kTrackX1 = 524.0f + kExtraW;
 
 // What the pointer is on.
 enum Part { kNone, kDefaults, kTabButton, kToggle, kMinus, kPlus, kTrack };
@@ -480,7 +487,7 @@ void drawPanel() {
             drawButton({kPlus, i}, kStepPlusX, y, true, live);
             c.text((kStepMinusX + kStepPlusX) * 0.5f, y + 10, kFontSmall, text, live ? white : dim, 1);
         } else {
-            c.text(608, top + kControlY + 14.0f, kFontLarge, text, live ? white : dim, 2);
+            c.text(608.0f + kExtraW, top + kControlY + 14.0f, kFontLarge, text, live ? white : dim, 2);
             float sy = top + kSliderY;
             drawButton({kMinus, i}, kSliderMinusX, sy, false, live);
             drawButton({kPlus, i}, kSliderPlusX, sy, true, live);
