@@ -160,6 +160,7 @@ bool sFlatFresh = false;      // the virtual screen's picture was drawn since it
 bool sUiLayers = false;       // the panels with text go out as compositor layers (vr::setUiLayers)
 bool sHudFresh = false;       // eye 0 drew the HUD since the HUD layer last took it
 int sHudDraws = 0;            // draws in that HUD
+float sHudLayerBrightness = -1.0f;  // overlayBrightness() the HUD layer image was last drawn with
 float sCutAmount = 0.0f;  // cutaway grown in (1) while the player is hidden
 xm::Mat4 sStageFromView = xm::Mat4::identity();
 uint64_t sLastFrame = 0;
@@ -1495,7 +1496,9 @@ Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int
         }
         r.render(sEye[eye], &ev, &sHud, eye == 0 ? gpu::HudMode::Target : gpu::HudMode::Skip);
         if (eye == 0) {
-            sHudFresh = true;
+            // A HUD target left as it was (the frame's HUD already in it)
+            // needs no new layer image.
+            if (!r.hudReused()) sHudFresh = true;
             sHudDraws = r.hudDrawCount();
         }
         sSnapTaken[eye] = sMotionOn && r.snapshotTaken();
@@ -1923,7 +1926,8 @@ UiLayer uiLayer(int which) {
         // Only while it holds something: a layer costs the compositor its
         // area on every refresh, drawn or not.
         l.visible = sUiLayers && sVrMode && sHudDraws > 0 && overlayBrightness() > 0.001f;
-        l.changed = sHudFresh;
+        // Its image is the HUD at overlayBrightness(): new when either is.
+        l.changed = sHudFresh || overlayBrightness() != sHudLayerBrightness;
         l.position = kHudCenter;
         l.width = kHudWidth;
         l.height = kHudWidth * (float)sHud.height / (float)sHud.width;
@@ -1962,6 +1966,7 @@ void drawUiLayer(int which, const gpu::EfbTarget& dst) {
     if (which == kHudLayer) {
         drawQuad(sHud.color, xm::scale(2.0f), false, 1.0f);  // the unit quad over the whole image
         sHudFresh = false;
+        sHudLayerBrightness = overlayBrightness();
     } else if (which == kScreenLayer || which == kScreenRightLayer) {
         float wipe = sWipeDim;
         sWipeDim = 0.0f;  // the picture has the game's wipe in it already
