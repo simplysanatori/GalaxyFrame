@@ -4,9 +4,9 @@
 // scaled down around him (without Mario, the point the game camera watches).
 // The world's up follows his anti-gravity direction.  Its yaw stays where it
 // is: the game camera swinging round Mario turned the whole world around the
-// player, the strongest cause of nausea; the player turns it in steps (snap
-// turns), and it takes the game camera's yaw again only on a cut (a new
-// area).  The game camera's pitch and roll never move the player's head.
+// player, the strongest cause of nausea; the player turns it (smoothly with
+// the stick, or in snap turns), and it takes the game camera's yaw again
+// only on a cut (a new area).  The game camera's pitch and roll never move the player's head.
 // Moving follows smoothly with a small dead zone, ordinary jumps do not move
 // the world, and a sudden change of gravity (a wall that becomes the floor)
 // happens at once behind a short blink instead of turning the world.
@@ -48,6 +48,10 @@ struct RigState {
     // Snap turns asked for (radians about up; positive: the view goes round
     // Mario to the right), done at the next update.
     float pendingTurn = 0.0f;
+    // Smooth turn (smooth_turn): radians per second the stick turns the
+    // yaw, same sign as pendingTurn.  Set before each update; the update
+    // applies it over its dt, with no blink.
+    float stickTurn = 0.0f;
     // Mario's up followed within about 0.1 s: gravity that jumps away from it
     // changed suddenly (a switch, a room's wall), not by Mario running round
     // a small planet (that it keeps up with).
