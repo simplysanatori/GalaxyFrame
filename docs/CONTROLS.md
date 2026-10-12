@@ -272,6 +272,13 @@ it (`GameScene.cpp`), so a scene the words miss counts as *Other scenes*.
 - **Turn speed** (120° a second by default, 30 to 240) and **Tilt speed**
   (60°, 15 to 120): the top speed of the stick's turn and tilt with
   *Smooth turning*, at full deflection.
+- **Star Bit speed** (2.00 x by default, 1.00 to 3.00 in steps of 0.25;
+  `star_bit_speed`): how fast a Star Bit shot with the right trigger flies.
+  1.00 is the game's own speed and 2.00 twice as fast: the shot takes half
+  as many frames to its target and reaches as far as before. A long shot is
+  not sped up beyond what the game's once-a-frame hit test can follow
+  (about 100 units a frame), so a far target is hit at a lower factor than
+  a near one.
 - **Invert camera** (on by default): pushing the right stick to the right
   turns the view to the right, in the diorama and on the giant screen (the
   camera itself goes round Mario to the left). Off, the stick moves the
@@ -487,6 +494,8 @@ smooth_turn = 1
 # Top speed of the stick's turn and tilt with smooth_turn, degrees a second
 turn_speed = 120
 tilt_speed = 60
+# How fast a shot Star Bit flies, 1 = the game's own speed, 3 = three times
+star_bit_speed = 2
 # 1: the left controller points and the hands' sticks, triggers, grips and
 # bumpers swap; 0: the right one points
 left_handed = 0
