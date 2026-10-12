@@ -8,6 +8,8 @@
 #include <math.h>
 #include <string.h>
 
+#include <chrono>
+#include <thread>
 #include <unordered_map>
 
 #include "gpu.h"
@@ -21,7 +23,22 @@ namespace gpu {
 // ---------------------------------------------------------------------------
 // Frame queue
 // ---------------------------------------------------------------------------
+static std::atomic<bool> sHoldGameFrames{false};
+static thread_local bool tInjecting = false;
+
+void holdGameFrames(bool hold) { sHoldGameFrames.store(hold); }
+
+void injectFrame(std::unique_ptr<Frame> f) {
+    tInjecting = true;
+    frameQueue().publish(std::move(f));
+    tInjecting = false;
+}
+
 std::unique_ptr<Frame> FrameQueue::publish(std::unique_ptr<Frame> f) {
+    // Held: the game waits here, its state as it is, until released.
+    while (sHoldGameFrames.load() && !tInjecting) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     Frame* raw = f.release();
     std::shared_ptr<const Frame> shared(raw, [this](const Frame* p) {
         std::lock_guard<std::mutex> lock(mLock);

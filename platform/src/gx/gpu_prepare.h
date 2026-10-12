@@ -173,8 +173,8 @@ struct Builder {
 // ---------------------------------------------------------------------------
 // Replay helpers: what a backend does for an item, worked out the same way
 // for every backend.  Rectangles are in target pixels with GL's bottom-left
-// origin (the Vulkan backend keeps the same memory layout, see the frame.3
-// plan's Y orientation decision).
+// origin (the Vulkan backend uses a standard viewport, so its images have
+// the same memory layout and the same rectangles apply).
 // ---------------------------------------------------------------------------
 
 // The per-render camera block (EyeBlock, uniform binding 2 under GLES) for
