@@ -137,6 +137,11 @@ public:
     // return value has those among them with a usable time, in `ms[slot]`
     // (a GPU that was interrupted since the last call gives none).
     virtual uint32_t timerPoll(uint32_t pending, float* ms, uint32_t* done) = 0;
+    // A GPU profile mark (Vulkan with PETARI_VKPROF; see vk::profMark): the
+    // GPU time from here to the next mark goes to `label`.
+    virtual void profileMark(const char* label) { (void)label; }
+    // Logs the profile since the last report, per `per` frames (vk::profReport).
+    virtual void profileReport(const char* why, int per) { (void)why, (void)per; }
 };
 
 // The implementation for the API xrgfx selected (see xrgfx::select).

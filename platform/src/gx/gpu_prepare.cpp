@@ -443,6 +443,16 @@ void Builder::appendIndices(u32 kind, u32 base, u32 count) {
     }
 }
 
+// A draw of record `rec` is about to be added to batch `b` (its indices
+// start at indices.size()): a new run of `b` if its pixel state differs
+// from the last run's.
+void Builder::notePixRun(Item& b, u32 rec) {
+    u32 pix = recs[(size_t)rec * kRecWords + kRecPixel];
+    if (b.pixRunCount && pixRuns.back().pixBase == pix) return;
+    pixRuns.push_back(PixRun{(u32)indices.size(), pix});
+    b.pixRunCount++;
+}
+
 void Builder::build(std::shared_ptr<const Frame> frame, Prepared& out) {
     const Frame& f = *frame;
     // Textures the decode thread has not got to yet are decoded here, off
@@ -458,6 +468,7 @@ void Builder::build(std::shared_ptr<const Frame> frame, Prepared& out) {
     states.clear();
     vtxRec.clear();
     indices.clear();
+    pixRuns.clear();
     stateIndex.clear();
     memcpy(bp, f.startBp, sizeof(bp));
     memcpy(tevReg, f.startTevReg, sizeof(tevReg));
@@ -607,10 +618,13 @@ void Builder::build(std::shared_ptr<const Frame> frame, Prepared& out) {
                     it.idxOffset = (u32)indices.size();
                     it.idxCount = 0;
                     it.draws = 0;
+                    it.pixRunFirst = (u32)pixRuns.size();
+                    it.pixRunCount = 0;
                     items.push_back(it);
                     b = &items.back();
                 }
                 vtxRec.insert(vtxRec.end(), count, lastDrawRec);
+                notePixRun(*b, lastDrawRec);
                 appendIndices(kind, ordinal - b->firstOrdinal, count);
                 ordinal += count;
                 b->idxCount = (u32)indices.size() - b->idxOffset;
@@ -726,9 +740,12 @@ void Builder::build(std::shared_ptr<const Frame> frame, Prepared& out) {
                 it.firstWord = first;
                 it.firstOrdinal = firstOrdinal;
                 it.idxOffset = (u32)indices.size();
+                it.pixRunFirst = (u32)pixRuns.size();
+                it.pixRunCount = 0;
                 items.push_back(it);
                 b = &items.back();
             }
+            notePixRun(*b, rec);
             appendIndices(kind, firstOrdinal - b->firstOrdinal, count);
             b->idxCount = (u32)indices.size() - b->idxOffset;
             b->endWord = first + count * vtxWords(flags);
@@ -758,6 +775,7 @@ void Builder::build(std::shared_ptr<const Frame> frame, Prepared& out) {
     std::swap(out.states, states);
     std::swap(out.vtxRec, vtxRec);
     std::swap(out.indices, indices);
+    std::swap(out.pixRuns, pixRuns);
     out.cam = cam;
     out.clearAR = clearAR;
     out.clearGB = clearGB;

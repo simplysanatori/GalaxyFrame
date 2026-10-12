@@ -522,6 +522,12 @@ controlled with environment variables:
 | `PETARI_DLCHECK=1`, `PETARI_NODLCACHE=1` | Decode every draw the display list cache supplies as well and log any difference; turn the cache off |
 | `PETARI_XRSIM_AIM="t0-t1:x,y,z[:A];..."`, `PETARI_VRINI=path` | Aim the simulated controller at stage point x,y,z from t0 to t1 s after boot, holding A with `:A` (to work the VR settings panel); the settings file `PETARI_XRSIM` reads and the panel writes |
 | `PETARI_PANELLOG=1` | Log the stage point of every control of the VR settings panel (tab by tab), to aim at with `PETARI_XRSIM_AIM` |
+| `PETARI_VKPROF=1` | Vulkan: GPU timestamps at the replay's passes, copies, full-screen 2D draws, depth snapshot, composite and panels, logged per finish (headless) or xrsim frame as `vkprof:` lines, with per-render counts (draws, pixel-state runs, state changes, passes) and once a frame which draws sample each copy. Timestamps wait for the GPU to idle; times inside a pass need `TU_DEBUG=sysmem` |
+| `PETARI_VKPERFC=1` (with `TU_DEBUG=perfc`) | Vulkan, headless: Turnip's GPU counters (shader, texture, memory, vertex) over the renders between two finishes, as `vkperf:` lines |
+| `PETARI_VKEXP=noraster\|tri1\|nofs` | Vulkan perf experiments (the picture changes): every batch scissored to one pixel; only each draw's first primitive; full-screen 2D draws left out |
+| `PETARI_VKLEGACY=1`, `PETARI_VKBLITCOPY=0`, `PETARI_VKWHOLERUNS=n` | Vulkan: the replay and shaders as before the perf work (A/B timing, fallback); EFB copies with the copy program instead of blits; batches of more than n pixel-state runs drawn whole (default 8) |
+| `PETARI_CASTAPS=5` | Vulkan composite experiment: CAS from the 3x3 cross only (0.36 ms less for both eyes at 1728x1728; within the tolerant rule of the 9-tap picture, not the same) |
+| `PETARI_VRWARM=ms`, `PETARI_VRREPS=n`, `PETARI_VRPAIR=1`, `PETARI_XRSIM_REC=WxH` | With `PETARI_VRSIZE`: render first until ms have passed (GPU clock up), n timed renders (default 4), alternate the left and right eye; xrsim's recommended eye size (e.g. the Frame's 1728x1728) |
 | `PETARI_LANGUAGE=name` | The game's language (`french`, `spanish`...) instead of the `language` setting, which the headless runner reads too late (with `PETARI_VRINI`, after the game has started) |
 
 The VR app takes the same variables from `petari_debug.env` (`NAME=value`

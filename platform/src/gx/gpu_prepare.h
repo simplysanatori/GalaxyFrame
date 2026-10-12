@@ -64,6 +64,10 @@ struct Item {
     u32 firstOrdinal;  // first vertex ordinal (record index stream)
     u32 idxOffset, idxCount;
     u32 draws;         // GX draws in the batch
+    // The batch's runs of draws with one pixel state (Prepared::pixRuns
+    // [pixRunFirst, pixRunFirst + pixRunCount)), for a backend that draws
+    // each run with its pixel state's base as a constant (Vulkan).
+    u32 pixRunFirst, pixRunCount;
     u32 texMask;       // texture units the program samples
     // Render state
     u8 blend, colorMask, depthTest, depthWrite, cull, dstAlpha;
@@ -96,6 +100,15 @@ inline u32 copySlotFor(const EyeView* eye) { return eye ? 1 + (eye->index & 1) :
 // buffers are copied to every frame.
 const u64 kCopyKeepFrames = 120;
 
+// A run of a batch's draws with one pixel state: its first index (into
+// Prepared::indices; it ends where the next run of the batch starts, or with
+// the batch) and the pixel state's base in states[] (vec4s), as the draw
+// records' kRecPixel.
+struct PixRun {
+    u32 idxStart;
+    u32 pixBase;
+};
+
 // A frame turned into batches and shader data (gl_shadergen.h).  Built from
 // a recording on any thread; uploaded and replayed by the render thread.
 struct Prepared {
@@ -109,6 +122,7 @@ struct Prepared {
     std::vector<float> states;  // vec4 light / projection / pixel states
     std::vector<u32> vtxRec;    // draw record per vertex ordinal
     std::vector<u32> indices;
+    std::vector<PixRun> pixRuns;  // see Item::pixRunFirst
     CameraInfo cam;
     u32 clearAR = 0, clearGB = 0, clearZ = 0xFFFFFF;
     u32 nativeW = 640, nativeH = 456;
@@ -123,6 +137,7 @@ struct Builder {
     std::vector<ShaderUid> uids;
     std::vector<float> rows, states;
     std::vector<u32> recs, vtxRec, indices;
+    std::vector<PixRun> pixRuns;
     CameraInfo cam;
     u32 clearAR = 0, clearGB = 0, clearZ = 0xFFFFFF;
     u32 nativeW = 640, nativeH = 456;
@@ -165,6 +180,7 @@ struct Builder {
     void invalidateXf(u32 a0, u32 a1);
     u32 drawRecord(bool useVr, bool sky, bool pointer, bool dualTex, u32 numTexGens);
     void appendIndices(u32 kind, u32 base, u32 count);
+    void notePixRun(Item& b, u32 rec);
     void fillLights(LightState& b);
     void fillProj(ProjState& b);
     void fillPix(PixelState& b);

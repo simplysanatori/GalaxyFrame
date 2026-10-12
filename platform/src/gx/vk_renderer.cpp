@@ -392,13 +392,38 @@ struct FrameData {
 
 struct VkPrepared : Prepared {
     FrameData* data = nullptr;
+    std::vector<u32> wholeProgs;  // per uid: the program of its variant for batches drawn whole (0 until requested)
 };
 
 struct CopyTex {
     u32 handle = 0;
     int w = 0, h = 0;
     u64 frame = 0;  // frame whose replay last wrote it
+    // A blitted copy (VkImpl::doCopy) holds the EFB's own channels; this
+    // view arranges them as its copy mode does (null: the image's own view).
+    VkImageView swizzled = VK_NULL_HANDLE;
+    int swizzledMode = -1;
 };
+
+// Copy modes (kCopyFsBody) that only rearrange the EFB's channels: as an
+// image view's swizzle of a plain copy.  The others (intensity, Z) need the
+// copy program.
+bool copyModeSwizzle(int mode, VkComponentMapping* out) {
+    const VkComponentSwizzle R = VK_COMPONENT_SWIZZLE_R, G = VK_COMPONENT_SWIZZLE_G, B = VK_COMPONENT_SWIZZLE_B, A = VK_COMPONENT_SWIZZLE_A,
+                             ONE = VK_COMPONENT_SWIZZLE_ONE;
+    switch (mode) {
+    case 0: *out = {R, G, B, A}; return true;    // RGBA8 / RGB5A3
+    case 1: *out = {R, G, B, ONE}; return true;  // RGB565
+    case 4: *out = {R, R, R, R}; return true;    // R4 / R8
+    case 5: *out = {R, R, R, A}; return true;    // RA4 / RA8
+    case 6: *out = {A, A, A, A}; return true;    // A8
+    case 7: *out = {G, G, G, G}; return true;    // G8
+    case 8: *out = {B, B, B, B}; return true;    // B8
+    case 9: *out = {G, G, G, R}; return true;    // RG8
+    case 10: *out = {B, B, B, G}; return true;   // GB8
+    default: return false;
+    }
+}
 
 class VulkanRenderer;
 
@@ -426,6 +451,7 @@ struct DynState {
     VkSampler samps[kVkNumSamplers];
     VkDeviceSize vbOff;
     u32 firstOrdinal;
+    u32 pixBase;
     u32 fixedSet;  // front face, stencil op, compare mask, line width
     void forget() { memset(this, 0xFF, sizeof(*this)); }
 };
@@ -452,6 +478,7 @@ public:
     void render(Target& efb, const EyeView* eye, Target* hud, HudMode hudMode = HudMode::Inline) override;
     bool snapshotTaken() const override;
     int hudDrawCount() const override;
+    bool hudReused() const override;
     const CameraInfo& camera() const override;
     TexHandle xfbTexture() const override { return mXfbTex; }
     int xfbWidth() const override { return mXfbWidth; }
@@ -518,6 +545,17 @@ struct VkImpl {
     int lastBreak = -1;     // index of the last item that ends a rendering instance early
     bool snapshotTaken = false;
     int hudDraws = 0;
+    // The HUD target holding a frame's HUD (VulkanRenderer::render): drawn
+    // again only for another frame or target.
+    struct HudCache {
+        const VkPrepared* frame = nullptr;
+        u64 number = 0;
+        u32 color = 0;
+        int w = 0, h = 0, draws = 0;
+    } hudCache;
+    bool hudWasReused = false;
+    bool rendered = false;  // the last execute() recorded its render (its targets and frame data were there)
+    int lastSkipped = 0;    // batches the last execute() left out waiting for their pipelines
     bool dumpingCopies = false;
     u64 copyDumpFrame = ~0ull;
     u32 rendersInCmd = 0;
@@ -530,9 +568,20 @@ struct VkImpl {
         int gpuCount = 0;
     } st;
     int curPasses = 0, curCopies = 0;
+    std::vector<u8> deadItem;  // per item of the render in progress: a draw whose writes nothing reads (deadDraws)
+    // PETARI_VKPROF: the open pass's profile mark and what it drew, and the
+    // counts of a render.
+    int passMark = -1;
+    int passDraws = 0, passVrDraws = 0;
+    bool vrSeen = false;  // a VR (eye) draw so far in this render
+    struct ProfCounts {
+        int draws = 0, vrDraws = 0, pipes = 0, texPushes = 0, vbBinds = 0, pushes = 0, viewports = 0, scissors = 0, dyn = 0, clears = 0, pixRuns = 0;
+        long indices = 0;
+    } pc;
+    std::string segLog;
     // Which paths the renders took, since start (PETARI_VKSTATS, at finish).
     struct Coverage {
-        long zCopies = 0, maskedClears = 0, attachmentClears = 0, xfbBlits = 0, snapshots = 0, lineBatches = 0, pointBatches = 0, emptyViewports = 0,
+        long zCopies = 0, blitCopies = 0, deadDraws = 0, maskedClears = 0, attachmentClears = 0, xfbBlits = 0, snapshots = 0, lineBatches = 0, pointBatches = 0, emptyViewports = 0,
              hudSwitches = 0;
     } cov;
     double finishGpuMs = 0.0;  // renders timed since the last finish() (PETARI_GPUTIME)
@@ -551,9 +600,11 @@ struct VkImpl {
     void flushDeletes();
     VkSampler sampler(u32 mode0, u32 mode1, u32 levels);
     CopyTex& copyTex(u64 key, int w, int h);
+    void setSwizzle(CopyTex& c, int mode);
     void evictCopies();
     u32 allocEye(const EyeBlock& eb);
     void execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMode, VulkanRenderer& r);
+    int deadDraws(const VkPrepared& P, HudMode hudMode, bool tagPlayer, bool noCopies);
     void ensurePass(Target& t, size_t index);
     void endPass();
     bool needsClear(const Target& t) const { return (&t == efbTarget && efbNeedsClear) || (&t == hudTarget && hudNeedsClear); }
@@ -753,6 +804,7 @@ CopyTex& VkImpl::copyTex(u64 key, int w, int h) {
     CopyTex& c = copies[key];
     if (c.handle && (c.w != w || c.h != h)) {
         destroyImageLater(c.handle);
+        setSwizzle(c, -1);
         c.handle = 0;
     }
     if (!c.handle) {
@@ -767,11 +819,39 @@ CopyTex& VkImpl::copyTex(u64 key, int w, int h) {
     return c;
 }
 
+// The view a copy texture is sampled through: the swizzle of `mode` (a
+// blitted copy), or the image's own view (-1: made by the copy program).
+// An old view goes once the GPU is done with it.
+void VkImpl::setSwizzle(CopyTex& c, int mode) {
+    if (c.swizzledMode == mode && (mode < 0 || c.swizzled)) return;
+    if (c.swizzled) {
+        VkImageView old = c.swizzled;
+        deferUntilDone([old] { vkDestroyImageView(device().device, old, nullptr); });
+        c.swizzled = VK_NULL_HANDLE;
+    }
+    c.swizzledMode = -1;
+    VkComponentMapping map;
+    if (mode < 0 || !c.handle || !copyModeSwizzle(mode, &map)) return;
+    Img& im = sImages[c.handle];
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vci.image = im.image;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = im.format;
+    vci.components = map;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(device().device, &vci, nullptr, &c.swizzled) != VK_SUCCESS) {
+        c.swizzled = VK_NULL_HANDLE;
+        return;
+    }
+    c.swizzledMode = mode;
+}
+
 // Copy targets of addresses (or views) no longer copied to (kCopyKeepFrames).
 void VkImpl::evictCopies() {
     for (auto it = copies.begin(); it != copies.end();) {
         if (it->first != kXfbCopyKey && it->second.frame + kCopyKeepFrames < cur->number) {
             destroyImageLater(it->second.handle);
+            setSwizzle(it->second, -1);
             it = copies.erase(it);
         } else {
             ++it;
@@ -999,6 +1079,7 @@ void VkImpl::prepareGpu(VkPrepared& p, bool syncPrograms, bool renderThread) {
         }
     }
     p.cutProgs.assign(p.uids.size(), 0);
+    p.wholeProgs.assign(p.uids.size(), 0);
 }
 
 // Worker thread: builds the newest requested frame and uploads it.
@@ -1071,12 +1152,73 @@ u32 VkImpl::allocEye(const EyeBlock& eb) {
 // ---------------------------------------------------------------------------
 // Execute
 // ---------------------------------------------------------------------------
+// Draws of a VR eye render whose writes into the EFB nothing reads: what an
+// eye render leaves behind is its color (the composite samples RGB; alpha,
+// depth and stencil are dropped, unless vk::setKeepDepth), so working back
+// from the end, a draw that writes only channels no later item reads (a
+// later draw's depth test or blending, a copy of those channels, the depth
+// snapshot) changes nothing.  The game ends its frame with a full-screen
+// depth write after its last copy, for its HUD.  Marks them in deadItem;
+// returns how many.
+int VkImpl::deadDraws(const VkPrepared& P, HudMode hudMode, bool tagPlayer, bool noCopies) {
+    enum : u8 { kRgb = 1, kA = 2, kZ = 4, kS = 8 };
+    const std::vector<Item>& items = P.items;
+    deadItem.assign(items.size(), 0);
+    u8 live = kRgb | (sKeepDepth ? kZ | kS : 0);
+    // In the HUD section the draws go to the HUD target or nowhere (the
+    // execute loop's inHudSection), except inline.
+    std::vector<u8> inHud(items.size(), 0);
+    {
+        bool h = false;
+        for (size_t i = 0; i < items.size(); i++) {
+            if (items[i].type == IT_MARKER && (items[i].marker == MARK_HUD_BEGIN || items[i].marker == MARK_HUD_END)) h = items[i].marker == MARK_HUD_BEGIN;
+            inHud[i] = h;
+        }
+    }
+    int n = 0;
+    for (size_t k = items.size(); k-- > 0;) {
+        const Item& it = items[k];
+        bool hudSec = inHud[k] && hudMode != HudMode::Inline;
+        if (it.type == IT_MARKER) {
+            if (it.marker == MARK_SCENE_DEPTH && tagPlayer && !hudSec) live |= kZ | kS;
+            continue;
+        }
+        if (hudSec) continue;  // not the EFB (copies there read the HUD target)
+        if (it.type == IT_COPY) {
+            if ((it.copy[9] >> 14) & 1) continue;  // the XFB copy: not made for an eye
+            if (noCopies) continue;
+            CopyOp op;
+            decodeCopy(it, 1, 1, 1, 1, 0, op);
+            static const u8 reads[12] = {kRgb | kA, kRgb, kRgb, kRgb | kA, kRgb, kRgb | kA, kA, kRgb, kRgb, kRgb, kRgb, kZ};
+            live |= op.mode >= 0 && op.mode < 12 ? reads[op.mode] : (kRgb | kA | kZ);
+            continue;
+        }
+        BlendState bs;
+        blendState(it, false, bs);
+        u8 writes = ((bs.colorMask & 7) ? kRgb : 0) | ((bs.colorMask & 8) ? kA : 0);
+        if (it.depthTest && it.depthWrite) writes |= kZ | (tagPlayer ? kS : 0);
+        if (!(writes & live)) {
+            deadItem[k] = 1;
+            n++;
+            continue;  // left out: its reads go too
+        }
+        if (it.depthTest && it.depthFunc != CompareFunc::Always) live |= kZ;
+        if (bs.on) {
+            typedef BlendFactor F;
+            auto readsDst = [](F f) { return f == F::DstColor || f == F::OneMinusDstColor || f == F::DstAlpha || f == F::OneMinusDstAlpha; };
+            if (bs.dstRGB != F::Zero || bs.dstA != F::Zero || readsDst(bs.srcRGB) || readsDst(bs.srcA)) live |= kRgb | kA;
+        }
+    }
+    return n;
+}
 // Opens a rendering instance on `t` (clearing it if this render has not yet)
 // unless one is open there.  Item `index` is the first it draws.
 void VkImpl::ensurePass(Target& t, size_t index) {
     if (passTarget == &t) return;
     endPass();
     VkCommandBuffer cmd = commandBuffer();
+    passMark = profMark(&t == hudTarget ? "hud" : "scene");
+    passDraws = passVrDraws = 0;
     bool clear = needsClear(t);
     Img& c = sImages[t.color];
     Img& d = sImages[t.depth];
@@ -1129,6 +1271,18 @@ void VkImpl::ensurePass(Target& t, size_t index) {
 void VkImpl::endPass() {
     if (!passTarget) return;
     vkCmdEndRenderingKHR(commandBuffer());
+    if (passMark >= 0) {
+        // Scene passes by what they drew: with the eye's view ("vr"), only
+        // 2D / game-camera draws before any eye draw of the render ("2d.pre":
+        // the same for both eyes) or after one ("2d.post"), or nothing.
+        const char* l = passTarget == hudTarget ? "hud" : passVrDraws ? "scene.vr" : !passDraws ? "scene.empty" : vrSeen ? "scene.2d.post" : "scene.2d.pre";
+        profRelabel(passMark, l);
+        char b[48];
+        snprintf(b, sizeof(b), " %s(%d)", passTarget == hudTarget ? "H" : passVrDraws ? "V" : !passDraws ? "E" : vrSeen ? "2p" : "2", passDraws);
+        segLog += b;
+        if (passVrDraws) vrSeen = true;
+        passMark = -1;
+    }
     passTarget = nullptr;
 }
 
@@ -1150,6 +1304,7 @@ void VkImpl::setFixedState(VkCommandBuffer cmd) {
 void VkImpl::snapshot(Target& efb, Target& snap, size_t index) {
     if (needsClear(efb)) ensurePass(efb, index);
     endPass();
+    if (profMark("snapshot") >= 0) segLog += " S";
     if (!snap.depth || !sImages.valid(snap.depth)) return;
     VkCommandBuffer cmd = commandBuffer();
     Img& s = sImages[efb.depth];
@@ -1271,6 +1426,11 @@ void VkImpl::doCopy(const Item& it, Target& src, VulkanRenderer& r, bool vr, siz
         if (needsClear(src)) ensurePass(src, index);
         endPass();
         VkCommandBuffer cmd = commandBuffer();
+        if (profMark(op.toXfb ? "xfb" : vrSeen ? "copy.post" : "copy.pre") >= 0) {
+            char b[48];
+            snprintf(b, sizeof(b), " %s%dx%d%s", op.toXfb ? "X" : "C", op.dw, op.dh, op.clear ? "c" : "");
+            segLog += b;
+        }
         Img& color = sImages[src.color];
         if (op.toXfb) {
             int dw = op.dw, dh = op.dh;
@@ -1297,7 +1457,38 @@ void VkImpl::doCopy(const Item& it, Target& src, VulkanRenderer& r, bool vr, siz
         } else {
             int dw = op.dw, dh = op.dh;
             CopyTex& dstTex = copyTex(op.key, dw, dh);
-            if (dstTex.handle) {
+            // A copy of the EFB's pixels as they are (same size, inside the
+            // EFB) whose mode only rearranges channels: a blit, rows flipped
+            // as the copy program writes them (texture rows run top-down),
+            // sampled through a swizzled view.  It takes each pixel exactly,
+            // as the console's copy does; the copy program's bilinear sample
+            // lands a hair off the texel centre and is off by one step now
+            // and then.  Faster than the copy pass.
+            VkComponentMapping map;
+            static const bool sBlitCopies = !vkLegacy() && !(debugEnv("PETARI_VKBLITCOPY") && !strcmp(debugEnv("PETARI_VKBLITCOPY"), "0"));
+            bool blit = sBlitCopies && dstTex.handle && !dumpingCopies && copyModeSwizzle(op.mode, &map) && dw == sx1 - sx0 && dh == sy1 - sy0 &&
+                        sx0 >= 0 && sy0 >= 0 && sx1 <= src.width && sy1 <= src.height;
+            if (blit) {
+                Img& dst = sImages[dstTex.handle];
+                bar.use(color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, kStageTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+                bar.use(dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, kStageTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT, true);
+                bar.flush();
+                VkImageBlit b{};
+                b.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                b.srcOffsets[0] = {sx0, sy0, 0};
+                b.srcOffsets[1] = {sx1, sy1, 1};
+                b.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                b.dstOffsets[0] = {0, dh, 0};
+                b.dstOffsets[1] = {dw, 0, 1};
+                vkCmdBlitImage(cmd, color.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b, VK_FILTER_NEAREST);
+                bar.use(dst, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, kStageSample, kAccessSample);
+                bar.flush();
+                setSwizzle(dstTex, op.mode);
+                ds.forget();
+                curCopies++;
+                cov.blitCopies++;
+            } else if (dstTex.handle) {
+                setSwizzle(dstTex, -1);
                 Img& dst = sImages[dstTex.handle];
                 bool z = op.mode == 11;
                 cov.zCopies += z;
@@ -1402,6 +1593,7 @@ void VkImpl::doCopy(const Item& it, Target& src, VulkanRenderer& r, bool vr, siz
                 VkClearRect rect{{{x0, y0}, {(u32)(x1 - x0), (u32)(y1 - y0)}}, 0, 1};
                 vkCmdClearAttachments(cmd, n, ca, 1, &rect);
                 cov.attachmentClears++;
+                pc.clears++;
             }
         }
     }
@@ -1417,12 +1609,14 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
     if (hudMode == HudMode::Target && !hud) {
         hudMode = HudMode::Inline;
     }
+    rendered = false;
     if (!sImages.valid(efb.color) || !sImages.valid(efb.depth) || !P.data || !P.data->buf.buffer ||
         (hudMode == HudMode::Target && (!sImages.valid(hud->color) || !sImages.valid(hud->depth)))) {
         snapshotTaken = false;
         hudDraws = 0;
         return;
     }
+    rendered = true;
     // Per-eye block.
     EyeBlock eb;
     fillEyeBlock(eye, eb);
@@ -1461,10 +1655,21 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
     rendersInCmd++;
     int serial = (int)(++renderSerial & 0x7FFFFFFF);
     sLastSerial = serial;
+    perfBegin();  // GPU counters (PETARI_VKPERFC), from the first render after a finish
     beginTimer(serial);
     ds.forget();
     curPasses = curCopies = 0;
     int skipped = 0;
+    pc = ProfCounts();
+    segLog.clear();
+    vrSeen = false;
+    passMark = -1;
+    // PETARI_VKEXP (perf experiments, the picture changes): "noraster"
+    // scissors every batch to one pixel (the vertex work and the per-draw
+    // cost stay), "tri1" draws only each batch's first primitive (the
+    // per-draw cost stays).
+    static const int sExp = !debugEnv("PETARI_VKEXP") ? 0 : !strcmp(debugEnv("PETARI_VKEXP"), "noraster") ? 1 : !strcmp(debugEnv("PETARI_VKEXP"), "tri1") ? 2
+                            : !strcmp(debugEnv("PETARI_VKEXP"), "nofs") ? 3 : 0;
 
     // Start of frame: the EFB is cleared (the previous frame's display copy
     // cleared it on the console); the HUD target becomes transparent.
@@ -1507,6 +1712,10 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
             }
         }
     }
+
+    // Draws of an eye render whose writes nothing reads (deadDraws).
+    static const bool sDeadDraws = !vkLegacy();
+    bool skipDead = sDeadDraws && vrEye && deadDraws(P, hudMode, tagPlayer, noCopies) > 0;
 
     struct UnitMemo {
         u32 tr, mode0, mode1;
@@ -1563,15 +1772,40 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         if (!it.program || !it.idxCount) {
             continue;
         }
+        if (skipDead && deadItem[idx] && !toHudTarget) {
+            cov.deadDraws++;
+            continue;
+        }
         u32 progId = it.program;
         VkPipeline pipe = VK_NULL_HANDLE;
         if (cutActive && it.useVr && it.uid < cutProgs.size() && cutProgs[it.uid]) {
             pipe = pipes.get(cutProgs[it.uid]);
         }
+        bool cutPipe = pipe != VK_NULL_HANDLE;
         if (!pipe) pipe = pipes.get(progId);
         if (!pipe) {
             skipped++;  // still compiling (GLES: program 0)
             continue;
+        }
+        // A batch of many small runs of pixel states (sprites, glyphs,
+        // particles with their own colours) is drawn whole with the
+        // program's variant that reads each vertex record's pixel state
+        // (requested on first use; split into its runs until it is ready):
+        // the draws would cost more than the per-fragment loads.
+        static const bool sPixRuns = vkPixelStatePushed();
+        static const int sWholeRuns = debugEnv("PETARI_VKWHOLERUNS") ? atoi(debugEnv("PETARI_VKWHOLERUNS")) : 8;
+        bool whole = false;
+        if (sPixRuns && !cutPipe && it.pixRunCount > (u32)sWholeRuns && it.idxCount < 64 * it.pixRunCount && it.uid < P.wholeProgs.size()) {
+            u32& wp = P.wholeProgs[it.uid];
+            if (!wp) {
+                ShaderUid u = P.uids[it.uid];
+                u.cutaway |= 2;
+                wp = pipes.request(u, !async.load(), 5);
+            }
+            if (VkPipeline wpipe = pipes.get(wp)) {
+                pipe = wpipe;
+                whole = true;
+            }
         }
         Target& t = *curT;
         DrawRect rect;
@@ -1587,14 +1821,22 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         cov.pointBatches += it.prim == Prim::Points;
         ensurePass(t, idx);
         setFixedState(cmd);
+        bool eyeDraw = it.useVr && vrEye;
+        passDraws++;
+        passVrDraws += eyeDraw;
+        pc.draws++;
+        pc.vrDraws += eyeDraw;
+        pc.indices += it.idxCount;
         if (ds.pipe != pipe) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
             ds.pipe = pipe;
+            pc.pipes++;
         }
         if (ds.vp[0] != (float)rect.vp[0] || ds.vp[1] != (float)rect.vp[1] || ds.vp[2] != (float)rect.vp[2] || ds.vp[3] != (float)rect.vp[3]) {
             VkViewport vp{(float)rect.vp[0], (float)rect.vp[1], (float)rect.vp[2], (float)rect.vp[3], 0.0f, 1.0f};
             vkCmdSetViewport(cmd, 0, 1, &vp);
             ds.vp[0] = vp.x, ds.vp[1] = vp.y, ds.vp[2] = vp.width, ds.vp[3] = vp.height;
+            pc.viewports++;
         }
         VkRect2D sc;
         if (rect.scissor) {
@@ -1606,9 +1848,11 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         } else {
             sc = {{0, 0}, {(u32)t.width, (u32)t.height}};
         }
+        if (sExp == 1) sc = {{0, 0}, {1, 1}};
         if (memcmp(&ds.sc, &sc, sizeof(sc)) != 0) {
             vkCmdSetScissor(cmd, 0, 1, &sc);
             ds.sc = sc;
+            pc.scissors++;
         }
 
         BlendState bs;
@@ -1616,11 +1860,13 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         if (ds.colorMask != (u32)bs.colorMask) {
             VkColorComponentFlags m = (VkColorComponentFlags)bs.colorMask;  // bit 0 R .. bit 3 A, as Vulkan's
             vkCmdSetColorWriteMaskEXT(cmd, 0, 1, &m);
+            pc.dyn++;
             ds.colorMask = (u32)bs.colorMask;
         }
         if (ds.blendOn != (u32)bs.on) {
             VkBool32 on = bs.on ? VK_TRUE : VK_FALSE;
             vkCmdSetColorBlendEnableEXT(cmd, 0, 1, &on);
+            pc.dyn++;
             ds.blendOn = (u32)bs.on;
         }
         if (bs.on) {
@@ -1629,11 +1875,13 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
             if (memcmp(&ds.eq, &eq, sizeof(eq)) != 0) {
                 vkCmdSetColorBlendEquationEXT(cmd, 0, 1, &eq);
                 ds.eq = eq;
+                pc.dyn++;
             }
             bool usesConst = bs.srcA == BlendFactor::ConstantAlpha || bs.dstA == BlendFactor::ConstantAlpha;
             if (usesConst && !(ds.blendAlpha == bs.constAlpha)) {
                 float c[4] = {0.0f, 0.0f, 0.0f, bs.constAlpha};
                 vkCmdSetBlendConstants(cmd, c);
+            pc.dyn++;
                 ds.blendAlpha = bs.constAlpha;
             }
         } else if (ds.eq.srcColorBlendFactor == (VkBlendFactor)0xFFFFFFFF) {
@@ -1645,20 +1893,24 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         u32 depthOn = it.depthTest ? 1 : 0, depthWrite = it.depthTest && it.depthWrite ? 1 : 0;
         if (ds.depthTest != depthOn) {
             vkCmdSetDepthTestEnableEXT(cmd, depthOn);
+            pc.dyn++;
             ds.depthTest = depthOn;
         }
         VkCompareOp zop = toVkCompare(it.depthFunc);
         if ((depthOn || ds.depthOp == (VkCompareOp)0xFFFFFFFF) && ds.depthOp != zop) {
             vkCmdSetDepthCompareOpEXT(cmd, zop);
+            pc.dyn++;
             ds.depthOp = zop;
         }
         if (ds.depthWrite != depthWrite) {
             vkCmdSetDepthWriteEnableEXT(cmd, depthWrite);
+            pc.dyn++;
             ds.depthWrite = depthWrite;
         }
         VkCullModeFlags cull = it.cull ? toVkCull(it.cullFace) : VK_CULL_MODE_NONE;
         if (ds.cull != cull) {
             vkCmdSetCullModeEXT(cmd, cull);
+            pc.dyn++;
             ds.cull = cull;
         }
         // Where a draw writes depth, the stencil gets `ref` (1 for the
@@ -1666,22 +1918,26 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         u32 stencilOn = tagPlayer ? 1 : 0;
         if (ds.stencilTest != stencilOn) {
             vkCmdSetStencilTestEnableEXT(cmd, stencilOn);
+            pc.dyn++;
             ds.stencilTest = stencilOn;
         }
         bool stencilWrite = tagPlayer && !toHudTarget && it.depthTest && it.depthWrite;
         u32 wmask = stencilWrite ? 0xFF : 0;
         if (ds.stencilWrite != wmask) {
             vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, wmask);
+            pc.dyn++;
             ds.stencilWrite = wmask;
         }
         u32 ref = stencilWrite && it.player ? 1 : 0;
         if (ds.stencilRef != ref && (stencilWrite || ds.stencilRef == 0xFFFFFFFF)) {
             vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, ref);
+            pc.dyn++;
             ds.stencilRef = ref;
         }
         VkPrimitiveTopology topo = toVkPrim(it.prim);
         if (ds.topo != topo) {
             vkCmdSetPrimitiveTopologyEXT(cmd, topo);
+            pc.dyn++;
             ds.topo = topo;
         }
 
@@ -1704,7 +1960,7 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
                 } else {
                     if (tr & 0x80000000u) {
                         auto cit = copies.find(copyKey(copySlot, (tr & 0x7FFFFFFF) << 5));
-                        if (cit != copies.end() && cit->second.handle) v = sImages[cit->second.handle].view;
+                        if (cit != copies.end() && cit->second.handle) v = cit->second.swizzled ? cit->second.swizzled : sImages[cit->second.handle].view;
                         s = sampler(it.texMode0[u], it.texMode1[u], 1);
                     } else if (tr < textures.size()) {
                         TexHandle th = textures[tr]->gpuTex;
@@ -1734,6 +1990,7 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
                 ds.samps[u] = samps[u];
             }
             vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes.layout, kVkSetTextures, kVkNumSamplers, w);
+            pc.texPushes++;
         }
 
         // The batch: its vertices from its first word, indices from 0.
@@ -1741,14 +1998,54 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         if (ds.vbOff != vbOff) {
             vkCmdBindVertexBuffers(cmd, 0, 1, &fd.buf.buffer, &vbOff);
             ds.vbOff = vbOff;
+            pc.vbBinds++;
         }
         if (ds.firstOrdinal != it.firstOrdinal) {
             vkCmdPushConstants(cmd, pipes.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, kVkPushFirstOrdinal, 4, &it.firstOrdinal);
             ds.firstOrdinal = it.firstOrdinal;
+            pc.pushes++;
         }
-        vkCmdDrawIndexed(cmd, it.idxCount, 1, it.idxOffset, 0, 0);
+        // PETARI_VKPROF: full-screen draws without the eye's view timed apart
+        // (PETARI_VKEXP=nofs: skipped).
+        if (sExp == 3 && !eyeDraw && rect.vp[0] <= 0 && rect.vp[1] <= 0 && rect.vp[2] >= t.width && rect.vp[3] >= t.height) continue;
+        bool fsMark = false;
+        if (profEnabled() && !eyeDraw && rect.vp[0] <= 0 && rect.vp[1] <= 0 && rect.vp[2] >= t.width && rect.vp[3] >= t.height) {
+            // By what it writes: color (blended or not), alpha only, depth only.
+            BlendState fb;
+            blendState(it, toHudTarget, fb);
+            const char* l = (fb.colorMask & 7) ? (fb.on ? "fs2d.blend" : "fs2d.color") : (fb.colorMask & 8) ? "fs2d.alpha" : "fs2d.depth";
+            if (toHudTarget) l = "fs2d.hud";
+            profMark(l);
+            fsMark = true;
+        }
+        // One draw per run of the batch's draws with one pixel state, its
+        // base in a push constant (gl_shadergen.cpp: the fragment shader
+        // reads the pixel state there).
+        PixRun one{it.idxOffset, 0};
+        bool split = sPixRuns && !whole;
+        const PixRun* runs = split ? P.pixRuns.data() + it.pixRunFirst : &one;
+        u32 runCount = split ? it.pixRunCount : 1;
+        u32 batchEnd = it.idxOffset + it.idxCount;
+        for (u32 k = 0; k < runCount; k++) {
+            u32 start = runs[k].idxStart, end = k + 1 < runCount ? runs[k + 1].idxStart : batchEnd;
+            if (end <= start) continue;
+            if (split && ds.pixBase != runs[k].pixBase) {
+                vkCmdPushConstants(cmd, pipes.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, kVkPushPixBase, 4, &runs[k].pixBase);
+                ds.pixBase = runs[k].pixBase;
+                pc.pushes++;
+            }
+            u32 count = end - start;
+            if (sExp == 2) {
+                u32 one = it.prim == Prim::Triangles ? 3 : it.prim == Prim::Lines ? 2 : 1;
+                count = count < one ? count : one;
+            }
+            vkCmdDrawIndexed(cmd, count, 1, start, 0, 0);
+            pc.pixRuns++;
+        }
+        if (fsMark) profMark(vrSeen || passVrDraws ? "scene.after" : "scene.after.pre");
     }
     endPass();
+    profMark("post");
     // Targets nothing was drawn to still get their clear.
     if (efbNeedsClear) {
         ensurePass(efb, items.size());
@@ -1775,11 +2072,50 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
     st.maxBreaks = breaks > st.maxBreaks ? breaks : st.maxBreaks;
     st.copies += curCopies;
     st.skipped += skipped;
+    lastSkipped = skipped;
     static const bool perRender = debugEnv("PETARI_VKSTATS") != nullptr;
     if (perRender) {
         port_log("vk: render %d of frame %llu (%s): %d rendering instances (%d breaks), %d copy passes, %d batches skipped, CPU %.2f ms", serial,
                  (unsigned long long)P.number, !eye ? "flat" : eye->flatStereo ? "stereo" : eye->index ? "right eye" : "left eye", curPasses, breaks,
                  curCopies, skipped, cpuMs);
+    }
+    static u64 sCopyUseFrame = ~0ull;
+    if (profEnabled() && sCopyUseFrame != P.number) {
+        // Which draws sample each texture copy: after it in this frame, or
+        // before it (the copy of the frame before).
+        sCopyUseFrame = P.number;
+        std::string line;
+        for (size_t i = 0; i < items.size(); i++) {
+            const Item& c = items[i];
+            if (c.type != IT_COPY || ((c.copy[9] >> 14) & 1)) continue;
+            u32 addr = (c.copy[3] & 0xFFFFFF) << 5;
+            u32 ref = 0x80000000u | (addr >> 5);
+            int before = 0, after = 0, afterVr = 0, nextCopy = -1;
+            for (size_t j = 0; j < items.size(); j++) {
+                const Item& d = items[j];
+                if (d.type == IT_COPY && j > i && nextCopy < 0 && !((d.copy[9] >> 14) & 1) && (((d.copy[3] & 0xFFFFFF) << 5) == addr)) nextCopy = (int)j;
+                if (d.type != IT_DRAW) continue;
+                bool uses = false;
+                for (int u = 0; u < 8; u++) uses |= (d.texMask & (1u << u)) && d.tex[u] == ref;
+                if (!uses) continue;
+                if (j < i) before++;
+                else if (nextCopy < 0 || (int)j < nextCopy) after++, afterVr += d.useVr;
+            }
+            CopyOp op;
+            decodeCopy(c, nativeW, nativeH, nativeW, nativeH, 0, op);
+            char b[160];
+            snprintf(b, sizeof(b), " [item %zu %06x %dx%d fmt %x mode %d%s: %d draws before, %d after (%d eye)%s]", i, addr, op.dw, op.dh, op.fmt, op.mode,
+                     op.clear ? " clear" : "", before, after, afterVr, nextCopy >= 0 ? ", copied again" : "");
+            line += b;
+        }
+        port_log("vkprof: copies of frame %llu:%s", (unsigned long long)P.number, line.c_str());
+    }
+    if (profEnabled()) {
+        port_log("vkprof: render %d of frame %llu (%s %dx%d): %d draws (%d eye, %d pixel state runs), %ld indices, %d pipeline binds, %d texture pushes, %d vertex binds, "
+                 "%d push constants, %d viewports, %d scissors, %d other state; %d passes, %d copies, %d clears, CPU %.2f ms; passes:%s",
+                 serial, (unsigned long long)P.number, !eye ? "flat" : eye->flatStereo ? "stereo" : eye->index ? "right" : "left", efb.width, efb.height,
+                 pc.draws, pc.vrDraws, pc.pixRuns, pc.indices, pc.pipes, pc.texPushes, pc.vbBinds, pc.pushes, pc.viewports, pc.scissors, pc.dyn, curPasses,
+                 curCopies, pc.clears, cpuMs, segLog.c_str());
     }
     if (rendersInCmd >= kAutoSubmitRenders) {
         submit();  // a presentation that never submits must not grow one command buffer forever
@@ -1948,6 +2284,7 @@ Target VulkanRenderer::createDepthTarget(int width, int height) {
 }
 
 void VulkanRenderer::destroyTarget(Target& t) {
+    if (sImpl && t.color && sImpl->hudCache.color == t.color) sImpl->hudCache = VkImpl::HudCache();
     auto fdm = sFdm.find(t.color);
     if (fdm != sFdm.end()) {
         Fdm old = fdm->second;
@@ -2052,11 +2389,40 @@ void VulkanRenderer::render(Target& efb, const EyeView* eye, Target* hud, HudMod
         }
         return;
     }
-    sImpl->execute(efb, eye, hud, hudMode, *this);
+    VkImpl& im = *sImpl;
+    // The HUD (HudMode::Target) is a function of the frame and the HUD
+    // target's size: 2D draws, never with the eye's view.  A HUD target that
+    // holds this frame's HUD already (the second refresh of a game frame) is
+    // left as it is.  Not with copies in the HUD section (their textures),
+    // nor while debugging partial renders.
+    static const bool sReuse = !vkLegacy();
+    const VkPrepared* P = im.cur.get();
+    if (efb.color == im.hudCache.color) im.hudCache = VkImpl::HudCache();  // drawn into as an EFB
+    bool cacheable = false, reuse = false;
+    if (sReuse && hudMode == HudMode::Target && hud && gDebugStopAfterDraws < 0 && sImages.valid(hud->color)) {
+        bool hudCopies = false, h = false;
+        for (const Item& it : P->items) {
+            if (it.type == IT_MARKER && (it.marker == MARK_HUD_BEGIN || it.marker == MARK_HUD_END)) h = it.marker == MARK_HUD_BEGIN;
+            hudCopies |= h && it.type == IT_COPY;
+        }
+        const VkImpl::HudCache& c = im.hudCache;
+        cacheable = !hudCopies;
+        reuse = cacheable && c.frame == P && c.number == P->number && c.color == hud->color && c.w == hud->width && c.h == hud->height;
+    }
+    im.execute(efb, eye, hud, reuse ? HudMode::Skip : hudMode, *this);
+    im.hudWasReused = reuse;
+    if (reuse) {
+        im.hudDraws = im.hudCache.draws;
+    } else if (cacheable && im.rendered && im.lastSkipped == 0) {  // a HUD missing batches still compiling is not kept
+        im.hudCache = VkImpl::HudCache{P, P->number, hud->color, hud->width, hud->height, im.hudDraws};
+    } else if (hudMode == HudMode::Target && hud) {
+        im.hudCache = VkImpl::HudCache();
+    }
 }
 
 bool VulkanRenderer::snapshotTaken() const { return sImpl && sImpl->snapshotTaken; }
 int VulkanRenderer::hudDrawCount() const { return sImpl ? sImpl->hudDraws : 0; }
+bool VulkanRenderer::hudReused() const { return sImpl && sImpl->hudWasReused; }
 
 void VulkanRenderer::finish() {
     if (!sImpl || !sImpl->ready) return;
@@ -2068,10 +2434,12 @@ void VulkanRenderer::finish() {
     if (stats) {
         sImpl->pipes.logStats("so far");
         const VkImpl::Coverage& c = sImpl->cov;
-        port_log("vk: paths so far: %ld Z copies, %ld masked clears, %ld attachment clears, %ld XFB blits, %ld depth snapshots, %ld HUD target switches, "
+        port_log("vk: paths so far: %ld Z copies, %ld blitted copies, %ld dead draws left out, %ld masked clears, %ld attachment clears, %ld XFB blits, %ld depth snapshots, %ld HUD target switches, "
                  "%ld line batches, %ld point batches, %ld empty viewports",
-                 c.zCopies, c.maskedClears, c.attachmentClears, c.xfbBlits, c.snapshots, c.hudSwitches, c.lineBatches, c.pointBatches, c.emptyViewports);
+                 c.zCopies, c.blitCopies, c.deadDraws, c.maskedClears, c.attachmentClears, c.xfbBlits, c.snapshots, c.hudSwitches, c.lineBatches, c.pointBatches, c.emptyViewports);
     }
+    profReport("finish", sImpl->finishGpuCount);
+    perfReport("finish");
     static const bool gpuTime = debugEnv("PETARI_GPUTIME") != nullptr;
     if (gpuTime && sImpl->finishGpuCount) {
         port_log("headless: replay GPU %.2f ms a render (Vulkan timestamps, %d renders)", sImpl->finishGpuMs / sImpl->finishGpuCount,
@@ -2101,6 +2469,7 @@ bool VulkanRenderer::readPixels(const Target& t, uint8_t* rgba) {
     im.bar.use(c, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, kStageSample, kAccessSample);
     im.bar.flush();
     finishAll();
+    profReport(nullptr, 0);
     im.finishGpuMs = 0.0;  // a readback is not one of the timed replays
     im.finishGpuCount = 0;
     // Rows as stored: the first is the bottom of the picture (GL order).

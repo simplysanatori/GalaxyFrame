@@ -136,6 +136,8 @@ namespace vk {
     X(vkDestroyQueryPool)                  \
     X(vkGetQueryPoolResults)               \
     X(vkResetQueryPool)                    \
+    X(vkCmdBeginQuery)                     \
+    X(vkCmdEndQuery)                       \
     X(vkCmdBindPipeline)                   \
     X(vkCmdSetViewport)                    \
     X(vkCmdSetScissor)                     \
@@ -347,6 +349,25 @@ ScratchAlloc scratch(VkDeviceSize size, VkDeviceSize align);
 void setTimerSink(void (*sink)(int tag, double ms));
 void beginTimer(int tag);
 void endTimer(int tag);
+
+// GPU profile (PETARI_VKPROF=1): a timestamp at each mark; the GPU time from
+// a mark to the next one in the same command buffer is added to the first
+// one's label (a string that lives on).  Timestamps wait for the GPU to go
+// idle (Turnip), so a profiled render is a little slower than a plain one,
+// and only direct rendering (TU_DEBUG=sysmem) gives times inside a rendering
+// instance.  profReport logs the totals since the last report divided by
+// `per` (renders) and starts over.
+bool profEnabled();
+int profMark(const char* label);  // the mark's index in the open command buffer, -1 if none
+void profRelabel(int mark, const char* label);
+void profReport(const char* why, int per);
+// GPU counters (headless, PETARI_VKPERFC=1 with TU_DEBUG=perfc: Turnip's
+// VK_KHR_performance_query): perfBegin / perfEnd around commands in one
+// command buffer, perfReport (after the GPU finished them) logs every
+// counter.  No-ops without them.
+void perfBegin();
+void perfEnd();
+void perfReport(const char* why);
 
 // Names a Vulkan object for the validation layer's messages (no-op without
 // debug utils).
