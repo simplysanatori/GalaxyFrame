@@ -114,7 +114,7 @@ file(GLOB_RECURSE PLATFORM_SRCS CONFIGURE_DEPENDS
   ${CMAKE_SOURCE_DIR}/platform/src/*.cpp)
 
 add_library(game SHARED $<TARGET_OBJECTS:decomp> ${PLATFORM_SRCS})
-target_include_directories(game PRIVATE ${DECOMP_INCLUDES})
+target_include_directories(game PRIVATE ${DECOMP_INCLUDES} ${CMAKE_SOURCE_DIR}/tools/glsl)
 target_compile_definitions(game PRIVATE ${PORT_DEFS} PORT_PLATFORM_CODE=1)
 target_compile_options(game PRIVATE ${PORT_COMMON_FLAGS} $<$<COMPILE_LANGUAGE:CXX>:${PORT_CXX_FLAGS}> $<$<COMPILE_LANGUAGE:C>:${PORT_C_FLAGS}>)
 target_link_options(game PRIVATE -Wl,--no-undefined -Wl,--error-limit=0)
@@ -181,4 +181,89 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_executable(petari_headless platform/android/headless.c)
   target_link_libraries(petari_headless PRIVATE dl m)
   target_include_directories(petari_headless PRIVATE platform/include)
+endif()
+
+# ---------------------------------------------------------------------------
+# Shader toolchain for the Vulkan backend (Linux only)
+# ---------------------------------------------------------------------------
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
+  # libgq_glsl.so: GLSL to SPIR-V through glslang's C API, linked statically.
+  # A separate library with ordinary compile flags, so the game library keeps
+  # its own (no exceptions, no RTTI, -Bsymbolic, fixed image base).  The game
+  # dlopens it from its own directory (platform/src/gx/vk_spirv.cpp).
+  set(GQ_GLSLANG_LIB_DIR /usr/lib CACHE PATH "Directory with the static glslang libraries")
+  set(GQ_GLSLANG_LIBS glslang-default-resource-limits glslang MachineIndependent GenericCodeGen OSDependent SPIRV)
+  set(GQ_GLSLANG_ARCHIVES)
+  set(GQ_GLSLANG_FOUND TRUE)
+  foreach(l ${GQ_GLSLANG_LIBS})
+    if(EXISTS ${GQ_GLSLANG_LIB_DIR}/lib${l}.a)
+      list(APPEND GQ_GLSLANG_ARCHIVES ${GQ_GLSLANG_LIB_DIR}/lib${l}.a)
+    else()
+      set(GQ_GLSLANG_FOUND FALSE)
+    endif()
+  endforeach()
+  # glslang's SPIRV library wants SPIRV-Tools (optimiser, validator), which is
+  # only installed as shared libraries.  gq_glsl never uses either, so by
+  # default stand-in functions replace SpvTools.cpp and the library has no
+  # SPIRV-Tools dependency.  OFF links the shared SPIRV-Tools libraries instead.
+  option(GQ_GLSL_STUB_SPVTOOLS "Build libgq_glsl.so without a SPIRV-Tools dependency" ON)
+
+  if(GQ_GLSLANG_FOUND)
+    add_library(gq_glsl SHARED tools/glsl/gq_glsl.c)
+    set_target_properties(gq_glsl PROPERTIES C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden LINKER_LANGUAGE CXX)
+    target_include_directories(gq_glsl PRIVATE tools/glsl)
+    if(GQ_GLSL_STUB_SPVTOOLS)
+      target_sources(gq_glsl PRIVATE tools/glsl/gq_glsl_nospvtools.cpp)
+      set_source_files_properties(tools/glsl/gq_glsl_nospvtools.cpp PROPERTIES COMPILE_OPTIONS "-fvisibility=hidden")
+    endif()
+    target_link_libraries(gq_glsl PRIVATE -Wl,--start-group ${GQ_GLSLANG_ARCHIVES} -Wl,--end-group pthread)
+    if(NOT GQ_GLSL_STUB_SPVTOOLS)
+      target_link_libraries(gq_glsl PRIVATE SPIRV-Tools-opt SPIRV-Tools)
+      set_target_properties(gq_glsl PROPERTIES BUILD_RPATH "\$ORIGIN" INSTALL_RPATH "\$ORIGIN")
+    endif()
+    target_link_options(gq_glsl PRIVATE -Wl,--exclude-libs,ALL -Wl,--no-undefined)
+    add_dependencies(game gq_glsl)
+  else()
+    message(STATUS "static glslang libraries not found in ${GQ_GLSLANG_LIB_DIR}: libgq_glsl.so (Vulkan backend) is not built")
+  endif()
+
+  # gq_compile_glsl(<target> OUTDIR <dir> SOURCES <file.vert|file.frag|...> ...)
+  # compiles fixed shaders with glslc into <dir>/<file>_<stage>_spv.h, each
+  # defining `static const uint32_t <file>_<stage>_spv[]` (glslc -mfmt=c).
+  find_program(GQ_GLSLC glslc)
+  function(gq_compile_glsl target)
+    cmake_parse_arguments(A "" "OUTDIR" "SOURCES" ${ARGN})
+    if(NOT GQ_GLSLC)
+      message(FATAL_ERROR "glslc not found (gq_compile_glsl)")
+    endif()
+    file(MAKE_DIRECTORY ${A_OUTDIR})
+    set(outputs)
+    foreach(src ${A_SOURCES})
+      get_filename_component(abs ${src} ABSOLUTE)
+      get_filename_component(name ${src} NAME)
+      string(MAKE_C_IDENTIFIER ${name} id)
+      set(inc ${A_OUTDIR}/${id}.inc)
+      set(hdr ${A_OUTDIR}/${id}_spv.h)
+      file(WRITE ${hdr}.tmp "#include <stdint.h>\nstatic const uint32_t ${id}_spv[] =\n#include \"${id}.inc\"\n;\n")
+      execute_process(COMMAND ${CMAKE_COMMAND} -E copy_if_different ${hdr}.tmp ${hdr})
+      add_custom_command(OUTPUT ${inc}
+        COMMAND ${GQ_GLSLC} --target-env=vulkan1.2 -O -mfmt=c -o ${inc} ${abs}
+        DEPENDS ${abs} VERBATIM COMMENT "glslc ${name}")
+      list(APPEND outputs ${inc})
+    endforeach()
+    add_custom_target(${target} DEPENDS ${outputs})
+  endfunction()
+
+  # Checks and the converter for the generated shaders (tools/glsl/spirv_check.cpp):
+  # GLES text hashes, spirv.bin from a shaders.bin, dumps for spirv-val.
+  if(GQ_GLSLANG_FOUND AND GQ_GLSLC)
+    gq_compile_glsl(gq_fixed_shaders OUTDIR ${CMAKE_BINARY_DIR}/shaders SOURCES tools/glsl/test/smoke.vert)
+    add_executable(spirv_check tools/glsl/spirv_check.cpp platform/src/gx/gl_shadergen.cpp platform/src/gx/vk_spirv.cpp)
+    target_include_directories(spirv_check PRIVATE platform/src/gx platform/include tools/glsl ${CMAKE_BINARY_DIR}/shaders)
+    target_link_libraries(spirv_check PRIVATE dl pthread)
+    add_dependencies(spirv_check gq_glsl gq_fixed_shaders)
+    # Hashes of the generated GLES text, to compare two generator versions.
+    add_executable(gles_hashes tools/glsl/gles_hashes.cpp platform/src/gx/gl_shadergen.cpp)
+    target_include_directories(gles_hashes PRIVATE platform/src/gx platform/include)
+  endif()
 endif()

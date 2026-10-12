@@ -40,6 +40,46 @@ layout(std140, binding = 2) uniform EyeBlock {
 };
 )";
 
+// Vulkan dialect: one descriptor set of buffers (the single binding space
+// puts the EyeBlock UBO on 4, after the SSBOs on 0-3), one set of 8 combined
+// image samplers, and a push constant block (see kVk* in gl_shadergen.h).
+const char* kUniformBlocksVk = R"(
+layout(std430, set = 0, binding = 0) readonly buffer RowBuf { vec4 rows[]; };
+layout(std430, set = 0, binding = 1) readonly buffer RecBuf { uint recs[]; };
+layout(std430, set = 0, binding = 2) readonly buffer StateBuf { vec4 st[]; };
+layout(std140, set = 0, binding = 4) uniform EyeBlock {
+    vec4 vrView[4];
+    vec4 vrProj[4];
+    ivec4 vrFlags;
+    vec4 vrFocus;
+    vec4 vrCut;
+    vec4 vrEyePos;
+    vec4 vrStereo;
+    vec4 vrStereo2;
+};
+)";
+
+const char* kPushBlockVk = R"(
+layout(push_constant, std430) uniform PushBlock {
+    uint u_firstOrdinal;
+    int u_copyMode;
+    uint u_pad0;
+    uint u_pad1;
+    vec4 u_copyRect;
+};
+)";
+
+// Varying locations (Vulkan dialect), shared by the two stages.
+enum {
+    kLocPix = 0,
+    kLocClr0 = 1,
+    kLocClr1 = 2,
+    kLocTex = 3,  // 3..10
+    kLocViewZ = 11,
+    kLocGxZ = 12,
+    kLocEye = 13,
+};
+
 }  // namespace
 
 ShaderUid makeShaderUid(const uint32_t* bp, const uint32_t* xf, uint32_t vtxFlags, bool hud) {
@@ -90,10 +130,16 @@ ShaderUid makeShaderUid(const uint32_t* bp, const uint32_t* xf, uint32_t vtxFlag
 // ---------------------------------------------------------------------------
 // Vertex shader
 // ---------------------------------------------------------------------------
-std::string genVertexShader(const ShaderUid& u) {
+std::string genVertexShader(const ShaderUid& u, Dialect dialect) {
+    const bool vk = dialect == Dialect::VK;
     Out o;
-    o.w("#version 320 es\nprecision highp float;\nprecision highp int;\n");
-    o.s += kUniformBlocks;
+    if (vk) {
+        o.w("#version 450\n");
+        o.s += kUniformBlocksVk;
+    } else {
+        o.w("#version 320 es\nprecision highp float;\nprecision highp int;\n");
+        o.s += kUniformBlocks;
+    }
     uint32_t f = u.vtxFlags;
     o.w("layout(location = 0) in vec3 a_pos;\n");
     if (f & VF_POSMTX) o.w("layout(location = 1) in uint a_posmtx;\n");
@@ -107,20 +153,33 @@ std::string genVertexShader(const ShaderUid& u) {
     if (f & VF_TEXMTX) o.w("layout(location = 15) in uvec2 a_texmtx;\n");
     // Draw record of this vertex: indices are relative to the batch's first
     // vertex, so gl_VertexID + the batch's first ordinal indexes vtxRec[].
-    o.w("layout(std430, binding = 3) readonly buffer VtxRecBuf { uint vtxRec[]; };\n");
-    o.w("uniform uint u_firstOrdinal;\n");
-    o.w("flat out uint v_pix;\n");
-    o.w("out vec4 v_clr0;\nout vec4 v_clr1;\n");
-    for (uint32_t i = 0; i < u.numTexGens; i++) o.w("out vec3 v_tex%u;\n", i);
-    o.w("out float v_viewz;\nout float v_gxz;\n");
-    if (u.cutaway) o.w("out vec3 v_eye;\n");
+    // Vulkan: gl_VertexIndex is the index read from the index buffer (the
+    // draw's vertexOffset is 0 and the batch's vertex buffer is bound at its
+    // first word), as gl_VertexID is for glDrawElements.
+    if (vk) {
+        o.w("layout(std430, set = 0, binding = 3) readonly buffer VtxRecBuf { uint vtxRec[]; };\n");
+        o.s += kPushBlockVk;
+        o.w("layout(location = %d) flat out uint v_pix;\n", (int)kLocPix);
+        o.w("layout(location = %d) out vec4 v_clr0;\nlayout(location = %d) out vec4 v_clr1;\n", (int)kLocClr0, (int)kLocClr1);
+        for (uint32_t i = 0; i < u.numTexGens; i++) o.w("layout(location = %u) out vec3 v_tex%u;\n", (unsigned)kLocTex + i, i);
+        o.w("layout(location = %d) out float v_viewz;\nlayout(location = %d) out float v_gxz;\n", (int)kLocViewZ, (int)kLocGxZ);
+        if (u.cutaway) o.w("layout(location = %d) out vec3 v_eye;\n", (int)kLocEye);
+    } else {
+        o.w("layout(std430, binding = 3) readonly buffer VtxRecBuf { uint vtxRec[]; };\n");
+        o.w("uniform uint u_firstOrdinal;\n");
+        o.w("flat out uint v_pix;\n");
+        o.w("out vec4 v_clr0;\nout vec4 v_clr1;\n");
+        for (uint32_t i = 0; i < u.numTexGens; i++) o.w("out vec3 v_tex%u;\n", i);
+        o.w("out float v_viewz;\nout float v_gxz;\n");
+        if (u.cutaway) o.w("out vec3 v_eye;\n");
+    }
 
     // Matrix rows: slot bases come from the draw record (3 rows per slot).
     o.w("uint slotRow(uint rb, uint firstSlot, int idx) { return recs[rb + firstSlot + uint(idx / 3)] + uint(idx %% 3); }\n");
     o.w("vec3 mulRows(uint r, vec4 v) { return vec3(dot(rows[r], v), dot(rows[r + 1u], v), dot(rows[r + 2u], v)); }\n");
     o.w("#define L(i) st[lbase + uint(i)]\n");
     o.w("void main() {\n");
-    o.w("  uint rb = vtxRec[u_firstOrdinal + uint(gl_VertexID)] * %uu;\n", (unsigned)kRecWords);
+    o.w("  uint rb = vtxRec[u_firstOrdinal + uint(%s)] * %uu;\n", vk ? "gl_VertexIndex" : "gl_VertexID", (unsigned)kRecWords);
     o.w("  uint lbase = recs[rb + %uu];\n  uint pjbase = recs[rb + %uu];\n", (unsigned)kRecLights, (unsigned)kRecProj);
     o.w("  v_pix = recs[rb + %uu];\n", (unsigned)kRecPixel);
     o.w("  uint mA = recs[rb + %uu];\n  uint mB = recs[rb + %uu];\n", (unsigned)kRecMtxIdxA, (unsigned)kRecMtxIdxB);
@@ -191,6 +250,7 @@ std::string genVertexShader(const ShaderUid& u) {
     if (u.cutaway) o.w("    v_eye = vec3(0.0, 0.0, 1.0e6);  // never cut\n");
     o.w("  }\n");
     o.w("  gl_Position = clipPos;\n");
+    if (vk) o.w("  gl_PointSize = 1.0;\n");
     o.w("  v_viewz = pos.z;\n");
 
     // Color channels.
@@ -399,8 +459,8 @@ std::string swapString(const ShaderUid& u, uint32_t table) {
 }
 
 const char* alphaTest(uint32_t func, const char* ref) {
-    static char buf[4][96];
-    static int slot;
+    static thread_local char buf[4][96];  // the generator runs on several threads
+    static thread_local int slot;
     char* b = buf[slot++ & 3];
     switch (func) {
     case 0:
@@ -430,21 +490,38 @@ const char* alphaTest(uint32_t func, const char* ref) {
 
 }  // namespace
 
-std::string genFragmentShader(const ShaderUid& u) {
+std::string genFragmentShader(const ShaderUid& u, Dialect dialect) {
+    const bool vk = dialect == Dialect::VK;
     Out o;
-    o.w("#version 320 es\nprecision highp float;\nprecision highp int;\n");
-    o.s += kUniformBlocks;
-    for (int i = 0; i < 8; i++) {
-        o.w("layout(binding = %d) uniform sampler2D s_tex%d;\n", i, i);
+    if (vk) {
+        o.w("#version 450\n");
+        o.s += kUniformBlocksVk;
+        for (int i = 0; i < 8; i++) {
+            o.w("layout(set = 1, binding = %d) uniform sampler2D s_tex%d;\n", i, i);
+        }
+        o.w("layout(location = %d) flat in uint v_pix;\n", (int)kLocPix);
+        o.w("layout(location = %d) in vec4 v_clr0;\nlayout(location = %d) in vec4 v_clr1;\n", (int)kLocClr0, (int)kLocClr1);
+        for (uint32_t i = 0; i < u.numTexGens; i++) o.w("layout(location = %u) in vec3 v_tex%u;\n", (unsigned)kLocTex + i, i);
+        o.w("layout(location = %d) in float v_viewz;\nlayout(location = %d) in float v_gxz;\nlayout(location = 0) out vec4 o_color;\n", (int)kLocViewZ, (int)kLocGxZ);
+    } else {
+        o.w("#version 320 es\nprecision highp float;\nprecision highp int;\n");
+        o.s += kUniformBlocks;
+        for (int i = 0; i < 8; i++) {
+            o.w("layout(binding = %d) uniform sampler2D s_tex%d;\n", i, i);
+        }
+        o.w("flat in uint v_pix;\n");
+        o.w("in vec4 v_clr0;\nin vec4 v_clr1;\n");
+        for (uint32_t i = 0; i < u.numTexGens; i++) o.w("in vec3 v_tex%u;\n", i);
+        o.w("in float v_viewz;\nin float v_gxz;\nout vec4 o_color;\n");
     }
-    o.w("flat in uint v_pix;\n");
-    o.w("in vec4 v_clr0;\nin vec4 v_clr1;\n");
-    for (uint32_t i = 0; i < u.numTexGens; i++) o.w("in vec3 v_tex%u;\n", i);
-    o.w("in float v_viewz;\nin float v_gxz;\nout vec4 o_color;\n");
     o.w("vec2 projUv(vec3 t) { return (t.z != 0.0) ? t.xy / t.z : t.xy; }\n");
     o.w("int idot(ivec3 a, ivec3 b) { ivec3 t = a * b; return t.x + t.y + t.z; }\n");
     if (u.cutaway) {
-        o.w("in vec3 v_eye;\n");
+        if (vk) {
+            o.w("layout(location = %d) in vec3 v_eye;\n", (int)kLocEye);
+        } else {
+            o.w("in vec3 v_eye;\n");
+        }
         o.w("const float kBayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);\n");
     }
 
@@ -675,6 +752,78 @@ std::string genFragmentShader(const ShaderUid& u) {
     }
     o.w("}\n");
     return o.s;
+}
+
+// ---------------------------------------------------------------------------
+// Fixed shaders: the fullscreen triangle that copies (and converts) a part of
+// the EFB into a copy texture.  Drawn with three vertices and no vertex
+// buffers: vertex index 0..2.  In Vulkan the rect and the mode come from the
+// push constants, the color and depth samplers are set 1 bindings 0 and 1.
+// ---------------------------------------------------------------------------
+namespace {
+
+std::string replaceAll(std::string s, const char* from, const char* to) {
+    size_t n = strlen(from), m = strlen(to);
+    for (size_t at = 0; (at = s.find(from, at)) != std::string::npos; at += m) {
+        s.replace(at, n, to);
+    }
+    return s;
+}
+
+const char* kCopyVsBody = R"(void main() {
+    vec2 p = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+    // Texture rows run top-down like texture memory (row 0 = top of the
+    // copied rectangle); the EFB is stored bottom-up.
+    v_uv = mix(u_rect.xy, u_rect.zw, vec2(p.x, 1.0 - p.y));
+    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+
+const char* kCopyFsBody = R"(void main() {
+    vec4 c = texture(s_color, v_uv);
+    float y = dot(c.rgb, vec3(0.257, 0.504, 0.098)) + 16.0 / 255.0;
+    if (u_mode == 0) o = c;                              // RGBA8 / RGB5A3
+    else if (u_mode == 1) o = vec4(c.rgb, 1.0);          // RGB565
+    else if (u_mode == 2) o = vec4(y);                   // I4/I8
+    else if (u_mode == 3) o = vec4(y, y, y, c.a);        // IA4/IA8
+    else if (u_mode == 4) o = vec4(c.r);                 // R4/R8
+    else if (u_mode == 5) o = vec4(c.r, c.r, c.r, c.a);  // RA4/RA8
+    else if (u_mode == 6) o = vec4(c.a);                 // A8
+    else if (u_mode == 7) o = vec4(c.g);                 // G8
+    else if (u_mode == 8) o = vec4(c.b);                 // B8
+    else if (u_mode == 9) o = vec4(c.g, c.g, c.g, c.r);  // RG8
+    else if (u_mode == 10) o = vec4(c.b, c.b, c.b, c.g); // GB8
+    else {                                               // Z copies
+        float z = texture(s_depth, v_uv).r;
+        o = vec4(z, fract(z * 256.0), fract(z * 65536.0), z);
+    }
+}
+)";
+
+}  // namespace
+
+std::string genCopyVertexShader(Dialect dialect) {
+    if (dialect == Dialect::VK) {
+        std::string s = "#version 450\n";
+        s += kPushBlockVk;
+        s += "layout(location = 0) out vec2 v_uv;\n";
+        s += replaceAll(replaceAll(kCopyVsBody, "gl_VertexID", "gl_VertexIndex"), "u_rect", "u_copyRect");
+        return s;
+    }
+    return std::string("#version 320 es\nprecision highp float;\nuniform vec4 u_rect;  // src rect in target UV: x0, y0, x1, y1\nout vec2 v_uv;\n") + kCopyVsBody;
+}
+
+std::string genCopyFragmentShader(Dialect dialect) {
+    if (dialect == Dialect::VK) {
+        std::string s = "#version 450\n";
+        s += kPushBlockVk;
+        s += "layout(set = 1, binding = 0) uniform sampler2D s_color;\nlayout(set = 1, binding = 1) uniform sampler2D s_depth;\n";
+        s += "layout(location = 0) in vec2 v_uv;\nlayout(location = 0) out vec4 o;\n";
+        s += replaceAll(kCopyFsBody, "u_mode", "u_copyMode");
+        return s;
+    }
+    return std::string("#version 320 es\nprecision highp float;\nlayout(binding = 0) uniform sampler2D s_color;\nlayout(binding = 1) uniform sampler2D s_depth;\n"
+                       "uniform int u_mode;\nin vec2 v_uv;\nout vec4 o;\n") + kCopyFsBody;
 }
 
 }  // namespace gpu
