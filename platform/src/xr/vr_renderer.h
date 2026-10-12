@@ -121,6 +121,11 @@ void init();
 //   tilt_speed        the stick's top tilt speed, degrees a second (60)
 //   left_handed       1 to point with the left controller and swap the
 //                     sticks, triggers, grips and bumpers (0, default)
+//   diorama_transitions  1 (default) keeps the diorama through launch stars,
+//                     pipes and a galaxy's arrival, following the game
+//                     camera as the screen shows it (the world swings with
+//                     it, smoothed, with the turn vignette); 0 shows them on
+//                     the flat screen, as early versions did
 //   turn_with_camera  1 to have the diorama turn with the game camera as it
 //                     swings round Mario (0: the world keeps its facing; the
 //                     right stick turns it, see smooth_turn)

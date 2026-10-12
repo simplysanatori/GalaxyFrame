@@ -643,6 +643,16 @@ bool GameScene::isPlayMovie() const {
     return MR::isActiveMoviePlayer() || MR::isMoviePlayingOnSequence() || isNerve(GET_NERVE(GameScene, GameScenePlayMovie));
 }
 
+#ifdef TARGET_PC
+// diorama_transitions (vr_game.cpp).  Declared here, not in port/compat.h:
+// every decomp file includes that header, so a change there rebuilds it all.
+extern "C" int port_vr_diorama_transitions(void);
+// The camera hint "a transit or arrival kept in the diorama".  It continues
+// the PORT_GX_CAMERA_* list in port/compat.h (1, 2, 4, 8, 16, 32 are taken)
+// and must equal PORT_GX_CAMERA_TRANSIT in platform/src/xr/vr_renderer.h.
+static const u32 kCameraTransit = 64;
+#endif
+
 void GameScene::draw3D() const {
     if (!mDraw3D) {
         return;
@@ -697,8 +707,16 @@ void GameScene::draw3D() const {
         // work too: shown on the screen, the diorama flew the whole world
         // around the player.
         bool arriving = isNerve(GET_NERVE(GameScene, GameSceneScenarioOpeningCamera)) || isNerve(GET_NERVE(GameScene, GameSceneScenarioStarter));
-        if (!MR::isStageFileSelect() && !MR::isDemoActive() && !domeSelect && !MR::isFirstPersonCamera() && !transit && !arriving) {
+        // With diorama_transitions the transit and the arrival stay in the
+        // diorama (kCameraTransit): it follows the game camera's
+        // framing instead of centring Mario.  Cutscenes, the file select, the
+        // dome and first person stay flat.
+        bool keepTransit = (transit || arriving) && port_vr_diorama_transitions() != 0;
+        if (!MR::isStageFileSelect() && !MR::isDemoActive() && !domeSelect && !MR::isFirstPersonCamera() && ((!transit && !arriving) || keepTransit)) {
             flags |= PORT_GX_CAMERA_DIORAMA;
+            if (keepTransit) {
+                flags |= kCameraTransit;
+            }
         }
         if (pointerMode <= StarPointerMode_PictureBook || domeSelect) {
             flags |= PORT_GX_CAMERA_POINTER_UI;
@@ -730,7 +748,7 @@ void GameScene::draw3D() const {
             bool eventCamera = director->getCurrentCameraMan() == director->mCameraManEvent;
             f32 watchDistance = pose->mWatchPos.distance(*player);
             sShowingElsewhere = eventCamera && watchDistance > (sShowingElsewhere ? 1500.0f : 2500.0f);
-            if (!sShowingElsewhere && !isNerve(GET_NERVE(GameScene, GameSceneScenarioOpeningCamera))) {
+            if (!sShowingElsewhere && !isNerve(GET_NERVE(GameScene, GameSceneScenarioOpeningCamera)) && !(flags & kCameraTransit)) {
                 flags |= PORT_GX_CAMERA_CENTRE_PLAYER;
             }
             // Is level geometry between the headset and Mario?  The VR layer
