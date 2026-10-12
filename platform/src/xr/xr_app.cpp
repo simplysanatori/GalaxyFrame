@@ -782,6 +782,7 @@ void initSession(App& a) {
     // (the game renders at its dynamic resolution and the composite
     // resamples, see vr_game.cpp).
     float scale = vr::swapchainScale();
+    vr::setRecommendedEyeWidth((int)a.viewConfig[0].recommendedImageRectWidth);
     for (int e = 0; e < 2; e++) {
         const XrViewConfigurationView& vc = a.viewConfig[e];
         int32_t w = (int32_t)lroundf(vc.recommendedImageRectWidth * scale);

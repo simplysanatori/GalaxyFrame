@@ -101,7 +101,13 @@ void hintScale(char* out, size_t size) {
     if (giantOn()) {
         snprintf(out, size, "The screen's picture is at %.2f now", roundf(vr::screenPictureScale() * 100.0f) / 100.0f);
     } else {
-        snprintf(out, size, "Now %.2f; 1.00 is the Frame's default", roundf(vr::renderScale() * 100.0f) / 100.0f);
+        float now = roundf(vr::renderScale() * 100.0f) / 100.0f;
+        int base = vr::recommendedEyeWidth();
+        if (base > 0) {
+            snprintf(out, size, "Now %.2f = %d px; 1.00 is SteamVR's setting (%d px)", now, (int)lroundf(base * now), base);
+        } else {
+            snprintf(out, size, "Now %.2f; 1.00 is SteamVR's resolution setting", now);
+        }
     }
 }
 void hintInvert(char* out, size_t size) {
