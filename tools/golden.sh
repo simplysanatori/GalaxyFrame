@@ -3,11 +3,11 @@
 # the same build gives bit-identical PNGs run after run, to compare builds and renderer backends.
 #
 #   tools/golden.sh capture <build-dir> <out-dir> [--verify] [--only boot,boot,...] [--xr-only]
-#   tools/golden.sh compare <dirA> <dirB> [--tolerant]
+#   tools/golden.sh compare <dirA> <dirB> [--tolerant] [--all]
 #   tools/golden.sh list
 #
 # capture   <build-dir> holds libgame.so (e.g. build-linux).  Boots the game headless once per
-#           scene group (about 80 s each, 9 groups), plays the title and file select with the
+#           scene group (about 40 s each, 9 groups), plays the title and file select with the
 #           scripted controller, jumps into a galaxy (PETARI_STAGE) and saves the flat picture
 #           (<name>.png) at fixed game frames; the shots marked x also save the headset
 #           presentation of that frame (<name>_xr.png, both eyes with the HUD as UI layers, and
@@ -17,7 +17,7 @@
 # compare   Bit-exact by default (a refactor must not change a pixel).  --tolerant is the rule
 #           for another backend (Vulkan against GLES): mean absolute difference under 1/255 and
 #           under 0.5% of the pixels more than 8/255 off (tools/imgdiff.py).  Exit status 0 when
-#           every picture passes.
+#           every picture passes.  The title and file select shots are skipped (see UNSTABLE) unless --all.
 #
 # Why it is deterministic: tools/golden_runner.c, not petari_headless, drives the game.  It
 # feeds the scripted controller by the game's own retrace count (60 retraces a second, as the
@@ -32,16 +32,19 @@
 # GOLDEN_ENV="PETARI_NOCOPY=1 FOO=bar".
 #
 # Inputs and where they come from (nothing in ~/.local/share/GalaxyQuest is written):
-#   GOLDEN_HOME   scratch folder, default /tmp/gq-golden-home (game files linked, saves, shader
+#   GOLDEN_HOME   scratch folder, default ~/.cache/gq-golden-home (game files linked, saves, shader
 #                 cache and VR settings copied per run)
 #   GOLDEN_GAME   the converted game files, default ~/.local/share/GalaxyQuest/game
 #   GOLDEN_NAND   the saves, default ~/.local/share/GalaxyQuest/nand (the file select shows them)
 #   GOLDEN_SHADERS  shader cache to start from, default ~/.local/share/GalaxyQuest/shaders.bin
+#
+# Captures take the machine-wide lock ~/Games/GalaxyQuest/.build.lock (the one gqbuild.sh uses), so
+# they never overlap a build or another capture; GOLDEN_NO_LOCK=1 when the caller already holds it.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 DATA=${GALAXYQUEST_HOME:-$HOME/.local/share/GalaxyQuest}
-GOLDEN_HOME=${GOLDEN_HOME:-/tmp/gq-golden-home}
+GOLDEN_HOME=${GOLDEN_HOME:-$HOME/.cache/gq-golden-home}
 GOLDEN_GAME=${GOLDEN_GAME:-$DATA/game}
 GOLDEN_NAND=${GOLDEN_NAND:-$DATA/nand}
 GOLDEN_SHADERS=${GOLDEN_SHADERS:-$DATA/shaders.bin}
@@ -60,6 +63,9 @@ SCENES=(
   "sand|SandClockGalaxy||sand_intro:3300,sand_play:3900,sand_move:4500"
   "surf|SurfingLv1Galaxy||surf_intro:3300,surf_play:3900:x,surf_move:4500"
 )
+# Shots whose picture depends on wall-clock time inside the game (the title and file select
+# backgrounds move with it; the Honeyhive bee shots differ in Mario's pose now and then): captured, but skipped by `compare` unless --all.
+UNSTABLE=title,fileselect,honey_intro,honey_move
 # Mario walks (stick) between the play and move shots.
 MOVE="72-78:SX=0.7|SY=0.7"
 
@@ -161,6 +167,10 @@ cmd=${1:-}
 case "$cmd" in
   capture)
     [ $# -ge 3 ] || usage
+    if [ -z "$GOLDEN_NO_LOCK" ]; then
+      exec 9> "$HOME/Games/GalaxyQuest/.build.lock"
+      echo "golden: waiting for the build lock"; flock 9
+    fi
     BUILD=$(cd "$2" && pwd); OUT=$3; shift 3
     VERIFY=; ONLY=; XRONLY=
     while [ $# -gt 0 ]; do
@@ -177,7 +187,7 @@ case "$cmd" in
     if [ -n "$VERIFY" ]; then
       echo "verifying: capturing again"
       capture_once "$BUILD" "$OUT.verify" "$ONLY" "$XRONLY"
-      if python3 -I "$HERE/imgdiff.py" "$OUT" "$OUT.verify" | tail -3; then
+      if python3 -I "$HERE/imgdiff.py" "$OUT" "$OUT.verify" --ignore "$UNSTABLE" | tail -3; then
         echo "deterministic: both captures are bit-identical"; rm -rf "$OUT.verify"
       else
         echo "NOT deterministic: see $OUT.verify" >&2; exit 1
@@ -187,14 +197,17 @@ case "$cmd" in
   compare)
     [ $# -ge 3 ] || usage
     A=$2; B=$3; shift 3
-    MODE=
-    [ "$1" = "--tolerant" ] && MODE=--tolerant
+    MODE=; IGN="--ignore $UNSTABLE"
+    for a in "$@"; do
+      [ "$a" = "--tolerant" ] && MODE=--tolerant
+      [ "$a" = "--all" ] && IGN=
+    done
     for f in commit PETARI_GFX saves; do
       va=$(grep "^$f:" "$A/MANIFEST.txt" 2> /dev/null || true); vb=$(grep "^$f:" "$B/MANIFEST.txt" 2> /dev/null || true)
       [ "$va" != "$vb" ] && echo "note: $f differs: A '${va#*: }' B '${vb#*: }'"
     done
     [ "$(grep '^saves:' "$A/MANIFEST.txt" 2> /dev/null)" != "$(grep '^saves:' "$B/MANIFEST.txt" 2> /dev/null)" ] && echo "warning: the saves differ, so the file select and some scenes will"
-    python3 -I "$HERE/imgdiff.py" "$A" "$B" $MODE
+    python3 -I "$HERE/imgdiff.py" "$A" "$B" $MODE $IGN
     ;;
   list)
     for entry in "${SCENES[@]}"; do IFS='|' read -r boot galaxy extra shots <<< "$entry"; echo "$boot ($galaxy): $shots"; done
