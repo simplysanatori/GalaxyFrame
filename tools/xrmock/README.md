@@ -27,6 +27,8 @@ Checks, as `ERROR` lines in the trace and a summary on stderr at the end of
 the session (`xrmock: summary ...`):
 
 - acquire, wait and release in order per swapchain (both APIs);
+- Vulkan: no swapchain with mip levels (SteamVR on the Frame allocates
+  memory for level 0 only; writing the others corrupted other images in H2);
 - Vulkan: at each release the mock waits for the app's queue to go idle; more
   than `MOCK_XR_BUSY_MS` (4) means the app released an image before its GPU
   work had finished (SteamVR shows a released image at once). Other

@@ -20,7 +20,7 @@
 #                   scratch home (default: ~/.local/share/GalaxyQuest/...)
 #   IGNORE_EXT      extension names (comma separated) that may be in the
 #                   instance extension list of one build only
-#   GFX             PETARI_GFX for both runs (gles)
+#   GFX             PETARI_GFX for both runs (gles; the game's own default is Vulkan)
 # The traces are compared line by line without frame numbers, session events
 # and swapchain image indices: the setup lines as they are, then the frames
 # from a common point of the steady state (see run()), up to the length of
@@ -55,7 +55,7 @@ run() { # build tag mode
     *) echo "unknown mode $mode" >&2; return 1 ;;
   esac
   env "${env[@]}" EGL_PLATFORM=surfaceless SDL_AUDIODRIVER=dummy XR_RUNTIME_JSON="$RT" MOCK_XR_TRACE="$out/trace.txt" MOCK_XR_SECONDS=$SECS \
-    GALAXYQUEST_HOME="$HOME_DIR" PETARI_SAVE_DIR="$HOME_DIR/nand" ${GFX:+PETARI_GFX=$GFX} GALAXYQUEST_LIB="$build/libgame.so" \
+    GALAXYQUEST_HOME="$HOME_DIR" PETARI_SAVE_DIR="$HOME_DIR/nand" PETARI_GFX=${GFX:-gles} GALAXYQUEST_LIB="$build/libgame.so" \
     timeout $((SECS + 40)) nice -n 5 "$S/gqmock" > "$out/stdout.txt" 2>&1 || echo "  run $tag $mode exited with status $?"
   cp "$HOME_DIR/petari_log.txt" "$out/petari_log.txt" 2> /dev/null || true
   # Normalized: no frame numbers, no events, no swapchain image indices (their
