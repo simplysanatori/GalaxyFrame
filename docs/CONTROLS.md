@@ -20,7 +20,7 @@ controllers are mapped onto them like this. The mapping lives in
 | X | − | Pause menu (one press) |
 | Right stick left / right | D-pad left / right | In the diorama: turn it smoothly round Mario, faster the further you push (a dead zone of 15%, then up to 120° a second, with the edges of the view darkened while it turns); with *Smooth turning* off, a step (45°) at a time behind a short blink. On the giant screen: turn the game camera around Mario in steps, where the level allows it. Pushing the stick right turns the view to the right; with *Invert camera* off (see the VR settings) it moves the camera to the right instead, as the Wii's D-pad did |
 | Right stick up / down | D-pad up / down, with *Smooth turning* off and in a menu's lists | With *Smooth turning* on, in the diorama: tilt the view round Mario, up to see him from higher (a dead zone of 15%, then up to 60° a second; the same curve as the turn; the tilt is kept within -60° and +60°, never past straight down) |
-| Right stick click | None | In the diorama: level the tilt (back to the usual height over half a second); with *Gravity turns* Steps or Off, also level the world to Mario's up behind a blink |
+| Right stick click | None | In the diorama: level the tilt (back to the usual height over half a second); with *Planet turns* Steps or Off, also level the world to Mario's up behind a blink |
 
 With *Smooth turning* off, the right stick up is the D-pad up (first-person
 look) and the stick down is the D-pad down, as before. On the Steam Frame
@@ -40,7 +40,7 @@ first person, no turn), and the grip is not C there (the left bumper still
 is); outside the diorama the left grip is C as before. The Touch Plus
 controllers have no D-pad, so they have none of this.
 
-**Left-handed** (Game tab of the VR settings, or `left_handed = 1`): the
+**Left-handed** (Controls tab of the VR settings, or `left_handed = 1`): the
 left controller is the Remote (laser, pointer, settings panel clicks, the
 tick when it touches a target, shoot trigger, spin bumper, tilt for the Star
 Ball and the Ray, flick to spin, stick click to level the tilt, and the
@@ -144,11 +144,36 @@ come back during play, the game's pause menu is open.
 While the pause menu is open (press the Menu button or X), a VR settings
 panel appears to the right of its buttons, slightly turned towards you. Aim
 the right controller at it and press A or pull the trigger. It holds every
-setting of `petari_vr.ini` (see below) on five tabs: click a tab's name at
+setting of `petari_vr.ini` (see below) on six tabs: click a tab's name at
 the top to open it. **−** and **+** change a value by a step (hold to
 repeat), a switch turns with a click anywhere on its row, and **Defaults**
 puts the settings of the open tab back to their defaults. A setting that
 has no effect as things are (the 3D depth while the 3D is off) is dimmed.
+
+The panel has six tabs, in two rows. Rows that do nothing as things are
+(the 3D depth while *Stereoscopic 3D* is off, the speeds while *Smooth
+turning* is off, *Screen distance* while the giant screen is off) are dimmed
+but still work. On the Steam Frame the settings only the Quest has are
+left out (*Passthrough*, *Smooth motion*, *Super resolution*, *Refresh rate*,
+*High clocks*; the refresh rate is fixed at 120 Hz); their lines in
+`petari_vr.ini` still work.
+
+**Diorama**
+
+- **Distance**: how far in front of you Mario stands, 0.6 m to 4 m,
+  1.5 m by default (slider, or − and + for 10 cm).
+- **Height**: how far below your eyes he stands, 0.8 m by default.
+- **World size**: the size of the world, 1.0 by default (1.5 is half as big
+  again).
+- **Follow smoothing**: how gently the world follows Mario (the seconds it
+  takes to close half the gap; more is gentler), 0.12 s by default.
+- **See through scenery** (on by default): scenery that hides Mario from
+  you fades away between you and him.
+- **Turn with the camera** (off by default): the world turns with the game
+  camera as it swings round Mario, as early versions did; off, the world
+  keeps its facing and the right stick turns it (see *Smooth turning*).
+  With this on the stick turns the game camera, as on the giant screen,
+  and *Smooth turning* has no effect.
 
 **Screen**
 
@@ -159,11 +184,6 @@ has no effect as things are (the 3D depth while the 3D is off) is dimmed.
   of 0.5 m, 4.5 m by default. Drag the slider or use − and +; the mark
   under the slider is the default. The screen is 5.33 m wide, so it spans
   61 degrees at 4.5 m and 30 degrees (a TV seen from the couch) at 10 m.
-- **Passthrough** (off by default) shows your own room around the giant
-  screen, through the headset's cameras, instead of the dark. It fades in
-  and out as you switch it. It only shows on the giant screen: the diorama
-  fills the whole view with the game's world. The headset draws the room on
-  every refresh, which takes some of the GPU's time.
 - **Stereoscopic 3D** (off by default) shows the giant screen's picture in
   3D: the game is drawn once for each eye, from its own camera moved a
   little to either side. The sky and distant scenery lie far behind the
@@ -186,17 +206,8 @@ has no effect as things are (the 3D depth while the 3D is off) is dimmed.
   game each frame instead of one, so each is a little smaller; 1 is
   sharpest, but frames come late in busy scenes.
 
-**Diorama**
+**Cutscenes** (dimmed with the giant screen: a cutscene is on the flat screen there anyway)
 
-- **Diorama distance**: how far in front of you Mario stands, 0.6 m to 4 m,
-  1.5 m by default (slider, or − and + for 10 cm).
-- **Height**: how far below your eyes he stands, 0.8 m by default.
-- **World size**: the size of the world, 1.0 by default (1.5 is half as big
-  again).
-- **Follow smoothing**: how gently the world follows Mario (the seconds it
-  takes to close half the gap; more is gentler), 0.12 s by default.
-- **See through scenery** (on by default): scenery that hides Mario from
-  you fades away between you and him.
 - **Diorama in flights** (on by default): launch stars, pipes and other
   transits that carry Mario, and the flight into a galaxy, stay in the
   diorama instead of going back to the flat screen. The world follows the
@@ -204,84 +215,51 @@ has no effect as things are (the 3D depth while the 3D is off) is dimmed.
   its facing and how high it looks from, smoothed (the pivot follows within
   about 0.12 s, the facing and tilt with the *Turn smoothing* time), with the
   edges of the view darkened while it swings, and the scenery between you
-  and Mario fading as usual. When it ends, the view eases back to the
-  normal diorama without a blink (*Gravity turns* smooth; with Steps or Off,
-  one step behind a blink if he landed on another planet). Cutscenes, the
-  file select, the observatory domes' galaxy choice and the first-person
-  view stay on the flat screen. Off, the transits and the flight in are shown
-  on the flat screen as before. Dimmed while *Giant screen* is on.
+  and Mario fading as usual. When it ends the pivot goes back to Mario and
+  the up settles to his without a blink (*Planet turns* smooth; with Steps
+  or Off, one step behind a blink if he landed on another planet), but the
+  view's facing and tilt stay as the flight left them: the diorama carries
+  on from there instead of returning to the old position (a tilt from below
+  Mario rises to just above his horizon over a couple of seconds). Off, the
+  transits and the flight in are shown on the flat screen as before. Dimmed
+  while *Giant screen* is on. The Cutscenes tab does the same for cutscenes.
 
-**Comfort**
+Every cutscene the game plays itself, except the videos, can stay in the
+diorama (a switch on, the default) or go to the flat screen (off), by kind.
+In the diorama the world follows the cutscene's own camera, its angles and
+framing, as in a transit (see *Diorama in flights*), with the edges
+darkened while it swings; when the scene ends the diorama carries on from
+the view it ended with and the pivot goes back to Mario. The videos (the
+opening, the ending's film), the file select, the observatory domes' galaxy
+choice and the first-person view are always on the flat screen. Holding A
+skips a cutscene in either.
 
-- **Gravity turns** (Smooth by default): what the world does when Mario's
-  up changes, as on a round planet. *Smooth*: it turns with him. *Steps*:
-  it holds still while he runs round, and once his up is 35 degrees away it
-  levels to it in one step behind a short blink (the same blink as a snap
-  turn), also when gravity jumps by that much. *Off*: it never turns by
-  itself; level it with a click of the right stick, and it levels itself
-  (behind a blink) when Mario lands on another planet after a transit. In
-  Steps and Off, Mario can be seen tilted away from upright until it
-  levels.
-- **Turn smoothing**: how gently the world turns with his gravity (Smooth),
-  and the game camera's facing in a transit: 0.35 s by default (dimmed
-  unless *Gravity turns* is Smooth).
-- **Comfort vignette** (on by default): the edges of the view darken a
-  little at once whenever the view moves smoothly, and more the faster it
-  moves: the right stick's turn and tilt, the left grip and D-pad's height
-  and size, the world following Mario's gravity, and the game camera in a
-  transit. Off, only turns faster than about 20 degrees a second darken the
-  edges, up to full at about 85 degrees a second, as before.
-- **Vignette strength**: how dark the edges get, from 0 (not at all) to 1
-  (the default); 0 turns every vignette off.
-- **Turn with the camera** (off by default): the world turns with the game
-  camera as it swings round Mario, as early versions did; off, the world
-  keeps its facing and the right stick turns it (see *Smooth turning*).
-  With this on the stick turns the game camera, as on the giant screen,
-  and *Smooth turning* has no effect.
+- **Power Stars** (`cutscene_stars`): a Power Star or the Grand Star
+  appearing, returning to the Observatory or coming back.
+- **Bosses and enemies** (`cutscene_bosses`): introductions, hits and
+  defeats of bosses and of Kamella's ambushes, Bowser's scenes, Dino
+  Piranha, Gobblegut, the Tomb Spider and so on.
+- **Comet Observatory** (`cutscene_observatory`): Rosalina's explanations,
+  the Toad Brigade captain, Luigi's disappearance, the domes opening, the
+  launch to a galaxy and the epilogue.
+- **Storybook** (`cutscene_storybook`): Rosalina's picture book and her
+  reading of it (its pages are pointed at on the HUD panel).
+- **Lumas and friends** (`cutscene_friends`): meeting a Luma, chasing the
+  rabbits, penguins and other characters' scenes and races.
+- **Mario's changes** (`cutscene_mario`): transformations and the super form.
+- **Other scenes** (`cutscene_other`): everything else the game plays,
+  such as doors opening, cages breaking and things appearing in the level.
+  *Other scenes* also covers the game camera leaving Mario to show something
+  far off (a door a switch opened; `cutscene_camera`, no cutscene proper):
+  off, that goes to the flat screen for as long as it lasts.
+- **Hold A to skip**: how long to hold A to skip a cutscene or a dialogue,
+  1 s by default; at 0 ("Off") nothing is skipped.
 
-**Picture**
+The kind comes from the cutscene's name in the game's own list, by words in
+it (`GameScene.cpp`), so a scene the words miss counts as *Other scenes*.
 
-- **Smooth motion** turns SpaceWarp on or off (on by default): with it the
-  headset makes the in-between frames from the game's motion, so grass,
-  flowers and the ground stay sharp while the view follows Mario; off,
-  each game frame is shown twice and moving scenery looks doubled. It
-  takes effect at once, to compare.
-- **Super resolution** (on by default) hands the world to the headset at the
-  size it was rendered and lets Meta Quest Super Resolution scale it to the
-  display and sharpen it; off, the app scales it itself (softer). The HUD,
-  the pause menu and this panel go to the headset as layers of their own,
-  so their text stays sharp either way.
-- **FidelityFX CAS** (off by default) sharpens the world with AMD's
-  contrast adaptive sharpening as the app puts it into the eye images (and
-  scales it up there when Super Resolution is off). **CAS strength** goes
-  from 0 (least) to 1 (most), 0.5 by default.
-- **Lowest resolution** (0.80 by default) is as far as the game may lower
-  its render resolution when the GPU is busy; "Now" shows the resolution it
-  renders at. 1.00 is Meta's standard eye size. Higher stays sharper, but
-  when the GPU cannot keep up frames come late and the view stutters.
-  On the giant screen the same happens to the screen's picture: it is
-  drawn at its full size (2048x1152) while the GPU keeps up, and smaller
-  when it does not (passthrough and the stereoscopic 3D both take GPU
-  time), down to three quarters of this setting: 0.60 of the full size at
-  the default, which is still close to what the display can show of a
-  screen 4.5 m away. The row then shows the picture's size instead.
-- **Highest resolution** (1.60 by default) is as far as it may raise it
-  while the GPU has time to spare. Lower it to save battery.
-- **Refresh rate**: the display's, among those the headset offers. At
-  120 Hz (the default) the game's 60 frames a second fit the display
-  exactly; other rates make moving things judder, and SpaceWarp only works
-  at 120.
-- **High clocks** (on by default) asks the headset for high CPU and GPU
-  clock levels; off, the system runs them slower to save battery, and more
-  frames come late. It takes effect the next time the app starts.
+**Controls**
 
-**Game**
-
-- **Language**: the language of the game's texts, among those your disc
-  has: English, French, German, Spanish and Italian on the European disc,
-  English, French and Spanish on the American one. English by default. The
-  game reads it when it starts, so a change shows the next time you start
-  the app (the panel says so until then).
 - **Smooth turning** (on by default): the right stick turns the diorama
   smoothly round Mario, in proportion to how far you push it (nothing
   within the first 15%, about 30 degrees a second at half, 120 degrees a
@@ -301,8 +279,62 @@ has no effect as things are (the 3D depth while the 3D is off) is dimmed.
   camera's turns: the D-pad's left and right still turn pages the usual
   way.
 - **Left-handed** (off by default): see above.
-- **Hold A to skip**: how long to hold A to skip a cutscene or a dialogue,
-  1 s by default; at 0 ("Off") nothing is skipped.
+
+**Comfort**
+
+- **Planet turns** (Smooth by default): what the world does when Mario's
+  up changes, as on a round planet. *Smooth*: it turns with him. *Steps*:
+  it holds still while he runs round, and once his up is 35 degrees away it
+  levels to it in one step behind a short blink (the same blink as a snap
+  turn), also when gravity jumps by that much. *Off*: it never turns by
+  itself; level it with a click of the right stick, and it levels itself
+  (behind a blink) when Mario lands on another planet after a transit. In
+  Steps and Off, Mario can be seen tilted away from upright until it
+  levels.
+- **Turn smoothing**: how gently the world turns with his gravity (Smooth),
+  and the game camera's facing in a transit: 0.35 s by default (dimmed
+  unless *Planet turns* is Smooth).
+- **Comfort vignette** (on by default): the edges of the view darken a
+  little at once whenever the view moves smoothly, and more the faster it
+  moves: the right stick's turn and tilt, the left grip and D-pad's height
+  and size, the world following Mario's gravity, and the game camera in a
+  transit. Off, only turns faster than about 20 degrees a second darken the
+  edges, up to full at about 85 degrees a second, as before.
+- **Vignette at slow movement** and **Vignette at fast movement** (45 % and
+  100 % by default): how dark the edges get at the slowest smooth movement
+  and at full speed (a turn of 1 radian, about 57 degrees, a second); in
+  between it follows the speed. They apply to the stick's turn and tilt, the
+  height and size adjust, the world turning with Mario's gravity and the game
+  camera in a transit or cutscene. With *Comfort vignette* off only the fast
+  value is used, for turns faster than about 20 degrees a second; 0 on both
+  turns every vignette off. The old `vignette` line of the file is read as
+  the fast value.
+
+**Display**
+
+- **Resolution** (0.80 by default): the size the eyes are rendered at,
+  1.00 being Meta's standard eye size; "Now" shows what it is. Higher stays
+  sharper, but when the GPU cannot keep up frames come late and the view
+  stutters. It is one value for the session: the lowest and the highest
+  resolution of the ini file (`min_resolution` and `resolution`) are both
+  set to it. On the giant screen the screen's picture is drawn at its full
+  size (2048x1152) while the GPU keeps up, and smaller when it does not
+  (the stereoscopic 3D takes GPU time), down to three quarters of this
+  setting.
+- **Sharpening** (off by default) sharpens the world with AMD's
+  contrast adaptive sharpening as the app puts it into the eye images (and
+  scales it up there when Super Resolution is off). **Sharpening strength** goes
+  from 0 (least) to 1 (most), 0.5 by default.
+- **Language**: the language of the game's texts, among those your disc
+  has: English, French, German, Spanish and Italian on the European disc,
+  English, French and Spanish on the American one. English by default. The
+  game reads it when it starts, so a change shows the next time you start
+  the app (the panel says so until then).
+
+On the Quest the Screen tab also has **Passthrough** (your room around the
+giant screen), and the Display tab **Smooth motion** (SpaceWarp),
+**Super resolution**, **Refresh rate**, **High clocks** and the lowest and
+highest resolution as two rows.
 
 The paused scene behind the menu changes as you change a setting, so you
 can judge it before you carry on. When the menu closes, the settings you
@@ -334,7 +366,12 @@ diorama_distance = 1.5
 follow_smoothing = 0.12
 turn_smoothing = 0.35
 # Darkening at the edges while the view moves (0 = off, 1 = full)
-vignette = 1
+# How dark the edges get (0 to 1) at the slowest smooth movement and at full
+# speed (1 radian a second) with comfort_vignette on; with it off, only the
+# fast value, for turns above about 20 degrees a second.  An old `vignette`
+# line is read as vignette_fast.
+vignette_slow = 0.45
+vignette_fast = 1
 # Fade out scenery that hides Mario (0 = off)
 cutaway = 1
 # Seconds to hold A to skip a cutscene (0 = never skip)
@@ -413,6 +450,19 @@ diorama_transitions = 1
 # 1: the edges darken a little at once whenever the view moves smoothly
 # (more the faster); 0: only for turns faster than about 20 degrees a second
 comfort_vignette = 1
+# Which cutscenes stay in the diorama (1; 0 shows them on the flat screen):
+# Power Stars appearing and returning, bosses and enemies, the Comet
+# Observatory story, Rosalina's storybook, Lumas and other characters,
+# Mario's changes, other scenes in the level, the camera showing something
+# far from Mario.  The videos are always flat.
+cutscene_stars = 1
+cutscene_bosses = 1
+cutscene_observatory = 1
+cutscene_storybook = 1
+cutscene_friends = 1
+cutscene_mario = 1
+cutscene_other = 1
+cutscene_camera = 1
 # 1: the right stick turns the diorama smoothly, in proportion to its
 # deflection (up to 120 degrees a second, no blink); 0: in 45 degree steps
 # behind a short blink.
