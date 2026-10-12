@@ -1291,17 +1291,25 @@ void beginFrame(const FrameInfo& frame) {
                      xm::length(xm::Vec3{w[0], w[1], w[2]} - prevPivot), sRig.turnRate, sRig.up.x, sRig.up.y, sRig.up.z, (sRig.pitch + sRig.transitPitch) * 57.29578f);
         }
         // Comfort vignette while the view moves.  The rate is how fast it
-        // turns (rad/s): the rig's, or the equivalent of the height / size
-        // adjust's deflection, or a floor while a transit's camera drives
-        // it.  comfort_vignette: slight at once (a quarter of the way) and
-        // growing to full at 1.5 rad/s; off: only from 0.35 rad/s on.
+        // turns (rad/s): the rig's, or what the stick asks for (so that it
+        // shows whatever the rig measured), or the equivalent of the height /
+        // size adjust's deflection, or a floor while a transit's camera
+        // drives it.  comfort_vignette: clearly there at the slowest turn
+        // (0.45 of the way) and full at 1 rad/s; off: only from 0.35 rad/s
+        // on, full at 1.5.
         float rate = sRig.turnRate;
+        if (stickFresh) rate = fmaxf(rate, fmaxf(fabsf(sRig.stickTurn), fabsf(sRig.stickTilt)));
         if (port_host_time_ns() - sAdjustAt.load() < 250000000) rate = fmaxf(rate, 1.5f * sAdjustAmount.load());
         if (sRig.inTransit) rate = fmaxf(rate, 0.1f);
-        float amount = sComfortVignette ? (rate > 0.02f ? 0.25f + 0.75f * fminf(1.0f, rate / 1.5f) : 0.0f)
+        float amount = sComfortVignette ? (rate > 0.02f ? 0.45f + 0.55f * fminf(1.0f, rate / 1.0f) : 0.0f)
                                         : fminf(1.0f, fmaxf(0.0f, (rate - 0.35f) / 1.15f));
         float target = amount * 0.85f * sVignetteStrength;
         sVignette += (target - sVignette) * fminf(1.0f, dt * (target > sVignette ? 12.0f : 4.0f));
+        static const bool sVigLog = getenv("PETARI_RIGLOG") != nullptr;
+        static int sVigLogged = 0;
+        if (sVigLog && (sVignette > 0.01f || target > 0.0f) && sVigLogged++ % 30 == 0) {
+            port_log("vr: vignette %.2f (target %.2f) for a rate of %.2f rad/s (rig %.2f), dt %.4f", sVignette, target, rate, sRig.turnRate, dt);
+        }
         // Grow the cutaway in over ~0.15 s while level geometry hides the
         // player, and out over ~0.3 s once it no longer does.
         bool hidden = sCutawayOn && (sCutawayTest || (r.camera().flags & PORT_GX_CAMERA_OCCLUDED));
