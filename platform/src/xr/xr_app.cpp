@@ -50,7 +50,6 @@
 #include "xr_gfx.h"
 
 extern "C" void port_boot(const char* dataRoot, const char* saveRoot);
-extern "C" void port_boost_thread(void);  // os_thread.cpp: scheduling priority for this thread
 extern "C" void port_mem_set_reserved_window(uintptr_t base, size_t size);
 extern "C" void port_headless_write_png(const char* path, const unsigned char* rgba, int w, int h);
 extern "C" int port_vr_diorama(void);  // the diorama is on show (vr_game.cpp)
@@ -2303,7 +2302,7 @@ extern "C" __attribute__((visibility("default"))) void port_linux_main(const cha
     PortHostAllocScope scope;
     App& a = gApp;
     port_mem_set_reserved_window(windowBase, windowSize);
-    port_boost_thread();  // the frame loop runs on this thread
+    port_boost_thread_realtime();  // the frame loop runs on this thread (real-time with PETARI_THREADPRIO=rt)
     signal(SIGTERM, onQuitSignal);
     signal(SIGINT, onQuitSignal);
     std::string ext = home;
@@ -2434,6 +2433,7 @@ extern "C" __attribute__((visibility("default"))) void port_linux_main(const cha
         if (a.sessionRunning) {
             renderFrame(a);
         }
+        port_thread_prio_tick();
     }
     port_log("exiting");
 #ifdef __ANDROID__
