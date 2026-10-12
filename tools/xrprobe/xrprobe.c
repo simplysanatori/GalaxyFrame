@@ -1,3 +1,4 @@
+// Copyright (C) 2026 Moonlight XR Native and GalaxyQuest Steam Frame contributors. GPLv3, see LICENSE.
 // xrprobe: OpenXR + Vulkan probe for SteamVR pacing and frame synthesis on the
 // Steam Frame (lane P of GalaxyQuest frame.3). Forked from the Moonlight XR
 // Native M0 hello program, which is proven on this headset.

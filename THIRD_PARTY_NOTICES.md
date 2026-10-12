@@ -163,6 +163,15 @@ None of them is included in the release tarball.
 (https://github.com/encounter/nod) to extract your disc. It is used under
 its own license and is not part of this repository or its releases.
 
+## xrprobe (GPLv3)
+
+`tools/xrprobe/` is a standalone OpenXR test program for the Steam Frame,
+derived from the hello program of Moonlight XR Native
+(https://github.com/simplysanatori/moonlight-xr-native). Unlike the rest of
+this repository it is licensed under the GNU General Public License v3: see
+[tools/xrprobe/LICENSE](tools/xrprobe/LICENSE). It is not linked into the
+game and is not part of the release tarball.
+
 ## Apache License 2.0
 
 ```
