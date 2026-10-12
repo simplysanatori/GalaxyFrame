@@ -92,6 +92,10 @@ void logChain(const VkDeviceCreateInfo* info) {
         {"vkQueueSubmit", (const void*)vkQueueSubmit},
         {"vkCmdBeginRenderingKHR", (const void*)vkCmdBeginRenderingKHR},
         {"vkCmdEndRenderingKHR", (const void*)vkCmdEndRenderingKHR},
+        // The core names (not ours to call with an instance of Vulkan 1.2;
+        // a layer may hook them and not the KHR ones, or the other way round).
+        {"vkCmdBeginRendering", (const void*)vkGetDeviceProcAddr(sDev.device, "vkCmdBeginRendering")},
+        {"vkCmdEndRendering", (const void*)vkGetDeviceProcAddr(sDev.device, "vkCmdEndRendering")},
         {"vkCreateImage", (const void*)vkCreateImage},
         {"vkCreateGraphicsPipelines", (const void*)vkCreateGraphicsPipelines},
         {"vkCreateImageView", (const void*)vkCreateImageView},

@@ -423,7 +423,7 @@ struct VkImpl {
     // Statistics for the log.
     struct Stats {
         int renders = 0, passes = 0, breaks = 0, maxBreaks = 0, copies = 0, skipped = 0;
-        double gpuMs = 0.0, gpuMaxMs = 0.0;
+        double gpuMs = 0.0, gpuMaxMs = 0.0, cpuMs = 0.0, cpuMaxMs = 0.0;
         int gpuCount = 0;
     } st;
     int curPasses = 0, curCopies = 0;
@@ -1292,6 +1292,7 @@ void VkImpl::doCopy(const Item& it, Target& src, VulkanRenderer& r, bool vr, siz
 }
 
 void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMode, VulkanRenderer& r) {
+    int64_t cpuStart = port_host_time_ns();
     VkPrepared& P = *cur;
     const std::vector<Item>& items = P.items;
     const std::vector<std::shared_ptr<TexImage>>& textures = P.frame->textures;
@@ -1649,6 +1650,9 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
     efbTarget = hudTarget = nullptr;
 
     int breaks = curPasses > 1 ? curPasses - 1 : 0;
+    double cpuMs = (port_host_time_ns() - cpuStart) / 1e6;
+    st.cpuMs += cpuMs;
+    st.cpuMaxMs = cpuMs > st.cpuMaxMs ? cpuMs : st.cpuMaxMs;
     st.renders++;
     st.passes += curPasses;
     st.breaks += breaks;
@@ -1657,9 +1661,9 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
     st.skipped += skipped;
     static const bool perRender = debugEnv("PETARI_VKSTATS") != nullptr;
     if (perRender) {
-        port_log("vk: render %d of frame %llu (%s): %d rendering instances (%d breaks), %d copy passes, %d batches skipped", serial,
+        port_log("vk: render %d of frame %llu (%s): %d rendering instances (%d breaks), %d copy passes, %d batches skipped, CPU %.2f ms", serial,
                  (unsigned long long)P.number, !eye ? "flat" : eye->flatStereo ? "stereo" : eye->index ? "right eye" : "left eye", curPasses, breaks,
-                 curCopies, skipped);
+                 curCopies, skipped, cpuMs);
     }
     if (rendersInCmd >= kAutoSubmitRenders) {
         submit();  // a presentation that never submits must not grow one command buffer forever
@@ -1673,10 +1677,10 @@ void VkImpl::logStats(bool force) {
     double secs = (now - lastLogNs) / 1e9;
     lastLogNs = now;
     if (st.renders) {
-        port_log("vk: %d renders in %.0f s: GPU %.2f ms avg %.2f max a render (%d timed); rendering instances %.1f a render (breaks %.1f avg, %d max), "
-                 "%.1f copy passes; %d batches waited for pipelines; %zu images",
-                 st.renders, secs, st.gpuCount ? st.gpuMs / st.gpuCount : 0.0, st.gpuMaxMs, st.gpuCount, st.passes / (double)st.renders,
-                 st.breaks / (double)st.renders, st.maxBreaks, st.copies / (double)st.renders, st.skipped, sImages.live());
+        port_log("vk: %d renders in %.0f s: GPU %.2f ms avg %.2f max a render (%d timed), CPU %.2f ms avg %.2f max; rendering instances %.1f a render "
+                 "(breaks %.1f avg, %d max), %.1f copy passes; %d batches waited for pipelines; %zu images",
+                 st.renders, secs, st.gpuCount ? st.gpuMs / st.gpuCount : 0.0, st.gpuMaxMs, st.gpuCount, st.cpuMs / st.renders, st.cpuMaxMs,
+                 st.passes / (double)st.renders, st.breaks / (double)st.renders, st.maxBreaks, st.copies / (double)st.renders, st.skipped, sImages.live());
     }
     st = Stats();
     if (force || now - lastMemLogNs >= 30000000000ll) {
@@ -1866,6 +1870,7 @@ void VulkanRenderer::finish() {
     // (headless: after its timed replays, as the GLES timer query).
     static const bool stats = debugEnv("PETARI_VKSTATS") != nullptr;
     if (stats) {
+        sImpl->pipes.logStats("so far");
         const VkImpl::Coverage& c = sImpl->cov;
         port_log("vk: paths so far: %ld Z copies, %ld masked clears, %ld attachment clears, %ld XFB blits, %ld depth snapshots, %ld HUD target switches, "
                  "%ld line batches, %ld point batches, %ld empty viewports",
