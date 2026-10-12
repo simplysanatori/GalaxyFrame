@@ -63,7 +63,7 @@ const char* kPushBlockVk = R"(
 layout(push_constant, std430) uniform PushBlock {
     uint u_firstOrdinal;
     int u_copyMode;
-    uint u_pad0;
+    uint u_pixBase;
     uint u_pad1;
     vec4 u_copyRect;
 };
@@ -81,6 +81,13 @@ enum {
 };
 
 }  // namespace
+
+bool vkLegacy() {
+    static const bool legacy = debugEnv("PETARI_VKLEGACY") && strcmp(debugEnv("PETARI_VKLEGACY"), "0") != 0;
+    return legacy;
+}
+
+bool vkPixelStatePushed() { return !vkLegacy(); }
 
 ShaderUid makeShaderUid(const uint32_t* bp, const uint32_t* xf, uint32_t vtxFlags, bool hud) {
     ShaderUid u;
@@ -156,10 +163,11 @@ std::string genVertexShader(const ShaderUid& u, Dialect dialect) {
     // Vulkan: gl_VertexIndex is the index read from the index buffer (the
     // draw's vertexOffset is 0 and the batch's vertex buffer is bound at its
     // first word), as gl_VertexID is for glDrawElements.
+    const bool pixPush = vk && vkPixelStatePushed();
     if (vk) {
         o.w("layout(std430, set = 0, binding = 3) readonly buffer VtxRecBuf { uint vtxRec[]; };\n");
         o.s += kPushBlockVk;
-        o.w("layout(location = %d) flat out uint v_pix;\n", (int)kLocPix);
+        if (!pixPush) o.w("layout(location = %d) flat out uint v_pix;\n", (int)kLocPix);
         o.w("layout(location = %d) out vec4 v_clr0;\nlayout(location = %d) out vec4 v_clr1;\n", (int)kLocClr0, (int)kLocClr1);
         for (uint32_t i = 0; i < u.numTexGens; i++) o.w("layout(location = %u) out vec3 v_tex%u;\n", (unsigned)kLocTex + i, i);
         o.w("layout(location = %d) out float v_viewz;\nlayout(location = %d) out float v_gxz;\n", (int)kLocViewZ, (int)kLocGxZ);
@@ -181,7 +189,7 @@ std::string genVertexShader(const ShaderUid& u, Dialect dialect) {
     o.w("void main() {\n");
     o.w("  uint rb = vtxRec[u_firstOrdinal + uint(%s)] * %uu;\n", vk ? "gl_VertexIndex" : "gl_VertexID", (unsigned)kRecWords);
     o.w("  uint lbase = recs[rb + %uu];\n  uint pjbase = recs[rb + %uu];\n", (unsigned)kRecLights, (unsigned)kRecProj);
-    o.w("  v_pix = recs[rb + %uu];\n", (unsigned)kRecPixel);
+    if (!pixPush) o.w("  v_pix = recs[rb + %uu];\n", (unsigned)kRecPixel);
     o.w("  uint mA = recs[rb + %uu];\n  uint mB = recs[rb + %uu];\n", (unsigned)kRecMtxIdxA, (unsigned)kRecMtxIdxB);
     o.w("  vec4 proj[4] = vec4[4](st[pjbase], st[pjbase + 1u], st[pjbase + 2u], st[pjbase + 3u]);\n");
     o.w("  vec4 depthParams = st[pjbase + 4u];\n");
@@ -499,7 +507,14 @@ std::string genFragmentShader(const ShaderUid& u, Dialect dialect) {
         for (int i = 0; i < 8; i++) {
             o.w("layout(set = 1, binding = %d) uniform sampler2D s_tex%d;\n", i, i);
         }
-        o.w("layout(location = %d) flat in uint v_pix;\n", (int)kLocPix);
+        // The pixel state comes from the draw's push constant: one value
+        // for the whole draw, which the compiler can load once for it (a
+        // flat varying is a per-fragment load from varying addresses).
+        if (vkPixelStatePushed()) {
+            o.s += kPushBlockVk;
+        } else {
+            o.w("layout(location = %d) flat in uint v_pix;\n", (int)kLocPix);
+        }
         o.w("layout(location = %d) in vec4 v_clr0;\nlayout(location = %d) in vec4 v_clr1;\n", (int)kLocClr0, (int)kLocClr1);
         for (uint32_t i = 0; i < u.numTexGens; i++) o.w("layout(location = %u) in vec3 v_tex%u;\n", (unsigned)kLocTex + i, i);
         o.w("layout(location = %d) in float v_viewz;\nlayout(location = %d) in float v_gxz;\nlayout(location = 0) out vec4 o_color;\n", (int)kLocViewZ, (int)kLocGxZ);
@@ -541,12 +556,13 @@ std::string genFragmentShader(const ShaderUid& u, Dialect dialect) {
     o.w("    if (cut > (kBayer[q.y * 4 + q.x] + 0.5) / 16.0) discard;\n");
     o.w("  }\n");
     }
-    o.w("  vec4 tevReg[4] = vec4[4](st[v_pix], st[v_pix + 1u], st[v_pix + 2u], st[v_pix + 3u]);\n");
-    o.w("  ivec4 konst[4];\n  for (int i = 0; i < 4; i++) konst[i] = ivec4(round(st[v_pix + 4u + uint(i)] * 255.0));\n");
-    o.w("  vec4 alphaRef = st[v_pix + 8u];\n  vec4 fogColor = st[v_pix + 9u];\n  vec4 fogParams = st[v_pix + 10u];\n");
-    o.w("  vec4 fogRange = st[v_pix + 11u];\n");
-    o.w("  vec4 texSize[8];\n  for (int i = 0; i < 8; i++) texSize[i] = st[v_pix + 12u + uint(i)];\n");
-    o.w("  vec4 indMtx[6];\n  for (int i = 0; i < 6; i++) indMtx[i] = st[v_pix + 20u + uint(i)];\n");
+    const char* pix = vk && vkPixelStatePushed() ? "u_pixBase" : "v_pix";
+    o.w("  vec4 tevReg[4] = vec4[4](st[%s], st[%s + 1u], st[%s + 2u], st[%s + 3u]);\n", pix, pix, pix, pix);
+    o.w("  ivec4 konst[4];\n  for (int i = 0; i < 4; i++) konst[i] = ivec4(round(st[%s + 4u + uint(i)] * 255.0));\n", pix);
+    o.w("  vec4 alphaRef = st[%s + 8u];\n  vec4 fogColor = st[%s + 9u];\n  vec4 fogParams = st[%s + 10u];\n", pix, pix, pix);
+    o.w("  vec4 fogRange = st[%s + 11u];\n", pix);
+    o.w("  vec4 texSize[8];\n  for (int i = 0; i < 8; i++) texSize[i] = st[%s + 12u + uint(i)];\n", pix);
+    o.w("  vec4 indMtx[6];\n  for (int i = 0; i < 6; i++) indMtx[i] = st[%s + 20u + uint(i)];\n", pix);
     o.w("  ivec4 prev = ivec4(round(tevReg[0] * 255.0));\n  ivec4 c0 = ivec4(round(tevReg[1] * 255.0));\n");
     o.w("  ivec4 c1 = ivec4(round(tevReg[2] * 255.0));\n  ivec4 c2 = ivec4(round(tevReg[3] * 255.0));\n");
     o.w("  ivec4 tex = ivec4(0);\n  ivec4 ras = ivec4(0);\n  ivec3 kc = ivec3(0);\n  int ka = 0;\n");

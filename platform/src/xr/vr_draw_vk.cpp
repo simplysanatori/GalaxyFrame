@@ -582,6 +582,9 @@ public:
         mTimerSlot = -1;
     }
 
+    void profileMark(const char* label) override { profMark(label); }
+    void profileReport(const char* why, int per) override { profReport(why, per); }
+
     uint32_t timerPoll(uint32_t pending, float* ms, uint32_t* done) override {
         *done = 0;
         uint32_t valid = 0;

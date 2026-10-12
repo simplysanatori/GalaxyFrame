@@ -1500,6 +1500,7 @@ Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int
         }
         sSnapTaken[eye] = sMotionOn && r.snapshotTaken();
 
+        draw.profileMark("composite");
         // The composite covers the whole image: no need to load its old
         // contents into the tiles.
         draw.beginTarget(dst, used.width, used.height, true);
@@ -1550,6 +1551,7 @@ Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int
         comp.wipeColor[2] = lin(wipeRgb & 255);
         comp.wipeColor[3] = (float)used.width / (float)used.height;
         draw.composite(comp);
+        draw.profileMark("panels");
         if (!sUiLayers) {
             drawPanel(sHud, viewProj * panelModel(kHudCenter, kHudWidth, (float)sHud.width / sHud.height), false);
         }
@@ -1621,6 +1623,7 @@ Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int
         drawSkipIndicator(frame, viewProj);
     }
     draw.endTarget();
+    draw.profileMark("eye.end");
     endEyeTimer();
     sRenderNs += port_host_time_ns() - eyeStartNs;
     if (eye == 1) {

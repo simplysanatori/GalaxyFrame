@@ -209,8 +209,49 @@ bool createSubmission() {
     return true;
 }
 
+// Profile marks (profMark), per command buffer slot.
+const uint32_t kMaxMarks = 2048;
+struct ProfSlot {
+    VkQueryPool pool = VK_NULL_HANDLE;
+    uint32_t n = 0;
+    const char* labels[kMaxMarks];
+};
+ProfSlot sProf[kFramesInFlight];
+struct ProfAcc {
+    const char* label;
+    double ms;
+    int n;
+};
+std::vector<ProfAcc> sProfAcc;
+int sProfOn = -1;
+
+void readProf(int slot) {
+    ProfSlot& p = sProf[slot];
+    if (!p.pool || !p.n) return;
+    std::vector<uint64_t> ticks(p.n);
+    if (vkGetQueryPoolResults(sDev.device, p.pool, 0, p.n, ticks.size() * 8, ticks.data(), 8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+        for (uint32_t i = 0; i + 1 < p.n; i++) {
+            if (!p.labels[i] || ticks[i + 1] < ticks[i]) continue;
+            double ms = (double)(ticks[i + 1] - ticks[i]) * sTickMs;
+            ProfAcc* a = nullptr;
+            for (ProfAcc& x : sProfAcc) {
+                if (x.label == p.labels[i] || !strcmp(x.label, p.labels[i])) a = &x;
+            }
+            if (!a) {
+                sProfAcc.push_back(ProfAcc{p.labels[i], 0.0, 0});
+                a = &sProfAcc.back();
+            }
+            a->ms += ms;
+            a->n++;
+        }
+    }
+    vkResetQueryPool(sDev.device, p.pool, 0, kMaxMarks);
+    p.n = 0;
+}
+
 // Results of the timers of a slot whose submission finished.
 void readTimers(Slot& s) {
+    if (sProfOn > 0) readProf((int)(&s - sSlots));
     if (!sTimersOk || !s.queries || s.timerOpen) return;
     if (s.timers && s.queriesReset) {
         uint64_t ticks[kMaxTimers * 2];
@@ -786,6 +827,7 @@ uint64_t submit(const SubmitExtra* extra) {
     if (s.timerOpen) {
         endTimer(s.tags[s.timers]);
     }
+    if (sProfOn > 0 && sProf[sOpen].n) profMark(nullptr);  // closes the last mark's span
     vkEndCommandBuffer(s.cmd);
     uint64_t value = sNextValue;
     uint32_t waitCount = extra ? extra->waitCount : 0;
@@ -848,6 +890,7 @@ void finishAll() {
     collectFinished();
     for (int i = 0; i < kFramesInFlight; i++) {
         if (i != sOpen && sSlots[i].timers) readTimers(sSlots[i]);
+        else if (i != sOpen && sProfOn > 0) readProf(i);
     }
 }
 
@@ -918,6 +961,55 @@ void endTimer(int tag) {
     vkCmdWriteTimestamp(s.cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.queries, s.timers * 2 + 1);
     s.timers++;
     s.timerOpen = false;
+}
+
+bool profEnabled() {
+    if (sProfOn < 0) sProfOn = debugEnv("PETARI_VKPROF") && sTimersOk ? 1 : 0;
+    return sProfOn > 0;
+}
+
+int profMark(const char* label) {
+    if (!profEnabled()) return -1;
+    VkCommandBuffer cmd = commandBuffer();
+    ProfSlot& p = sProf[sOpen];
+    if (!p.pool) {
+        VkQueryPoolCreateInfo qci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+        qci.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        qci.queryCount = kMaxMarks;
+        if (vkCreateQueryPool(sDev.device, &qci, nullptr, &p.pool) != VK_SUCCESS) {
+            sProfOn = 0;
+            return -1;
+        }
+        vkResetQueryPool(sDev.device, p.pool, 0, kMaxMarks);
+    }
+    if (p.n >= kMaxMarks) return -1;
+    if (p.n == kMaxMarks - 1) label = nullptr;  // the last one closes
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, p.pool, p.n);
+    p.labels[p.n] = label;
+    return (int)p.n++;
+}
+
+void profRelabel(int mark, const char* label) {
+    if (sProfOn <= 0 || sOpen < 0 || mark < 0 || (uint32_t)mark >= sProf[sOpen].n || !sProf[sOpen].labels[mark]) return;
+    sProf[sOpen].labels[mark] = label;
+}
+
+void profReport(const char* why, int per) {
+    if (!profEnabled() || sProfAcc.empty()) return;
+    if (!why) {
+        sProfAcc.clear();  // not wanted
+        return;
+    }
+    std::string line;
+    double total = 0.0;
+    char buf[160];
+    for (const ProfAcc& a : sProfAcc) {
+        total += a.ms;
+        snprintf(buf, sizeof(buf), " %s %.3f/%d", a.label, a.ms / (per > 0 ? per : 1), a.n);
+        line += buf;
+    }
+    port_log("vkprof: %s: %.3f ms per %d:%s", why, total / (per > 0 ? per : 1), per, line.c_str());
+    sProfAcc.clear();
 }
 
 void setName(VkObjectType type, uint64_t handle, const char* name) {

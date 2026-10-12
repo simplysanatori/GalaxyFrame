@@ -434,18 +434,42 @@ static unsigned long long renderShots(std::shared_ptr<const gpu::Frame> frame, c
                             port_log("headless: foveation unsupported");
                         }
                     }
-                    r.render(tm->t, &ev, nullptr, gpu::HudMode::Skip);
-                    r.finish();
+                    // PETARI_VRWARM=ms (default 0): renders first until that
+                    // long has passed, so the GPU clock has ramped up (the
+                    // governor looks every 50 ms); PETARI_VRREPS=n timed
+                    // renders (default 4); PETARI_VRPAIR=1 alternates the
+                    // left and right eye (their own EFB copies) as the
+                    // headset's sets do.
+                    static const int warmMs = gpu::debugEnv("PETARI_VRWARM") ? atoi(gpu::debugEnv("PETARI_VRWARM")) : 0;
+                    static const int reps = gpu::debugEnv("PETARI_VRREPS") ? atoi(gpu::debugEnv("PETARI_VRREPS")) : 4;
+                    static const bool pair = gpu::debugEnv("PETARI_VRPAIR") != nullptr;
+                    timespec tw;
+                    clock_gettime(CLOCK_MONOTONIC, &tw);
+                    do {
+                        for (int i = 0; i < (warmMs ? 4 : 1); i++) {
+                            ev.index = pair ? i & 1 : 0;
+                            r.render(tm->t, &ev, nullptr, gpu::HudMode::Skip);
+                        }
+                        r.finish();
+                    } while (msSince(tw) < warmMs);
+                    auto gpuClk = [] {
+                        long clk = 0;
+                        if (FILE* g = fopen("/sys/class/devfreq/3d00000.gpu/cur_freq", "r")) {
+                            if (fscanf(g, "%ld", &clk) != 1) clk = 0;
+                            fclose(g);
+                        }
+                        return clk / 1000000;
+                    };
+                    long clk0 = gpuClk();
                     timespec ta;
                     clock_gettime(CLOCK_MONOTONIC, &ta);
-                    for (int i = 0; i < 4; i++) r.render(tm->t, &ev, nullptr, gpu::HudMode::Skip);
-                    r.finish();
-                    long clk = 0;
-                    if (FILE* g = fopen("/sys/class/kgsl/kgsl-3d0/gpuclk", "r")) {
-                        if (fscanf(g, "%ld", &clk) != 1) clk = 0;
-                        fclose(g);
+                    for (int i = 0; i < reps; i++) {
+                        ev.index = pair ? i & 1 : 0;
+                        r.render(tm->t, &ev, nullptr, gpu::HudMode::Skip);
                     }
-                    port_log("headless: VR eye %dx%d foveation %.1f replay %.2f ms (GPU %ld MHz)", ew, eh, gain, msSince(ta) / 4.0, clk / 1000000);
+                    r.finish();
+                    ev.index = 0;
+                    port_log("headless: VR eye %dx%d foveation %.1f replay %.2f ms (GPU %ld-%ld MHz)", ew, eh, gain, msSince(ta) / reps, clk0, gpuClk());
                 }
             }
         }
