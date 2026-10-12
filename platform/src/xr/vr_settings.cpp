@@ -596,6 +596,21 @@ void save() {
             }
         }
     }
+    // The vignette's two values go together, with the marker of their scale
+    // (see vr::loadSettings).
+    bool vignette = false;
+    for (const auto& l : lines) vignette |= l.first == "vignette_slow" || l.first == "vignette_fast";
+    if (vignette) {
+        for (const char* key : {"vignette_slow", "vignette_fast"}) {
+            bool have = false;
+            for (const auto& l : lines) have |= l.first == key;
+            if (!have) {
+                snprintf(text, sizeof(text), "%g", vr::findSetting(key)->get());
+                lines.emplace_back(key, text);
+            }
+        }
+        lines.emplace_back("vignette_scale", "2");
+    }
     writeSettingsLater(lines);
 }
 
