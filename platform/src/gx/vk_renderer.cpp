@@ -418,7 +418,7 @@ struct VkImpl {
     bool dumpingCopies = false;
     u64 copyDumpFrame = ~0ull;
     u32 rendersInCmd = 0;
-    VkCommandBuffer lastCmd = VK_NULL_HANDLE;
+    uint64_t lastCmdValue = 0;  // timeline value of the command buffer rendersInCmd counts in
 
     // Statistics for the log.
     struct Stats {
@@ -427,6 +427,13 @@ struct VkImpl {
         int gpuCount = 0;
     } st;
     int curPasses = 0, curCopies = 0;
+    // Which paths the renders took, since start (PETARI_VKSTATS, at finish).
+    struct Coverage {
+        long zCopies = 0, maskedClears = 0, attachmentClears = 0, xfbBlits = 0, snapshots = 0, lineBatches = 0, pointBatches = 0, emptyViewports = 0,
+             hudSwitches = 0;
+    } cov;
+    double finishGpuMs = 0.0;  // renders timed since the last finish() (PETARI_GPUTIME)
+    int finishGpuCount = 0;
     int64_t lastLogNs = 0, lastMemLogNs = 0;
     u64 renderSerial = 0;
 
@@ -459,12 +466,23 @@ namespace {
 
 VkImpl* sImpl;
 
+// The GPU times of the last renders, for vk::renderGpuMs.
+struct TimedRender {
+    int serial = 0;
+    double ms = 0.0;
+};
+TimedRender sTimed[64];
+int sLastSerial = 0;
+
 void onTimer(int tag, double ms) {
+    sTimed[tag & 63] = TimedRender{tag, ms};
     if (!sImpl) return;
     VkImpl::Stats& s = sImpl->st;
     s.gpuMs += ms;
     s.gpuMaxMs = ms > s.gpuMaxMs ? ms : s.gpuMaxMs;
     s.gpuCount++;
+    sImpl->finishGpuMs += ms;
+    sImpl->finishGpuCount++;
     static const bool perRender = debugEnv("PETARI_VKSTATS") != nullptr;
     if (perRender) port_log("vk: render %d GPU %.3f ms", tag, ms);
 }
@@ -1144,6 +1162,7 @@ void VkImpl::doCopy(const Item& it, Target& src, VulkanRenderer& r, bool vr, siz
                 bar.use(dst, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, kStageSample, kAccessSample);
                 bar.flush();
                 r.mXfbTex = xfb.handle;
+                cov.xfbBlits++;
                 r.mXfbWidth = dw;
                 r.mXfbHeight = dh;
             }
@@ -1153,6 +1172,7 @@ void VkImpl::doCopy(const Item& it, Target& src, VulkanRenderer& r, bool vr, siz
             if (dstTex.handle) {
                 Img& dst = sImages[dstTex.handle];
                 bool z = op.mode == 11;
+                cov.zCopies += z;
                 bar.use(color, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, kStageSample, kAccessSample);
                 if (z) bar.use(sImages[src.depth], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, kStageSample, kAccessSample);
                 // The copy covers it.
@@ -1230,8 +1250,12 @@ void VkImpl::doCopy(const Item& it, Target& src, VulkanRenderer& r, bool vr, siz
         if ((color || op.zUpd) && x1 > x0 && y1 > y0) {
             ensurePass(src, index + 1);
             VkCommandBuffer cmd = commandBuffer();
-            if (color && op.colorUpd != op.alphaUpd) {
+            // PETARI_VKMASKEDCLEAR=1: every clear as the draw a partial color
+            // mask needs (tests that path against vkCmdClearAttachments).
+            static const bool sForceDraw = debugEnv("PETARI_VKMASKEDCLEAR") != nullptr;
+            if ((color && op.colorUpd != op.alphaUpd) || sForceDraw) {
                 maskedClear(src, op, x0, y0, x1, y1);
+                cov.maskedClears++;
             } else {
                 VkClearAttachment ca[2];
                 u32 n = 0;
@@ -1249,6 +1273,7 @@ void VkImpl::doCopy(const Item& it, Target& src, VulkanRenderer& r, bool vr, siz
                 }
                 VkClearRect rect{{{x0, y0}, {(u32)(x1 - x0), (u32)(y1 - y0)}}, 0, 1};
                 vkCmdClearAttachments(cmd, n, ca, 1, &rect);
+                cov.attachmentClears++;
             }
         }
     }
@@ -1300,12 +1325,13 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
     }
 
     VkCommandBuffer cmd = commandBuffer();
-    if (cmd != lastCmd) {
-        lastCmd = cmd;
+    if (pendingValue() != lastCmdValue) {
+        lastCmdValue = pendingValue();  // a new command buffer
         rendersInCmd = 0;
     }
     rendersInCmd++;
     int serial = (int)(++renderSerial & 0x7FFFFFFF);
+    sLastSerial = serial;
     beginTimer(serial);
     ds.forget();
     curPasses = curCopies = 0;
@@ -1353,6 +1379,12 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         }
     }
 
+    struct UnitMemo {
+        u32 tr, mode0, mode1;
+        VkImageView view;
+        VkSampler samp;
+    } memo[kVkNumSamplers];
+    for (UnitMemo& m : memo) m.tr = ~0u;
     FrameData& fd = *P.data;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes.layout, kVkSetBuffers, 1, &fd.set, 1, &eyeOffset);
     vkCmdBindIndexBuffer(cmd, fd.buf.buffer, fd.off[kIndices], VK_INDEX_TYPE_UINT32);
@@ -1372,6 +1404,7 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         if (it.type == IT_MARKER) {
             if (it.marker == MARK_SCENE_DEPTH && tagPlayer && curT == &efb) {
                 snapshot(efb, *eye->depthSnapshot, idx);
+                cov.snapshots++;
                 ds.forget();
                 snapshotTaken = true;
                 continue;
@@ -1383,6 +1416,7 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
             if (hudMode == HudMode::Target) {
                 endPass();
                 curT = inHudSection ? hud : &efb;
+                cov.hudSwitches++;
             }
             continue;
         }
@@ -1394,6 +1428,7 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
             if (noCopies && !((it.copy[9] >> 14) & 1)) continue;
             doCopy(it, *curT, r, eye != nullptr, idx);
             ds.forget();
+            for (UnitMemo& m : memo) m.tr = ~0u;
             continue;
         }
         if (!it.program || !it.idxCount) {
@@ -1416,8 +1451,11 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
             hudDraws++;
         }
         if (rect.vp[2] <= 0 || rect.vp[3] <= 0) {
+            cov.emptyViewports++;
             continue;  // an empty viewport draws nothing (Vulkan does not take one)
         }
+        cov.lineBatches += it.prim == Prim::Lines;
+        cov.pointBatches += it.prim == Prim::Points;
         ensurePass(t, idx);
         setFixedState(cmd);
         if (ds.pipe != pipe) {
@@ -1519,6 +1557,9 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         }
 
         // Textures: units the program samples, the rest a black dummy.
+        // Consecutive batches mostly bind the same: each unit remembers what
+        // its last lookup found (cleared by copies, which can replace a copy
+        // texture).
         VkImageView views[kVkNumSamplers];
         VkSampler samps[kVkNumSamplers];
         bool texChanged = false;
@@ -1527,16 +1568,23 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
             VkSampler s = copyColorSampler;
             u32 tr = it.tex[u];
             if ((it.texMask & (1u << u)) && tr != ~0u) {
-                if (tr & 0x80000000u) {
-                    auto cit = copies.find(copyKey(copySlot, (tr & 0x7FFFFFFF) << 5));
-                    if (cit != copies.end() && cit->second.handle) v = sImages[cit->second.handle].view;
-                    s = sampler(it.texMode0[u], it.texMode1[u], 1);
-                } else if (tr < textures.size()) {
-                    TexHandle th = textures[tr]->gpuTex;
-                    if (th && sImages.valid(th)) {
-                        v = sImages[th].view;
+                UnitMemo& m = memo[u];
+                if (m.tr == tr && m.mode0 == it.texMode0[u] && m.mode1 == it.texMode1[u]) {
+                    v = m.view;
+                    s = m.samp;
+                } else {
+                    if (tr & 0x80000000u) {
+                        auto cit = copies.find(copyKey(copySlot, (tr & 0x7FFFFFFF) << 5));
+                        if (cit != copies.end() && cit->second.handle) v = sImages[cit->second.handle].view;
+                        s = sampler(it.texMode0[u], it.texMode1[u], 1);
+                    } else if (tr < textures.size()) {
+                        TexHandle th = textures[tr]->gpuTex;
+                        if (th && sImages.valid(th)) {
+                            v = sImages[th].view;
+                        }
+                        s = sampler(it.texMode0[u], it.texMode1[u], textures[tr]->levels);
                     }
-                    s = sampler(it.texMode0[u], it.texMode1[u], textures[tr]->levels);
+                    m = UnitMemo{tr, it.texMode0[u], it.texMode1[u], v, s};
                 }
             }
             views[u] = v;
@@ -1636,6 +1684,13 @@ namespace {
 
 bool VulkanRenderer::init() {
     if (!sImpl) {
+        // The device the XR presentation made through the runtime
+        // (vk::adoptDevice), else one of our own (headless).
+        if (!deviceReady() && !createStandalone()) {
+            port_log("vk: no Vulkan device; nothing will be drawn");
+            return false;
+        }
+        checkReservedWindow("device ready");
         sImpl = new VkImpl();
         if (!sImpl->init()) {
             port_log("vk: the renderer could not be set up");
@@ -1646,6 +1701,10 @@ bool VulkanRenderer::init() {
 
 Target VulkanRenderer::createTarget(int width, int height) {
     Target t;
+    if (!deviceReady()) {
+        port_log("vk: createTarget before the device exists (init first)");
+        return t;
+    }
     t.width = width;
     t.height = height;
     t.color = newImage((u32)width, (u32)height, 1, kColorFormat,
@@ -1665,6 +1724,10 @@ Target VulkanRenderer::createTarget(int width, int height) {
 
 Target VulkanRenderer::createDepthTarget(int width, int height) {
     Target t;
+    if (!deviceReady()) {
+        port_log("vk: createDepthTarget before the device exists (init first)");
+        return t;
+    }
     t.width = width;
     t.height = height;
     t.depth = newImage((u32)width, (u32)height, 1, kDepthFormat,
@@ -1679,8 +1742,10 @@ Target VulkanRenderer::createDepthTarget(int width, int height) {
 }
 
 void VulkanRenderer::destroyTarget(Target& t) {
-    destroyImageLater(t.color);
-    destroyImageLater(t.depth);
+    if (deviceReady()) {
+        destroyImageLater(t.color);
+        destroyImageLater(t.depth);
+    }
     t = Target();
 }
 
@@ -1694,13 +1759,21 @@ void VulkanRenderer::setFrame(std::shared_ptr<const Frame> frame) {
     if (im.cur && im.cur->number == frame->number) {
         return;
     }
-    std::unique_ptr<VkPrepared> p = im.spare ? std::move(im.spare) : std::unique_ptr<VkPrepared>(new VkPrepared());
+    std::unique_ptr<VkPrepared> p;
+    {
+        std::lock_guard<std::mutex> lock(im.workLock);  // the worker recycles spare too
+        p = im.spare ? std::move(im.spare) : std::unique_ptr<VkPrepared>(new VkPrepared());
+    }
     im.syncBuilder.build(std::move(frame), *p);
     im.prepareGpu(*p, !im.async.load(), true);
     im.drainPendingUploads();
-    if (im.cur) im.releaseFrameData(*im.cur, pendingValue());
-    im.spare = std::move(im.cur);
+    std::unique_ptr<VkPrepared> old = std::move(im.cur);
     im.cur = std::move(p);
+    if (old) {
+        im.releaseFrameData(*old, pendingValue());
+        std::lock_guard<std::mutex> lock(im.workLock);
+        im.spare = std::move(old);
+    }
     im.evictCopies();
     im.pipes.poll();
 }
@@ -1760,7 +1833,7 @@ const CameraInfo& VulkanRenderer::camera() const {
 }
 
 void VulkanRenderer::render(Target& efb, const EyeView* eye, Target* hud, HudMode hudMode) {
-    if (!hasFrame()) {
+    if (!hasFrame() || !sImpl->ready) {
         if (sImpl) {
             sImpl->snapshotTaken = false;
             sImpl->hudDraws = 0;
@@ -1777,6 +1850,22 @@ void VulkanRenderer::finish() {
     if (!sImpl || !sImpl->ready) return;
     finishAll();
     sImpl->pipes.poll();
+    // PETARI_GPUTIME=1: the GPU time of the renders this finish waited for
+    // (headless: after its timed replays, as the GLES timer query).
+    static const bool stats = debugEnv("PETARI_VKSTATS") != nullptr;
+    if (stats) {
+        const VkImpl::Coverage& c = sImpl->cov;
+        port_log("vk: paths so far: %ld Z copies, %ld masked clears, %ld attachment clears, %ld XFB blits, %ld depth snapshots, %ld HUD target switches, "
+                 "%ld line batches, %ld point batches, %ld empty viewports",
+                 c.zCopies, c.maskedClears, c.attachmentClears, c.xfbBlits, c.snapshots, c.hudSwitches, c.lineBatches, c.pointBatches, c.emptyViewports);
+    }
+    static const bool gpuTime = debugEnv("PETARI_GPUTIME") != nullptr;
+    if (gpuTime && sImpl->finishGpuCount) {
+        port_log("headless: replay GPU %.2f ms a render (Vulkan timestamps, %d renders)", sImpl->finishGpuMs / sImpl->finishGpuCount,
+                 sImpl->finishGpuCount);
+    }
+    sImpl->finishGpuMs = 0.0;
+    sImpl->finishGpuCount = 0;
 }
 
 bool VulkanRenderer::readPixels(const Target& t, uint8_t* rgba) {
@@ -1799,6 +1888,8 @@ bool VulkanRenderer::readPixels(const Target& t, uint8_t* rgba) {
     im.bar.use(c, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, kStageSample, kAccessSample);
     im.bar.flush();
     finishAll();
+    im.finishGpuMs = 0.0;  // a readback is not one of the timed replays
+    im.finishGpuCount = 0;
     // Rows as stored: the first is the bottom of the picture (GL order).
     memcpy(rgba, im.readback.ptr, (size_t)bytes);
     return true;
@@ -1806,15 +1897,16 @@ bool VulkanRenderer::readPixels(const Target& t, uint8_t* rgba) {
 
 }  // namespace
 
+// The device itself comes later (VulkanRenderer::init): the XR presentation
+// makes it through the runtime once the session's system is known.
 Renderer* createVulkanRenderer() {
     if (!spirvAvailable()) {
         port_log("vk: %s; no Vulkan renderer", spirvLoadError());
         return nullptr;
     }
-    if (!deviceReady() && !createStandalone()) {
+    if (!deviceReady() && !probeDevice()) {
         return nullptr;
     }
-    checkReservedWindow("device created");
     return new VulkanRenderer();
 }
 
@@ -1877,6 +1969,15 @@ void unregisterImage(uint32_t handle) {
 }
 
 void setKeepDepth(bool keep) { sKeepDepth = keep; }
+
+int lastRenderSerial() { return sLastSerial; }
+
+bool renderGpuMs(int serial, double* ms) {
+    const TimedRender& t = sTimed[serial & 63];
+    if (!serial || t.serial != serial) return false;
+    *ms = t.ms;
+    return true;
+}
 
 }  // namespace vk
 }  // namespace gpu

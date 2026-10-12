@@ -18,10 +18,21 @@
 //   DeviceSetup ds;  fillDeviceSetup(phys, &ds);         // false: the GPU lacks something (logged)
 //   (append the presentation's own device extensions to ds.extensions[] / ds.info if needed)
 //   xrCreateVulkanDeviceKHR(..., vulkanCreateInfo = &ds.info) -> device
-//   adoptDevice(phys, device, ds.queueFamily, 0, false);
-//   ... then gpu::renderer() (PETARI_GFX=vk) uses that device.
-// Without an adopted device (headless), the renderer creates its own
-// (createStandalone()).
+//   adoptDevice(phys, device, ds.queueFamily, 0, false, &ds.info);
+//   ... then gpu::renderer().init() (PETARI_GFX=vk) uses that device.  The
+//   renderer object itself may be made earlier (gpu::renderer().api() picks
+//   the binding): making it only checks the GPU (probeDevice()).
+// Without an adopted device at init() (headless), the renderer creates its
+// own (createStandalone()).
+//
+// SteamVR's OpenXR API layer XR_APILAYER_VALVE_fdm_injection puts the Vulkan
+// layer VK_LAYER_VALVE_fdm_injection into instances made through
+// XR_KHR_vulkan_enable2: it hooks vkCmdBeginRendering, vkCreateGraphicsPipelines
+// and vkCreateImageView and injects a fragment density map (foveation) and a
+// depth copy into render passes whose targets have an XR swapchain's size.
+// adoptDevice() logs which library each key entry point resolves into;
+// DISABLE_VULKAN_FDM_INJECTION_LAYER=1 in the environment keeps the layer out
+// (an A/B switch, nothing else changes).
 #pragma once
 
 #ifndef VK_NO_PROTOTYPES
@@ -243,16 +254,33 @@ struct DeviceSetup {
 };
 bool fillDeviceSetup(VkPhysicalDevice phys, DeviceSetup* s);
 // Takes a device made from such a create info: loads the device functions,
-// gets the queue, creates the submission objects.
-bool adoptDevice(VkPhysicalDevice phys, VkDevice device, uint32_t queueFamily, uint32_t queueIndex, bool owned);
+// gets the queue, creates the submission objects.  `usedInfo`: the create
+// info the device was made with, for the log (layers and extensions in play,
+// and which library each key entry point resolves into).
+bool adoptDevice(VkPhysicalDevice phys, VkDevice device, uint32_t queueFamily, uint32_t queueIndex, bool owned,
+                 const VkDeviceCreateInfo* usedInfo = nullptr);
 // No XR: instance and device of our own (headless).  Logs why on failure.
 bool createStandalone();
 bool deviceReady();
+// Whether the GPU can run the renderer (with a short-lived instance of its
+// own, before any device exists): createVulkanRenderer() asks, so the
+// choice can fall back to GLES before the XR session is made.
+bool probeDevice();
 
 // ---------------------------------------------------------------------------
 // Command buffers and submission.  Only the thread that renders (the XR main
 // thread; headless: the snapshot thread) records and submits: the SteamVR
 // client library submits on the same queue inside the process.
+//
+// A refresh of the XR frame loop on Vulkan:
+//   r.update();                                  // the newest prepared frame
+//   r.render(eye0, ...); r.render(eye1, ...);    // recorded into commandBuffer()
+//   record the composite and UI draws into commandBuffer(), sampling the
+//   targets' color (SHADER_READ_ONLY_OPTIMAL after render(), see below)
+//   uint64_t v = submit(&extra);                 // before xrReleaseSwapchainImage
+//   ... waitValue(v of an earlier refresh) or extra.fence to pace the loop.
+// The renderer submits on its own only after 24 renders without a submit
+// (a safety net) and in finish() / readPixels() (headless).
 // ---------------------------------------------------------------------------
 const int kFramesInFlight = 3;
 
@@ -344,6 +372,12 @@ void unregisterImage(uint32_t handle);
 // or frame synthesis (default: not stored, which saves the tiler the
 // write-back).
 void setKeepDepth(bool keep);
+// GPU time of render() calls (timestamps around each), for the
+// presentation's dynamic resolution: the serial number of the last render()
+// and, once its submission has finished (the renderer reads the results when
+// a command buffer slot comes round again, or at finish), its time in ms.
+int lastRenderSerial();
+bool renderGpuMs(int serial, double* ms);
 
 }  // namespace vk
 }  // namespace gpu

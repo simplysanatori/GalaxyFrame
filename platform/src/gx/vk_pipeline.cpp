@@ -1,6 +1,7 @@
 // Pipelines of the Vulkan renderer (vk_pipeline.h).
 #include "vk_pipeline.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include <thread>
@@ -440,9 +441,11 @@ void Pipelines::onCompiled(const SpirvResult& r) {
 
 void Pipelines::prewarm() {
     std::vector<ShaderUid> uids = mSpirv.uids();
+    mPrewarmStartNs = port_host_time_ns();
     for (const ShaderUid& uid : uids) {
         request(uid, false, -1);
     }
+    mPrewarming = true;
     port_log("vk: creating the %zu pipelines of the SPIR-V cache in the background", uids.size());
 }
 
@@ -461,6 +464,12 @@ void Pipelines::savePipelineCache() {
 void Pipelines::poll() {
     SpirvResult r;
     while (mPool && mPool->poll(&r)) {
+    }
+    if (mPrewarming && mInFlight.load() == 0) {
+        mPrewarming = false;
+        char why[64];
+        snprintf(why, sizeof(why), "background creation done after %.1f s", (port_host_time_ns() - mPrewarmStartNs) / 1e9);
+        logStats(why);
     }
     // pipelines.bin once the compiles have settled (on a thread of its own:
     // the cache can be megabytes).

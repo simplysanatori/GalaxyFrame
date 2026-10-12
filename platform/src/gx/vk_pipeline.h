@@ -77,6 +77,8 @@ private:
     std::atomic<int64_t> mCreateNs{0}, mCreateMaxNs{0}, mSpirvNs{0}, mSpirvMaxNs{0};
     std::atomic<size_t> mSpirvTimed{0};
     std::atomic<size_t> mInFlight{0}, mSavedAt{0};
+    bool mPrewarming = false;  // prewarm() ran and its compiles are not all done (rendering thread)
+    int64_t mPrewarmStartNs = 0;
 };
 
 }  // namespace vk
