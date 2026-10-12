@@ -383,7 +383,12 @@ In the diorama:
   camera pulls back to show the whole planet, which put the viewer inside
   it.
 - Screen wipes (fades, and the ring that closes on Mario) cover the whole
-  view instead of the HUD panel.
+  view instead of the HUD panel.  On the virtual screen and the giant
+  screen the game draws the wipe into the picture, so the view around the
+  screen follows it too (the eye image's clear colour goes to the wipe's
+  colour and opaque), and the panels, laser and skip ring dim with it.  A
+  wipe that closed all the way holds through the blank frames of a loading
+  scene (up to four seconds, until the game draws a wipe again).
 - Water and heat haze sample a capture of the screen where each surface
   lands on it. The renderer recognises those texture coordinates (they
   match the game camera's projection) and uses the eye's screen position
