@@ -1211,6 +1211,9 @@ void notePerformance(float appGpuMs, float compositorGpuMs, float gpuUtilization
 }
 
 float renderScale() { return sScale; }
+int sRecommendedEyeWidth = 0;
+void setRecommendedEyeWidth(int pixels) { sRecommendedEyeWidth = pixels; }
+int recommendedEyeWidth() { return sRecommendedEyeWidth; }
 float screenPictureScale() { return sScreenScale; }
 
 void noteMissedRefreshes(int count) {

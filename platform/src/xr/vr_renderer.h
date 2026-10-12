@@ -248,6 +248,10 @@ void saveSetting(const char* key);
 // pictures (the giant screen's gameplay): 1 is the full picture, and the
 // GPU's load moves it down to three quarters of min_resolution.
 float renderScale();
+// The runtime's recommended eye width in pixels (SteamVR's resolution
+// setting for the app): what render scale 1.00 means.  0 until known.
+void setRecommendedEyeWidth(int pixels);
+int recommendedEyeWidth();
 float screenPictureScale();
 
 // Compositor layers for the panels that carry text (xr_app.cpp submits them

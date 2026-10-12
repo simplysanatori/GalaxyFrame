@@ -319,8 +319,9 @@ it (`GameScene.cpp`), so a scene the words miss counts as *Other scenes*.
 **Display**
 
 - **Resolution** (0.80 by default): the size the eyes are rendered at,
-  1.00 being the Frame's default eye size (SteamVR's recommended size at
-  its own 100 %); "Now" shows what it is. Higher stays
+  1.00 being the eye size SteamVR's resolution setting gives the game (its
+  per-app or global render resolution; 1728 px per eye at SteamVR's 100 % on
+  the Frame), so the panel shows both the value and the pixels; "Now" shows what it is. Higher stays
   sharper, but when the GPU cannot keep up frames come late and the view
   stutters. It is one value for the session: the lowest and the highest
   resolution of the ini file (`min_resolution` and `resolution`) are both
