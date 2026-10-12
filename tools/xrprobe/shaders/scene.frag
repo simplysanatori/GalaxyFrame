@@ -4,6 +4,7 @@
 //   mode 0: 8x8 checkerboard (synth / depth-only cases)
 //   mode 1: frame-number panel: hue background, six seven-segment digits,
 //           and a 16-cell ticker whose lit cell advances one step per frame
+//   mode 2: case label: eight seven-segment cells, masks in aux[1].xyzw, aux[2].xyzw
 #extension GL_GOOGLE_include_directive : require
 #include "common.glsl"
 layout(location = 0) in vec2 vUv;
@@ -21,8 +22,7 @@ const int kSeg[10] = int[](0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F,
 
 bool inBox(vec2 p, vec2 lo, vec2 hi) { return all(greaterThanEqual(p, lo)) && all(lessThanEqual(p, hi)); }
 
-bool digitLit(vec2 p, int d) {
-    int m = kSeg[d];
+bool segLit(vec2 p, int m) {
     float t = 0.07;
     if ((m & 0x01) != 0 && inBox(p, vec2(0.20, 0.06 - t), vec2(0.80, 0.06 + t))) return true; // a
     if ((m & 0x02) != 0 && inBox(p, vec2(0.80 - t, 0.06), vec2(0.80 + t, 0.50))) return true; // b
@@ -37,6 +37,13 @@ bool digitLit(vec2 p, int d) {
 void main() {
     vec4 prm = pc.aux[0];
     int mode = int(prm.x + 0.5);
+    if (mode == 2) {
+        int cell = clamp(int(floor(vUv.x * 8.0)), 0, 7);
+        vec2 p = vec2(fract(vUv.x * 8.0), vUv.y);
+        int m = int((cell < 4 ? pc.aux[1][cell] : pc.aux[2][cell - 4]) + 0.5);
+        outColor = vec4(segLit(p, m) ? vec3(1.0, 0.85, 0.1) : vec3(0.06), 1.0);
+        return;
+    }
     if (mode == 0) {
         ivec2 c = ivec2(floor(vUv * 8.0));
         bool odd = ((c.x + c.y) & 1) != 0;
@@ -57,7 +64,7 @@ void main() {
         uint place = 1u;
         for (int i = 0; i < 5 - cell; i++) place *= 10u;
         int d = int((frame / place) % 10u);
-        if (p.y >= 0.0 && p.y <= 1.0 && digitLit(p, d)) col = vec3(0.0);
+        if (p.y >= 0.0 && p.y <= 1.0 && segLit(p, kSeg[d])) col = vec3(0.0);
     } else if (vUv.y > 0.78 && vUv.y < 0.96) {
         int cell = int(floor(vUv.x * 16.0));
         bool lit = uint(cell) == (frame % 16u);
