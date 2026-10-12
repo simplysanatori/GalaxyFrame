@@ -5,7 +5,6 @@
 // HUD (the draws between the HUD markers) is rendered once into its own
 // target and shown on a panel in front of the player.  Frames without a
 // camera (logos, menus, movies) are shown on a virtual screen.
-#include <GLES3/gl32.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -17,330 +16,13 @@
 #include "../gx/gl_renderer.h"
 #include "../gx/gpu.h"
 #include "port/port.h"
+#include "vr_draw.h"
 #include "vr_renderer.h"
 #include "vr_rig.h"
 
 std::atomic<uint64_t> gPresentedFrames{0};
 
 namespace {
-
-// sRGB-encoded game colors -> linear, so the sRGB swapchain stores them as is.
-const char* kCommon = R"(
-vec3 toLinear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
-)";
-
-const char* kBlitVs = R"(#version 320 es
-out vec2 vUv;
-void main() {
-    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
-    vUv = p;
-    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
-}
-)";
-
-// The composite of the diorama into the eye image.  Its first %s is the
-// common code, the second defines sourceColor(): the diorama's colour at the
-// pixel (kBlitPlain, kBlitCas1, kBlitCasScaled).
-const char* kBlitFs = R"(#version 320 es
-precision mediump float;
-uniform sampler2D uTex;
-uniform float uBrightness;
-uniform float uVignette;  // 0 = off .. 1 = strong
-uniform vec4 uWipe;       // closed (0..1), kind (0 fade, 1 ring), ring centre uv
-uniform vec4 uWipeColor;  // linear colour, w = width / height of the eye
-in vec2 vUv;
-out vec4 oColor;
-%s
-%s
-void main() {
-    vec2 d = vUv * 2.0 - 1.0;
-    float edge = smoothstep(0.35, 1.05, length(d));
-    float v = 1.0 - uVignette * edge;
-    vec3 c = toLinear(sourceColor()) * v;
-    if (uWipe.y < 0.5) {
-        c = mix(c, uWipeColor.rgb, uWipe.x);
-    } else {
-        // A ring closing on its centre (radius in units of the eye's height;
-        // 1.6 clears the view from any centre on it).
-        float r = (1.0 - uWipe.x) * 1.6;
-        float inside = 1.0 - smoothstep(r - 0.015, r, length((vUv - uWipe.zw) * vec2(uWipeColor.w, 1.0)));
-        c = mix(uWipeColor.rgb, c, inside);
-    }
-    oColor = vec4(c * uBrightness, 1.0);
-}
-)";
-
-const char* kBlitPlain = R"(
-vec3 sourceColor() { return texture(uTex, vUv).rgb; }
-)";
-
-// AMD FidelityFX CAS (contrast adaptive sharpening), after CasFilter in
-// ffx_cas.h (https://github.com/GPUOpen-Effects/FidelityFX-CAS):
-//   Copyright (c) 2017-2019 Advanced Micro Devices, Inc. All rights reserved.
-//   Permission is hereby granted, free of charge, to any person obtaining a
-//   copy of this software and associated documentation files (the
-//   "Software"), to deal in the Software without restriction, including
-//   without limitation the rights to use, copy, modify, merge, publish,
-//   distribute, sublicense, and/or sell copies of the Software, and to
-//   permit persons to whom the Software is furnished to do so, subject to
-//   the following conditions: The above copyright notice and this
-//   permission notice shall be included in all copies or substantial
-//   portions of the Software.  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT
-//   WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
-//   THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-//   NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-//   LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
-//   CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH
-//   THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-// A cross-shaped sharpening filter whose strength follows the local
-// contrast, so flat areas and strong edges are sharpened less (no
-// ringing); the weights come from the green channel, as ffx_cas.h's fast
-// path uses them for all three.  Runs on the game's sRGB-encoded colours.
-//   uCasPeak: -1 / mix(8, 5, sharpness)
-//   uCasScale: diorama pixels per eye image pixel (the scaled variant)
-// kBlitCas1: diorama and eye image the same size (Super Resolution).
-const char* kBlitCas1 = R"(
-uniform float uCasPeak;
-vec3 casLoad(ivec2 p) { return texelFetch(uTex, clamp(p, ivec2(0), textureSize(uTex, 0) - 1), 0).rgb; }
-vec3 sourceColor() {
-    ivec2 sp = ivec2(gl_FragCoord.xy);
-    vec3 a = casLoad(sp + ivec2(-1, -1));
-    vec3 b = casLoad(sp + ivec2(0, -1));
-    vec3 c = casLoad(sp + ivec2(1, -1));
-    vec3 d = casLoad(sp + ivec2(-1, 0));
-    vec3 e = casLoad(sp);
-    vec3 f = casLoad(sp + ivec2(1, 0));
-    vec3 g = casLoad(sp + ivec2(-1, 1));
-    vec3 h = casLoad(sp + ivec2(0, 1));
-    vec3 i = casLoad(sp + ivec2(1, 1));
-    // Soft minimum and maximum: the cross plus the whole 3x3 (twice the size).
-    float mn = min(min(min(d.g, e.g), min(f.g, b.g)), h.g);
-    float mx = max(max(max(d.g, e.g), max(f.g, b.g)), h.g);
-    mn += min(min(min(mn, a.g), min(c.g, g.g)), i.g);
-    mx += max(max(max(mx, a.g), max(c.g, g.g)), i.g);
-    // Distance to the signal's limits over the maximum, shaped.
-    float amp = sqrt(clamp(min(mn, 2.0 - mx) / max(mx, 1e-4), 0.0, 1.0));
-    float w = amp * uCasPeak;
-    return clamp((b * w + d * w + f * w + h * w + e) / (1.0 + 4.0 * w), 0.0, 1.0);
-}
-)";
-
-// The scaled variant: the sharpened results at the four diorama pixels
-// around the eye pixel, blended bilinearly with less weight where the local
-// contrast is high (keeps edges thin).
-const char* kBlitCasScaled = R"(
-uniform float uCasPeak;
-uniform highp vec2 uCasScale;
-vec3 casLoad(ivec2 p) { return texelFetch(uTex, clamp(p, ivec2(0), textureSize(uTex, 0) - 1), 0).rgb; }
-vec3 sourceColor() {
-    highp vec2 pp = gl_FragCoord.xy * uCasScale - 0.5;
-    highp vec2 fp = floor(pp);
-    pp -= fp;
-    ivec2 sp = ivec2(fp);
-    //    b c
-    //  e f g h
-    //  i j k l
-    //    n o
-    vec3 b = casLoad(sp + ivec2(0, -1));
-    vec3 c = casLoad(sp + ivec2(1, -1));
-    vec3 e = casLoad(sp + ivec2(-1, 0));
-    vec3 f = casLoad(sp);
-    vec3 g = casLoad(sp + ivec2(1, 0));
-    vec3 h = casLoad(sp + ivec2(2, 0));
-    vec3 i = casLoad(sp + ivec2(-1, 1));
-    vec3 j = casLoad(sp + ivec2(0, 1));
-    vec3 k = casLoad(sp + ivec2(1, 1));
-    vec3 l = casLoad(sp + ivec2(2, 1));
-    vec3 n = casLoad(sp + ivec2(0, 2));
-    vec3 o = casLoad(sp + ivec2(1, 2));
-    float mnf = min(min(min(b.g, e.g), min(f.g, g.g)), j.g);
-    float mxf = max(max(max(b.g, e.g), max(f.g, g.g)), j.g);
-    float mng = min(min(min(c.g, f.g), min(g.g, h.g)), k.g);
-    float mxg = max(max(max(c.g, f.g), max(g.g, h.g)), k.g);
-    float mnj = min(min(min(f.g, i.g), min(j.g, k.g)), n.g);
-    float mxj = max(max(max(f.g, i.g), max(j.g, k.g)), n.g);
-    float mnk = min(min(min(g.g, j.g), min(k.g, l.g)), o.g);
-    float mxk = max(max(max(g.g, j.g), max(k.g, l.g)), o.g);
-    float wf = sqrt(clamp(min(mnf, 1.0 - mxf) / max(mxf, 1e-4), 0.0, 1.0)) * uCasPeak;
-    float wg = sqrt(clamp(min(mng, 1.0 - mxg) / max(mxg, 1e-4), 0.0, 1.0)) * uCasPeak;
-    float wj = sqrt(clamp(min(mnj, 1.0 - mxj) / max(mxj, 1e-4), 0.0, 1.0)) * uCasPeak;
-    float wk = sqrt(clamp(min(mnk, 1.0 - mxk) / max(mxk, 1e-4), 0.0, 1.0)) * uCasPeak;
-    float s = (1.0 - pp.x) * (1.0 - pp.y) / (1.0 / 32.0 + mxf - mnf);
-    float t = pp.x * (1.0 - pp.y) / (1.0 / 32.0 + mxg - mng);
-    float u = (1.0 - pp.x) * pp.y / (1.0 / 32.0 + mxj - mnj);
-    float v = pp.x * pp.y / (1.0 / 32.0 + mxk - mnk);
-    float qbe = wf * s, qch = wg * t, qin = wj * u, qlo = wk * v;
-    float qf = wg * t + wj * u + s;
-    float qg = wf * s + wk * v + t;
-    float qj = wf * s + wk * v + u;
-    float qk = wg * t + wj * u + v;
-    vec3 sum = (b + e) * qbe + (c + h) * qch + (i + n) * qin + (l + o) * qlo + f * qf + g * qg + j * qj + k * qk;
-    return clamp(sum / (2.0 * (qbe + qch + qin + qlo) + qf + qg + qj + qk), 0.0, 1.0);
-}
-)";
-
-const char* kQuadVs = R"(#version 320 es
-uniform mat4 uMvp;
-out vec2 vUv;
-void main() {
-    vec2 p = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
-    vUv = vec2(p.x, p.y);
-    gl_Position = uMvp * vec4(p - 0.5, 0.0, 1.0);
-}
-)";
-
-// Premultiplied texture: color is scaled by coverage, so decode after
-// un-premultiplying.
-const char* kQuadFs = R"(#version 320 es
-precision mediump float;
-uniform sampler2D uTex;
-uniform float uOpaque;
-uniform float uBrightness;
-uniform float uAlpha;
-in vec2 vUv;
-out vec4 oColor;
-%s
-void main() {
-    vec4 c = texture(uTex, vUv);
-    float a = mix(c.a, 1.0, uOpaque);
-    vec3 straight = a > 0.0 ? c.rgb / max(a, 1e-4) : vec3(0.0);
-    a *= uAlpha;
-    oColor = vec4(toLinear(clamp(straight, 0.0, 1.0)) * a * uBrightness, a);
-}
-)";
-
-// A UI layer's image (sRGB texture: sampling gives linear, premultiplied
-// colour) composited the way the runtime does, for the headless simulator.
-const char* kLayerFs = R"(#version 320 es
-precision mediump float;
-uniform sampler2D uTex;
-uniform vec2 uUvScale;  // the part of the image used
-in vec2 vUv;
-out vec4 oColor;
-%s
-void main() { oColor = texture(uTex, vUv * uUvScale); }
-)";
-
-const char* kLaserVs = R"(#version 320 es
-uniform mat4 uMvp;
-uniform vec3 uCorners[4];
-out vec2 vUv;
-void main() {
-    vUv = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
-    gl_Position = uMvp * vec4(uCorners[gl_VertexID], 1.0);
-}
-)";
-
-// uShape 0: beam (fades along its length), 1: round reticle, 2: the skip
-// indicator (uRing: fill 0..1, spinner head in turns or < 0 for none, flash
-// 0..1).
-const char* kLaserFs = R"(#version 320 es
-precision mediump float;
-uniform vec4 uColor;
-uniform int uShape;
-uniform vec3 uRing;
-in vec2 vUv;
-out vec4 oColor;
-%s
-// Right-pointing triangle: back edge at x = -w, apex at x = w, half-height h.
-float triangle(vec2 p, float w, float h) {
-    vec2 n = vec2(h, 2.0 * w) / length(vec2(h, 2.0 * w));
-    return max(-w - p.x, dot(vec2(p.x - w, abs(p.y)), n));
-}
-void main() {
-    if (uShape == 2) {
-        // Premultiplied layers: a dark disc, the ring (a dim track, filled
-        // clockwise from the top), a fast-forward glyph.
-        vec2 q = vUv * 2.0 - 1.0;
-        float r = length(q);
-        float px = fwidth(r);
-        vec4 c = vec4(0.0, 0.0, 0.0, 0.5 * (1.0 - smoothstep(1.0 - px, 1.0, r)));
-        float band = smoothstep(0.7 - px, 0.7, r) * (1.0 - smoothstep(0.9 - px, 0.9, r));
-        float turn = fract(atan(q.x, q.y) / 6.2831853 + 1.0);
-        float lit;
-        if (uRing.y < 0.0) {
-            lit = uRing.x >= 1.0 ? 1.0 : uRing.x <= 0.0 ? 0.0 : smoothstep(turn - 0.008, turn + 0.008, uRing.x);
-        } else {
-            lit = max(0.0, 1.0 - fract(uRing.y - turn) / 0.45);  // a head and its fading tail
-        }
-        vec3 ringColor = mix(mix(vec3(0.85), vec3(1.0, 0.82, 0.25), lit), vec3(1.0), uRing.z);
-        float ringA = band * mix(0.3, 1.0, max(lit, uRing.z));
-        c = vec4(ringColor * ringA, ringA) + c * (1.0 - ringA);
-        float g = min(triangle(q - vec2(-0.16, 0.0), 0.17, 0.32), triangle(q - vec2(0.16, 0.0), 0.17, 0.32));
-        float glyphA = 0.95 * (1.0 - smoothstep(-px, px, g));
-        c = vec4(vec3(glyphA), glyphA) + c * (1.0 - glyphA);
-        c *= uColor.a;
-        oColor = vec4(toLinear(c.rgb / max(c.a, 1e-4)) * c.a, c.a);
-        return;
-    }
-    float a;
-    if (uShape == 0) {
-        a = (1.0 - abs(vUv.x * 2.0 - 1.0)) * mix(0.9, 0.15, vUv.y);
-    } else {
-        float d = length(vUv * 2.0 - 1.0);
-        a = smoothstep(1.0, 0.7, d) * (0.55 + 0.45 * smoothstep(0.5, 0.8, d));
-    }
-    a *= uColor.a;
-    oColor = vec4(toLinear(uColor.rgb) * a, a);
-}
-)";
-
-// SpaceWarp motion vectors (see renderMotion): this frame's normalized
-// device coordinates minus the last frame's, for the point seen at each
-// pixel.  Full-screen: the point comes from the scene's depth (or a fixed
-// depth); w carries a tag for debug views (0 world, 1 player, 0.5 fixed in
-// the room).
-const char* kMotionFs = R"(#version 320 es
-precision highp float;
-uniform highp sampler2D uDepth;
-uniform mat4 uCurToPrev;       // this frame's NDC -> the last frame's clip space
-uniform float uDepthOverride;  // >= 0: this depth everywhere
-uniform float uMaxDepth;
-uniform float uTag;
-in vec2 vUv;
-layout(location = 0) out vec4 oMotion;
-void main() {
-    float d = uDepthOverride >= 0.0 ? uDepthOverride : texture(uDepth, vUv).r;
-    d = min(d, uMaxDepth);
-    vec4 cur = vec4(vUv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
-    vec4 prev = uCurToPrev * cur;
-    oMotion = vec4(prev.w > 1e-6 ? cur.xyz - prev.xyz / prev.w : vec3(0.0), uTag);
-    gl_FragDepth = d;
-}
-)";
-
-// A panel's motion vectors (with kQuadVs), where its texture is opaque
-// enough (uAlphaMin < 0: everywhere); depth from the panel itself.
-const char* kMotionQuadFs = R"(#version 320 es
-precision highp float;
-uniform sampler2D uTex;
-uniform float uAlphaMin;
-uniform mat4 uCurToPrev;
-uniform vec2 uInvSize;  // 1 / motion image size
-uniform float uTag;
-in vec2 vUv;
-layout(location = 0) out vec4 oMotion;
-void main() {
-    if (uAlphaMin >= 0.0 && texture(uTex, vUv).a < uAlphaMin) discard;
-    vec4 cur = vec4(gl_FragCoord.xy * uInvSize * 2.0 - 1.0, gl_FragCoord.z * 2.0 - 1.0, 1.0);
-    vec4 prev = uCurToPrev * cur;
-    oMotion = vec4(prev.w > 1e-6 ? cur.xyz - prev.xyz / prev.w : vec3(0.0), uTag);
-}
-)";
-
-GLuint sQuadProgram, sLaserProgram, sLayerProgram, sVao;
-GLint sLayerTex, sLayerMvp, sLayerUvScale;
-// Composite programs: plain, CAS at 1:1, CAS scaling.
-struct BlitProgram {
-    GLuint program = 0;
-    GLint tex, brightness, vignette, wipe, wipeColor, casPeak, casScale;
-};
-enum { kBlitPlainProgram, kBlitCas1Program, kBlitCasScaledProgram };
-BlitProgram sBlit[3];
-GLint sLaserMvp, sLaserCorners, sLaserColor, sLaserShape, sLaserRing;
-GLuint sMotionProgram, sMotionQuadProgram, sMotionFbo;
-GLint sMotionDepth, sMotionMatrix, sMotionDepthOverride, sMotionMaxDepth, sMotionTag;
-GLint sMotionQuadTex, sMotionQuadMvp, sMotionQuadAlphaMin, sMotionQuadMatrix, sMotionQuadInvSize, sMotionQuadTag;
 
 // Pointer ray from the last input update (stage space).
 std::atomic<int> sPointerInWorld{0};
@@ -377,7 +59,6 @@ float sAimLength = 1.0f;
 // game each frame (see port_vr_pointer_reach).
 std::atomic<float> sReachWorld{0.0f};
 std::atomic<int64_t> sReachAt{0};
-GLint sQuadTex, sQuadMvp, sQuadOpaque, sQuadBrightness, sQuadAlpha;
 
 // Fade through black when the presentation changes (virtual screen <->
 // diorama) or the rig jumps, so the world never switches under the player.
@@ -563,52 +244,6 @@ void updateStereo(const vr::FrameInfo& frame, const gpu::CameraInfo& cam, float 
     sPointerOnHud = (cam.flags & PORT_GX_CAMERA_POINTER_UI) != 0;
 }
 
-GLuint compile(GLenum type, const char* fmt, bool withCommon) {
-    char src[8192];
-    if (withCommon) {
-        snprintf(src, sizeof(src), fmt, kCommon);
-    } else {
-        snprintf(src, sizeof(src), "%s", fmt);
-    }
-    GLuint s = glCreateShader(type);
-    const char* p = src;
-    glShaderSource(s, 1, &p, nullptr);
-    glCompileShader(s);
-    GLint ok = 0;
-    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        char log[1024];
-        glGetShaderInfoLog(s, sizeof(log), nullptr, log);
-        port_fatal("vr shader compile failed: %s", log);
-    }
-    return s;
-}
-
-GLuint linkProgram(const char* vs, const char* fs) {
-    GLuint p = glCreateProgram();
-    glAttachShader(p, compile(GL_VERTEX_SHADER, vs, false));
-    glAttachShader(p, compile(GL_FRAGMENT_SHADER, fs, true));
-    glLinkProgram(p);
-    return p;
-}
-
-// kBlitFs with `source` as its sourceColor() (the common code goes in when
-// compile() formats it).
-BlitProgram linkBlit(const char* source) {
-    char fs[8192];
-    snprintf(fs, sizeof(fs), kBlitFs, "%s", source);
-    BlitProgram b;
-    b.program = linkProgram(kBlitVs, fs);
-    b.tex = glGetUniformLocation(b.program, "uTex");
-    b.brightness = glGetUniformLocation(b.program, "uBrightness");
-    b.vignette = glGetUniformLocation(b.program, "uVignette");
-    b.wipe = glGetUniformLocation(b.program, "uWipe");
-    b.wipeColor = glGetUniformLocation(b.program, "uWipeColor");
-    b.casPeak = glGetUniformLocation(b.program, "uCasPeak");
-    b.casScale = glGetUniformLocation(b.program, "uCasScale");
-    return b;
-}
-
 // Targets of sizes no longer in use are kept for a while rather than
 // destroyed: the dynamic resolution steps between a handful of sizes, and
 // making a target anew stalled the render thread for 10 ms and more each
@@ -645,25 +280,8 @@ xm::Mat4 panelModel(xm::Vec3 center, float width, float aspect) {
     return m * s;
 }
 
-void drawQuad(GLuint texture, const xm::Mat4& mvp, bool opaque, float alpha) {
-    glUseProgram(sQuadProgram);
-    glUniformMatrix4fv(sQuadMvp, 1, GL_FALSE, mvp.m);
-    glUniform1f(sQuadOpaque, opaque ? 1.0f : 0.0f);
-    glUniform1f(sQuadBrightness, overlayBrightness());
-    glUniform1f(sQuadAlpha, alpha);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glBindSampler(0, 0);
-    glUniform1i(sQuadTex, 0);
-    if (opaque) {
-        glDisable(GL_BLEND);
-    } else {
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-    }
-    glBindVertexArray(sVao);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    glDisable(GL_BLEND);
+void drawQuad(gpu::TexHandle texture, const xm::Mat4& mvp, bool opaque, float alpha) {
+    vrdraw::draw().quad(texture, mvp.m, opaque, alpha, overlayBrightness());
 }
 
 void drawPanel(const gpu::EfbTarget& tex, const xm::Mat4& mvp, bool opaque) { drawQuad(tex.color, mvp, opaque, 1.0f); }
@@ -689,19 +307,13 @@ void drawLaser(const vr::EyeInfo& eye, const xm::Mat4& viewProj) {
     // A little wider at the far end, so a beam reaching metres into the
     // world stays visible there.
     xm::Vec3 side = across * 0.0012f, side1 = across * (0.0012f + 0.0008f * sAimLength);
-    glUseProgram(sLaserProgram);
-    glUniformMatrix4fv(sLaserMvp, 1, GL_FALSE, viewProj.m);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-    glDisable(GL_DEPTH_TEST);
-    glBindVertexArray(sVao);
+    vrdraw::Draw& draw = vrdraw::draw();
+    draw.overlayBegin(viewProj.m);
     // Beam: corners ordered for a strip (x across, y along).
     float beam[12] = {p0.x - side.x, p0.y - side.y, p0.z - side.z, p0.x + side.x, p0.y + side.y, p0.z + side.z,
                       p1.x - side1.x, p1.y - side1.y, p1.z - side1.z, p1.x + side1.x, p1.y + side1.y, p1.z + side1.z};
-    glUniform3fv(sLaserCorners, 4, beam);
-    glUniform4f(sLaserColor, 0.75f, 0.9f, 1.0f, 0.8f * overlayBrightness());
-    glUniform1i(sLaserShape, 0);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    const float beamColor[4] = {0.75f, 0.9f, 1.0f, 0.8f * overlayBrightness()};
+    draw.overlayQuad(beam, beamColor, vrdraw::kShapeBeam, nullptr);
     // Reticle facing the eye, sized to stay readable with distance; it swells
     // and brightens for a moment when the pointer touches a new target.
     float pulse = 1.0f - (float)(port_host_time_ns() - sTouchPulseAt.load()) / 250000000.0f;
@@ -714,11 +326,9 @@ void drawLaser(const vr::EyeInfo& eye, const xm::Mat4& viewProj) {
     v = v * r;
     float ret[12] = {p1.x - u.x - v.x, p1.y - u.y - v.y, p1.z - u.z - v.z, p1.x + u.x - v.x, p1.y + u.y - v.y, p1.z + u.z - v.z,
                      p1.x - u.x + v.x, p1.y - u.y + v.y, p1.z - u.z + v.z, p1.x + u.x + v.x, p1.y + u.y + v.y, p1.z + u.z + v.z};
-    glUniform3fv(sLaserCorners, 4, ret);
-    glUniform4f(sLaserColor, 1.0f, 0.95f + 0.05f * pulse, 0.55f + 0.45f * pulse, 0.95f * overlayBrightness());
-    glUniform1i(sLaserShape, 1);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    glDisable(GL_BLEND);
+    const float retColor[4] = {1.0f, 0.95f + 0.05f * pulse, 0.55f + 0.45f * pulse, 0.95f * overlayBrightness()};
+    draw.overlayQuad(ret, retColor, vrdraw::kShapeReticle, nullptr);
+    draw.overlayEnd();
 }
 
 void updateSkipIndicator(float dt) {
@@ -766,18 +376,12 @@ void drawSkipIndicator(const vr::FrameInfo& frame, const xm::Mat4& viewProj) {
     xm::Vec3 v = xm::rotate(q, xm::Vec3{0.0f, half, 0.0f});
     float quad[12] = {c.x - u.x - v.x, c.y - u.y - v.y, c.z - u.z - v.z, c.x + u.x - v.x, c.y + u.y - v.y, c.z + u.z - v.z,
                       c.x - u.x + v.x, c.y - u.y + v.y, c.z - u.z + v.z, c.x + u.x + v.x, c.y + u.y + v.y, c.z + u.z + v.z};
-    glUseProgram(sLaserProgram);
-    glUniformMatrix4fv(sLaserMvp, 1, GL_FALSE, viewProj.m);
-    glUniform3fv(sLaserCorners, 4, quad);
-    glUniform4f(sLaserColor, 1.0f, 1.0f, 1.0f, alpha);
-    glUniform1i(sLaserShape, 2);
-    glUniform3f(sLaserRing, popping ? 1.0f : sSkipFill, sSkipForwarding ? sSkipSpin : -1.0f, popping ? 1.0f - sSkipPop : 0.0f);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-    glDisable(GL_DEPTH_TEST);
-    glBindVertexArray(sVao);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    glDisable(GL_BLEND);
+    const float color[4] = {1.0f, 1.0f, 1.0f, alpha};
+    const float ring[3] = {popping ? 1.0f : sSkipFill, sSkipForwarding ? sSkipSpin : -1.0f, popping ? 1.0f - sSkipPop : 0.0f};
+    vrdraw::Draw& draw = vrdraw::draw();
+    draw.overlayBegin(viewProj.m);
+    draw.overlayQuad(quad, color, vrdraw::kShapeSkipRing, ring);
+    draw.overlayEnd();
 }
 
 // Ray (stage space) against a panel; returns the Wii pointer position
@@ -1028,7 +632,7 @@ void setAimLength(float metres) {
     sAimLength = metres;
     sAimOnPanel = true;
 }
-void drawOverlayQuad(GLuint texture, const xm::Mat4& mvp, float alpha) { drawQuad(texture, mvp, false, alpha); }
+void drawOverlayQuad(gpu::TexHandle texture, const xm::Mat4& mvp, float alpha) { drawQuad(texture, mvp, false, alpha); }
 // Fixed once the swapchains are made from it (the resolution setting may
 // change in play; the dynamic resolution's range follows it at once).
 float swapchainScale() {
@@ -1096,15 +700,12 @@ float& activeScale() { return sScaled == kScreenScale ? sScreenScale : sScale; }
 float scaleMin() { return sScaled == kScreenScale ? fminf(1.0f, fmaxf(0.5f, 0.75f * sMinScale)) : sMinScale; }
 float scaleMax() { return sScaled == kScreenScale ? 1.0f : sResolution; }
 
-const GLenum kTimeElapsed = 0x88BF;  // GL_TIME_ELAPSED_EXT
-const GLenum kGpuDisjoint = 0x8FBB;  // GL_GPU_DISJOINT_EXT
 struct EyeTimer {
-    GLuint query = 0;
     bool pending = false;
     bool diorama = false;  // timed an eye of the diorama (the scale applies there)
     float scale = 0.0f;
 };
-EyeTimer sTimers[8];
+EyeTimer sTimers[vrdraw::Draw::kTimerSlots];
 int sTimerNext = 0;
 int sTimerActive = -1;
 bool sTimersOk = false;
@@ -1130,11 +731,7 @@ double sLogAt = 0.0;
 float sBudgetMs = 0.0f;
 
 void initTimers() {
-    const char* ext = (const char*)glGetString(GL_EXTENSIONS);
-    sTimersOk = ext && strstr(ext, "GL_EXT_disjoint_timer_query");
-    if (sTimersOk) {
-        for (EyeTimer& t : sTimers) glGenQueries(1, &t.query);
-    }
+    sTimersOk = vrdraw::draw().timersInit();
     port_log("vr: dynamic resolution %.2f-%.2f%s", sMinScale, sResolution, sTimersOk ? "" : " unavailable (no GPU timer queries): fixed 1.0");
 }
 
@@ -1196,17 +793,17 @@ void takeEyeTime(float ms, const EyeTimer& t) {
 }
 
 void pollTimers() {
-    GLint disjoint = 0;
-    glGetIntegerv(kGpuDisjoint, &disjoint);  // reading it also clears it
-    for (EyeTimer& t : sTimers) {
-        if (!t.pending) continue;
-        GLuint available = 0;
-        glGetQueryObjectuiv(t.query, GL_QUERY_RESULT_AVAILABLE, &available);
-        if (!available) continue;
-        GLuint ns = 0;
-        glGetQueryObjectuiv(t.query, GL_QUERY_RESULT, &ns);
-        t.pending = false;
-        if (!disjoint) takeEyeTime(ns / 1e6f, t);
+    uint32_t pending = 0;
+    for (int i = 0; i < vrdraw::Draw::kTimerSlots; i++) {
+        if (sTimers[i].pending) pending |= 1u << i;
+    }
+    float ms[vrdraw::Draw::kTimerSlots];
+    uint32_t done = 0;
+    uint32_t valid = vrdraw::draw().timerPoll(pending, ms, &done);
+    for (int i = 0; i < vrdraw::Draw::kTimerSlots; i++) {
+        if (!(done & (1u << i))) continue;
+        sTimers[i].pending = false;
+        if (valid & (1u << i)) takeEyeTime(ms[i], sTimers[i]);
     }
 }
 
@@ -1216,16 +813,16 @@ void beginEyeTimer(bool diorama) {
     if (t.pending) {
         t.pending = false;  // never read: 8 eyes old, the GPU is far behind or the result was lost
     }
-    glBeginQuery(kTimeElapsed, t.query);
+    vrdraw::draw().timerBegin(sTimerNext);
     t.diorama = diorama;
     t.scale = sScale;
     sTimerActive = sTimerNext;
-    sTimerNext = (sTimerNext + 1) % 8;
+    sTimerNext = (sTimerNext + 1) % vrdraw::Draw::kTimerSlots;
 }
 
 void endEyeTimer() {
     if (sTimerActive < 0) return;
-    glEndQuery(kTimeElapsed);
+    vrdraw::draw().timerEnd();
     sTimers[sTimerActive].pending = true;
     sTimerActive = -1;
 }
@@ -1398,28 +995,6 @@ void motionDeltas(xm::Mat4* world, xm::Mat4* player) {
     }
 }
 
-void motionPass(const xm::Mat4& curToPrev, float depthOverride, float tag) {
-    glUniformMatrix4fv(sMotionMatrix, 1, GL_FALSE, curToPrev.m);
-    glUniform1f(sMotionDepthOverride, depthOverride);
-    glUniform1f(sMotionTag, tag);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-}
-
-// A panel's motion vectors (see kMotionQuadFs).
-void motionQuad(GLuint texture, const xm::Mat4& mvp, float alphaMin, const xm::Mat4& curToPrev, float tag) {
-    glUseProgram(sMotionQuadProgram);
-    glUniformMatrix4fv(sMotionQuadMvp, 1, GL_FALSE, mvp.m);
-    glUniformMatrix4fv(sMotionQuadMatrix, 1, GL_FALSE, curToPrev.m);
-    glUniform1f(sMotionQuadAlphaMin, alphaMin);
-    glUniform2f(sMotionQuadInvSize, 1.0f / sMotionW, 1.0f / sMotionH);
-    glUniform1f(sMotionQuadTag, tag);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glBindSampler(0, 0);
-    glUniform1i(sMotionQuadTex, 0);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-}
-
 }  // namespace
 
 void notePerformance(float appGpuMs, float compositorGpuMs, float gpuUtilization, int eyesPerFrame, int refreshesPerFrame, float refreshMs) {
@@ -1478,40 +1053,7 @@ void noteMissedRefreshes(int count) {
 
 void init() {
     sCutawayTest = gpu::debugEnv("PETARI_CUTTEST") != nullptr;
-    sBlit[kBlitPlainProgram] = linkBlit(kBlitPlain);
-    sBlit[kBlitCas1Program] = linkBlit(kBlitCas1);
-    sBlit[kBlitCasScaledProgram] = linkBlit(kBlitCasScaled);
-    sQuadProgram = linkProgram(kQuadVs, kQuadFs);
-    sQuadTex = glGetUniformLocation(sQuadProgram, "uTex");
-    sQuadMvp = glGetUniformLocation(sQuadProgram, "uMvp");
-    sQuadOpaque = glGetUniformLocation(sQuadProgram, "uOpaque");
-    sQuadBrightness = glGetUniformLocation(sQuadProgram, "uBrightness");
-    sQuadAlpha = glGetUniformLocation(sQuadProgram, "uAlpha");
-    sLayerProgram = linkProgram(kQuadVs, kLayerFs);
-    sLayerTex = glGetUniformLocation(sLayerProgram, "uTex");
-    sLayerMvp = glGetUniformLocation(sLayerProgram, "uMvp");
-    sLayerUvScale = glGetUniformLocation(sLayerProgram, "uUvScale");
-    sLaserProgram = linkProgram(kLaserVs, kLaserFs);
-    sLaserMvp = glGetUniformLocation(sLaserProgram, "uMvp");
-    sLaserCorners = glGetUniformLocation(sLaserProgram, "uCorners");
-    sLaserColor = glGetUniformLocation(sLaserProgram, "uColor");
-    sLaserShape = glGetUniformLocation(sLaserProgram, "uShape");
-    sLaserRing = glGetUniformLocation(sLaserProgram, "uRing");
-    sMotionProgram = linkProgram(kBlitVs, kMotionFs);
-    sMotionDepth = glGetUniformLocation(sMotionProgram, "uDepth");
-    sMotionMatrix = glGetUniformLocation(sMotionProgram, "uCurToPrev");
-    sMotionDepthOverride = glGetUniformLocation(sMotionProgram, "uDepthOverride");
-    sMotionMaxDepth = glGetUniformLocation(sMotionProgram, "uMaxDepth");
-    sMotionTag = glGetUniformLocation(sMotionProgram, "uTag");
-    sMotionQuadProgram = linkProgram(kQuadVs, kMotionQuadFs);
-    sMotionQuadTex = glGetUniformLocation(sMotionQuadProgram, "uTex");
-    sMotionQuadMvp = glGetUniformLocation(sMotionQuadProgram, "uMvp");
-    sMotionQuadAlphaMin = glGetUniformLocation(sMotionQuadProgram, "uAlphaMin");
-    sMotionQuadMatrix = glGetUniformLocation(sMotionQuadProgram, "uCurToPrev");
-    sMotionQuadInvSize = glGetUniformLocation(sMotionQuadProgram, "uInvSize");
-    sMotionQuadTag = glGetUniformLocation(sMotionQuadProgram, "uTag");
-    glGenFramebuffers(1, &sMotionFbo);
-    glGenVertexArrays(1, &sVao);
+    vrdraw::draw().init();
     gpu::renderer().init();
     // The game draws a 16:9 picture (its camera's aspect: the console is set
     // to widescreen) squeezed into its 640x456 frame, and the TV stretched it
@@ -1667,10 +1209,11 @@ void beginFrame(const FrameInfo& frame) {
     sRenderNs = port_host_time_ns() - frameStartNs;
 }
 
-Extent renderEye(int eye, const FrameInfo& frame, GLuint fbo, int width, int height) {
+Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int width, int height) {
     int64_t eyeStartNs = port_host_time_ns();
     sWipeDim = 0.0f;
     gpu::Renderer& r = gpu::renderer();
+    vrdraw::Draw& draw = vrdraw::draw();
     beginEyeTimer(r.hasFrame() && sVrMode);
     const EyeInfo& ei = frame.eyes[eye];
     xm::Mat4 viewProj = ei.proj * ei.view;
@@ -1705,31 +1248,23 @@ Extent renderEye(int eye, const FrameInfo& frame, GLuint fbo, int width, int hei
         }
         sSnapTaken[eye] = sMotionOn && r.snapshotTaken();
 
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         // The composite covers the whole image: no need to load its old
         // contents into the tiles.
-        const GLenum color[1] = {GL_COLOR_ATTACHMENT0};
-        glInvalidateFramebuffer(GL_FRAMEBUFFER, 1, color);
-        glViewport(0, 0, used.width, used.height);
-        glDisable(GL_SCISSOR_TEST);
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_CULL_FACE);
-        glDisable(GL_BLEND);
-        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        draw.beginTarget(dst, used.width, used.height, true);
         // FidelityFX CAS sharpens the diorama as it goes in (and scales it
         // when the sizes differ).
         bool sameSize = used.width == sEye[eye].width && used.height == sEye[eye].height;
-        const BlitProgram& blit = sBlit[!sSharpen ? kBlitPlainProgram : sameSize ? kBlitCas1Program : kBlitCasScaledProgram];
-        glUseProgram(blit.program);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, sEye[eye].color);
-        glBindSampler(0, 0);
-        glUniform1i(blit.tex, 0);
-        glUniform1f(blit.brightness, (1.0f - sFade) * (1.0f - sSkipDim));
-        glUniform1f(blit.vignette, sVignette);
+        vrdraw::Composite comp;
+        comp.kind = !sSharpen ? vrdraw::CompositeKind::Plain : sameSize ? vrdraw::CompositeKind::Cas1 : vrdraw::CompositeKind::CasScaled;
+        comp.src = sEye[eye].color;
+        comp.srcW = sEye[eye].width;
+        comp.srcH = sEye[eye].height;
+        comp.usedW = used.width;
+        comp.usedH = used.height;
+        comp.brightness = (1.0f - sFade) * (1.0f - sSkipDim);
+        comp.vignette = sVignette;
         if (sSharpen) {
-            glUniform1f(blit.casPeak, -1.0f / (8.0f + (5.0f - 8.0f) * sSharpness));
-            glUniform2f(blit.casScale, (float)sEye[eye].width / used.width, (float)sEye[eye].height / used.height);
+            comp.casPeak = -1.0f / (8.0f + (5.0f - 8.0f) * sSharpness);
         }
         // The game's screen wipe, across the whole view.
         int wipeKind;
@@ -1754,10 +1289,15 @@ Extent renderEye(int eye, const FrameInfo& frame, GLuint fbo, int width, int hei
             }
         }
         auto lin = [](unsigned int c) { float f = c / 255.0f; return f * f; };  // near enough for black / white
-        glUniform4f(blit.wipe, wipeClosed, wipeKind == 0 ? 0.0f : 1.0f, cx, cy);
-        glUniform4f(blit.wipeColor, lin((wipeRgb >> 16) & 255), lin((wipeRgb >> 8) & 255), lin(wipeRgb & 255), (float)used.width / (float)used.height);
-        glBindVertexArray(sVao);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
+        comp.wipe[0] = wipeClosed;
+        comp.wipe[1] = wipeKind == 0 ? 0.0f : 1.0f;
+        comp.wipe[2] = cx;
+        comp.wipe[3] = cy;
+        comp.wipeColor[0] = lin((wipeRgb >> 16) & 255);
+        comp.wipeColor[1] = lin((wipeRgb >> 8) & 255);
+        comp.wipeColor[2] = lin(wipeRgb & 255);
+        comp.wipeColor[3] = (float)used.width / (float)used.height;
+        draw.composite(comp);
         if (!sUiLayers) {
             drawPanel(sHud, viewProj * panelModel(kHudCenter, kHudWidth, (float)sHud.width / sHud.height), false);
         }
@@ -1792,18 +1332,12 @@ Extent renderEye(int eye, const FrameInfo& frame, GLuint fbo, int width, int hei
             sPictureW = sFlatPair[0].width;
             sPictureH = sFlatPair[0].height;
         }
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glViewport(0, 0, width, height);
-        glDisable(GL_SCISSOR_TEST);
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_CULL_FACE);
-        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        draw.beginTarget(dst, width, height, false);
         // The dark around the screen; with the passthrough setting the image
         // is see-through there instead (premultiplied alpha), and the
         // compositor shows the room behind it.
         float dark = 1.0f - sPassAmount;
-        glClearColor(0.004f * dark, 0.004f * dark, 0.012f * dark, dark);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        draw.clear(0.004f * dark, 0.004f * dark, 0.012f * dark, dark);
         if (r.hasFrame() && !sUiLayers) {
             drawPanel(sStereoFrame ? sFlatPair[eye] : sScaledShown ? sFlatPair[0] : sFlat,
                       viewProj * panelModel(screenCenter(), screenWidth(), (float)sFlat.width / sFlat.height),
@@ -1816,8 +1350,7 @@ Extent renderEye(int eye, const FrameInfo& frame, GLuint fbo, int width, int hei
     }
     drawLaser(ei, viewProj);
     drawSkipIndicator(frame, viewProj);
-    glBindVertexArray(0);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    draw.endTarget();
     endEyeTimer();
     sRenderNs += port_host_time_ns() - eyeStartNs;
     if (eye == 1) {
@@ -1831,20 +1364,11 @@ void setMotionSize(int width, int height) {
     sMotionH = height;
 }
 
-void renderMotion(int eye, const FrameInfo& frame, GLuint motionTex, GLuint depthTex) {
+void renderMotion(int eye, const FrameInfo& frame, gpu::TexHandle motionTex, gpu::TexHandle depthTex) {
     gpu::Renderer& r = gpu::renderer();
+    vrdraw::Draw& draw = vrdraw::draw();
     const EyeInfo& ei = frame.eyes[eye];
-    glBindFramebuffer(GL_FRAMEBUFFER, sMotionFbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, motionTex, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, depthTex, 0);
-    glViewport(0, 0, sMotionW, sMotionH);
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_BLEND);
-    glDisable(GL_CULL_FACE);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glDepthMask(GL_TRUE);
-    glStencilMask(0xFF);
-    glBindVertexArray(sVao);
+    draw.motionBegin(motionTex, depthTex, sMotionW, sMotionH, kFarDepth);
 
     // This frame's normalized device coordinates -> the room, and the room
     // -> the last frame's clip space (the head moved in between).
@@ -1855,52 +1379,27 @@ void renderMotion(int eye, const FrameInfo& frame, GLuint motionTex, GLuint dept
     xm::Mat4 still = prevViewProj * ndcToStage;  // points fixed in the room
     xm::Mat4 worldDelta, playerDelta;
     motionDeltas(&worldDelta, &playerDelta);
+    const float invSize[2] = {1.0f / sMotionW, 1.0f / sMotionH};
 
-    glUseProgram(sMotionProgram);
-    glUniform1f(sMotionMaxDepth, kFarDepth);
-    glUniform1i(sMotionDepth, 0);
-    glActiveTexture(GL_TEXTURE0);
-    glBindSampler(0, 0);
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_ALWAYS);
     if (sMotionOn && sMotionCur.vr && sSnapTaken[eye]) {
-        // The scene's depth and player tags (the same size: an exact copy).
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, sSnap[eye].fbo);
-        glBlitFramebuffer(0, 0, sMotionW, sMotionH, 0, 0, sMotionW, sMotionH, GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_NEAREST);
-        glBindFramebuffer(GL_FRAMEBUFFER, sMotionFbo);
-        glBindTexture(GL_TEXTURE_2D, sSnap[eye].depth);
-        glEnable(GL_STENCIL_TEST);
-        glStencilMask(0);
-        glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
-        glStencilFunc(GL_EQUAL, 0, 0xFF);
-        motionPass(prevViewProj * worldDelta * ndcToStage, -1.0f, 0.0f);
-        glStencilFunc(GL_EQUAL, 1, 0xFF);
-        motionPass(prevViewProj * playerDelta * ndcToStage, -1.0f, 1.0f);
-        glDisable(GL_STENCIL_TEST);
-        glStencilMask(0xFF);
+        // The scene's depth and player tags.
+        draw.motionScene(sSnap[eye], sMotionW, sMotionH, (prevViewProj * worldDelta * ndcToStage).m, (prevViewProj * playerDelta * ndcToStage).m);
         // The HUD panel, where it covers the view, stays in the room (unless
         // it is a compositor layer of its own).
         if (!sUiLayers) {
-            motionQuad(sHud.color, viewProj * panelModel(kHudCenter, kHudWidth, (float)sHud.width / sHud.height), 0.3f, still, 0.5f);
+            draw.motionQuad(sHud.color, (viewProj * panelModel(kHudCenter, kHudWidth, (float)sHud.width / sHud.height)).m, 0.3f, still.m, invSize, 0.5f);
         }
     } else {
         // No scene depth: the virtual screen in the room, or (a frame the
         // game drew no scene into) the far background.
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        glClearDepthf(1.0f);
-        glClearStencil(0);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-        glBindTexture(GL_TEXTURE_2D, 0);
         bool vr = sMotionOn && sMotionCur.vr;
-        motionPass(prevViewProj * (vr ? worldDelta : xm::Mat4::identity()) * ndcToStage, kFarDepth, vr ? 0.0f : 0.5f);
+        draw.motionFill((prevViewProj * (vr ? worldDelta : xm::Mat4::identity()) * ndcToStage).m, kFarDepth, vr ? 0.0f : 0.5f);
         if (!vr && r.hasFrame() && !sUiLayers) {
-            motionQuad(sFlat.color, viewProj * panelModel(screenCenter(), screenWidth(), (float)sFlat.width / sFlat.height), -1.0f, still, 0.5f);
+            draw.motionQuad(sFlat.color, (viewProj * panelModel(screenCenter(), screenWidth(), (float)sFlat.width / sFlat.height)).m, -1.0f, still.m,
+                            invSize, 0.5f);
         }
     }
-    glDisable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-    glBindVertexArray(0);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    draw.motionEnd();
 }
 
 bool finishMotion(xm::Quat* deltaOrientation, xm::Vec3* deltaPosition) {
@@ -1935,16 +1434,10 @@ bool finishMotion(xm::Quat* deltaOrientation, xm::Vec3* deltaPosition) {
     return cut;
 }
 
-void motionDebugImage(GLuint motionTex, std::vector<unsigned char>* rgba, std::string* summary) {
+void motionDebugImage(gpu::TexHandle motionTex, std::vector<unsigned char>* rgba, std::string* summary) {
     int w = sMotionW, h = sMotionH;
-    GLuint fbo;
-    glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, motionTex, 0);
     std::vector<float> mv((size_t)w * h * 4);
-    glReadPixels(0, 0, w, h, GL_RGBA, GL_FLOAT, mv.data());
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glDeleteFramebuffers(1, &fbo);
+    vrdraw::draw().readMotion(motionTex, w, h, mv.data());
     rgba->assign((size_t)w * h * 4, 0);
     double sum[3] = {0, 0, 0};
     int count[3] = {0, 0, 0};
@@ -2101,19 +1594,14 @@ UiLayer uiLayer(int which) {
     return l;
 }
 
-void drawUiLayer(int which, GLuint fbo) {
+void drawUiLayer(int which, const gpu::EfbTarget& dst) {
     int w, h;
     uiLayerSize(which, &w, &h);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_CULL_FACE);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
+    vrdraw::Draw& draw = vrdraw::draw();
     // The picture fills the part of the image the layer shows.
     UiLayer part = uiLayer(which);
-    glViewport(0, 0, part.imageWidth ? part.imageWidth : w, part.imageHeight ? part.imageHeight : h);
+    draw.beginTarget(dst, part.imageWidth ? part.imageWidth : w, part.imageHeight ? part.imageHeight : h, false);
+    draw.clear(0.0f, 0.0f, 0.0f, 0.0f);
     if (which == kHudLayer) {
         drawQuad(sHud.color, xm::scale(2.0f), false, 1.0f);  // the unit quad over the whole image
         sHudFresh = false;
@@ -2128,48 +1616,31 @@ void drawUiLayer(int which, GLuint fbo) {
     } else {
         settingsDrawLayer();
     }
-    glBindVertexArray(0);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    draw.endTarget();
 }
 
-void compositeUiLayer(int which, GLuint texture, const xm::Mat4& viewProj) {
+void compositeUiLayer(int which, gpu::TexHandle texture, const xm::Mat4& viewProj, const gpu::EfbTarget& dst, int viewportWidth, int viewportHeight) {
     UiLayer l = uiLayer(which);
     xm::Mat4 size = xm::Mat4::identity();
     size.at(0, 0) = l.width;
     size.at(1, 1) = l.height;
     xm::Mat4 mvp = viewProj * xm::poseMatrix(l.orientation, l.position) * size;
-    glUseProgram(sLayerProgram);
-    glUniformMatrix4fv(sLayerMvp, 1, GL_FALSE, mvp.m);
     int w, h;
     uiLayerSize(which, &w, &h);
-    glUniform2f(sLayerUvScale, l.imageWidth ? (float)l.imageWidth / w : 1.0f, l.imageHeight ? (float)l.imageHeight / h : 1.0f);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glBindSampler(0, 0);
-    glUniform1i(sLayerTex, 0);
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-    glBindVertexArray(sVao);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    glDisable(GL_BLEND);
-    glBindVertexArray(0);
+    vrdraw::Draw& draw = vrdraw::draw();
+    draw.beginTarget(dst, viewportWidth, viewportHeight, false);
+    draw.layerQuad(texture, mvp.m, l.imageWidth ? (float)l.imageWidth / w : 1.0f, l.imageHeight ? (float)l.imageHeight / h : 1.0f);
+    draw.endTarget();
 }
 
 void drawReticle2d(float x, float y, float rx, float ry) {
-    glUseProgram(sLaserProgram);
     xm::Mat4 id = xm::Mat4::identity();
-    glUniformMatrix4fv(sLaserMvp, 1, GL_FALSE, id.m);
     float corners[12] = {x - rx, y - ry, 0.0f, x + rx, y - ry, 0.0f, x - rx, y + ry, 0.0f, x + rx, y + ry, 0.0f};
-    glUniform3fv(sLaserCorners, 4, corners);
-    glUniform4f(sLaserColor, 1.0f, 0.95f, 0.55f, 0.95f * overlayBrightness());
-    glUniform1i(sLaserShape, 1);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-    glDisable(GL_DEPTH_TEST);
-    glBindVertexArray(sVao);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    glDisable(GL_BLEND);
+    const float color[4] = {1.0f, 0.95f, 0.55f, 0.95f * overlayBrightness()};
+    vrdraw::Draw& draw = vrdraw::draw();
+    draw.overlayBegin(id.m);
+    draw.overlayQuad(corners, color, vrdraw::kShapeReticle, nullptr);
+    draw.overlayEnd();
 }
 
 }  // namespace vr
