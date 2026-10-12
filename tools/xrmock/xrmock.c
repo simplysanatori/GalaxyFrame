@@ -20,7 +20,9 @@
 //                             motion vectors and depth with each frame)
 //   MOCK_XR_EXTENSIONS=a,b    replace the list of extensions offered
 //   MOCK_XR_BUSY_MS=<ms>      Vulkan: a release that waits longer than this
-//                             for the app's queue to go idle is an error (4)
+//                             for the app's queue to go idle is an error
+//                             (off unless set: the app submits its next set
+//                             before releasing the last since frame.3 round 3)
 // The graphics API is chosen by the app's binding (xrmock_gfx.h).
 //
 // Checks (ERROR lines in the trace, and a summary on stderr when the session
@@ -281,7 +283,11 @@ static XrResult XRAPI_CALL mRelease(XrSwapchain sc, const XrSwapchainImageReleas
         gErrors++;
         return XR_ERROR_CALL_ORDER_INVALID;
     }
-    if (gGfx && gGfx->release_wait_ms) {
+    // Opt-in (MOCK_XR_BUSY_MS): the app's frame loop now submits the next
+    // set before it releases the last, so the queue is rarely idle here.
+    static int busyCheck = -1;
+    if (busyCheck < 0) busyCheck = getenv("MOCK_XR_BUSY_MS") != NULL;
+    if (busyCheck && gGfx && gGfx->release_wait_ms) {
         // The wait includes other processes' GPU work (the desktop's
         // compositor) ahead of the mock's own check: up to 4 ms seen
         // with the app's work all done.  The eyes' work takes 10 ms and more.

@@ -29,11 +29,12 @@ the session (`xrmock: summary ...`):
 - acquire, wait and release in order per swapchain (both APIs);
 - Vulkan: no swapchain with mip levels (SteamVR on the Frame allocates
   memory for level 0 only; writing the others corrupted other images in H2);
-- Vulkan: at each release the mock waits for the app's queue to go idle; more
-  than `MOCK_XR_BUSY_MS` (4) means the app released an image before its GPU
-  work had finished (SteamVR shows a released image at once). Other
-  processes' GPU work shows up to about 4 ms here; the stderr summary has the
-  histogram. `PETARI_NO_GPU_WAIT=1` in the app (at 72 Hz) is the negative test;
+- Vulkan, with `MOCK_XR_BUSY_MS=<ms>`: at each release the mock waits for the
+  app's queue to go idle; longer than that means work was still queued. Off
+  by default: the app records and submits the next set before it releases
+  the last (its own check, per image against the timeline, logs
+  "released after a wait in the release itself"). `PETARI_NO_GPU_WAIT=1` in
+  the app is the negative test of the app's check;
 - both eyes of a projection layer come from one `xrLocateViews` (the head
   turns slowly, so views located for different times differ), and how many
   refreshes before the display time submitted that locate was made for.
