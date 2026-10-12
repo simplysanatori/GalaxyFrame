@@ -27,12 +27,16 @@
 //
 // SteamVR's OpenXR API layer XR_APILAYER_VALVE_fdm_injection puts the Vulkan
 // layer VK_LAYER_VALVE_fdm_injection into instances made through
-// XR_KHR_vulkan_enable2: it hooks vkCmdBeginRendering, vkCreateGraphicsPipelines
-// and vkCreateImageView and injects a fragment density map (foveation) and a
+// XR_KHR_vulkan_enable2.  It injects a fragment density map (foveation) and a
 // depth copy into render passes whose targets have an XR swapchain's size.
-// adoptDevice() logs which library each key entry point resolves into;
-// DISABLE_VULKAN_FDM_INJECTION_LAYER=1 in the environment keeps the layer out
-// (an A/B switch, nothing else changes).
+// Tried headless (the layer forced on, FDM_DEBUG=enable, a fake swapchain
+// size): vkCreateImage, vkCreateImageView, vkCreateGraphicsPipelines and
+// vkCmdEndRenderingKHR resolve into the layer, vkCmdBeginRenderingKHR does
+// not; the renderer's pictures stayed within the tolerance (HUD targets of the
+// swapchain size changed slightly) and the validation layer, below it, lost
+// track of our rendering instances' ends.  adoptDevice() logs which library
+// each key entry point resolves into; DISABLE_VULKAN_FDM_INJECTION_LAYER=1 in
+// the environment keeps the layer out (an A/B switch, nothing else changes).
 #pragma once
 
 #ifndef VK_NO_PROTOTYPES
