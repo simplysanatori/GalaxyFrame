@@ -169,6 +169,18 @@ public:
             port_log("xr vk: no motion vector or depth swapchains on Vulkan");
             return false;
         }
+        // SteamVR on the Frame accepts mip levels for a swapchain but allocates
+        // the image's memory for level 0 only (H2: a 2048x1152 swapchain of 12
+        // levels got 9.47 MB, one level is 9.44 MB): blitting the levels below
+        // wrote past the image, into the other images' memory, and the screen
+        // showed blocks of garbage.  One level on Vulkan (the compositor
+        // filters level 0, as it did for the GLES swapchains).
+        if (mips > 1) {
+            static bool logged = false;
+            if (!logged) port_log("xr vk: UI layer swapchains get one mip level (SteamVR allocates no more), %u asked", mips);
+            logged = true;
+            mips = 1;
+        }
         Chain& sc = *out;
         sc.width = width;
         sc.height = height;

@@ -75,6 +75,7 @@ typedef struct {
     int waited;  // of the images acquired, how many were waited for
 } Chain;
 static Chain gChains[MAXSC];
+static int gErrors = 0;  // ERROR lines in the trace
 static int gChainCount = 0;
 
 static char gExtNames[64][XR_MAX_EXTENSION_NAME_SIZE];
@@ -220,6 +221,12 @@ static XrResult XRAPI_CALL mCreateSwapchain(XrSession s, const XrSwapchainCreate
     c->images = gGfx->create_images(c->format, ci->usageFlags, c->w, c->h, c->mips, c->count);
     trace("createSwapchain sc%d %dx%d mips=%d format=0x%llx usage=0x%llx", gChainCount, c->w, c->h, c->mips, (long long)c->format,
           (unsigned long long)ci->usageFlags);
+    if (gGfx == &kMockGfxVk && ci->mipCount > 1) {
+        // SteamVR on the Frame allocates a Vulkan swapchain image's memory for
+        // level 0 only (H2): levels below it are written past the image.
+        trace("ERROR createSwapchain sc%d with %u mip levels: SteamVR allocates one", gChainCount, ci->mipCount);
+        gErrors++;
+    }
     *out = (XrSwapchain)(uintptr_t)(1000 + gChainCount);
     gChainCount++;
     return XR_SUCCESS;
@@ -245,7 +252,7 @@ static XrResult XRAPI_CALL mAcquire(XrSwapchain sc, const XrSwapchainImageAcquir
     trace("acquire sc%d idx=%u", chainId(sc), *idx);
     return XR_SUCCESS;
 }
-static int gErrors = 0, gReleases = 0, gBusyReleases = 0;
+static int gReleases = 0, gBusyReleases = 0;
 static double gBusyMaxMs = 0.0;
 static int gWaitHist[5];
 static int gPoseAge[6];  // display time minus locate time in refreshes: <0, 0, 1, 2, 3, more
