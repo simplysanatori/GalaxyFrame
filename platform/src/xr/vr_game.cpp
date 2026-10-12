@@ -121,6 +121,7 @@ float sStereoFar = 0.95f;     // the farthest things' distance apart on the scre
 float sStereoSize = 0.8f;     // each picture's size relative to the screen's single one (stereo_resolution)
 float sSkipHold = 1.0f;       // seconds A is held to skip a cutscene (skip_hold)
 bool sInvertCamera = true;    // the right stick's turns swapped (invert_camera)
+bool sDioramaTransitions = true;  // launch stars, pipes and arrivals stay in the diorama (diorama_transitions)
 bool sSmoothTurn = true;      // the right stick turns the diorama smoothly, not in steps (smooth_turn)
 // The stick's smooth turn (rad/s) and when it was set (host ns): input comes
 // from the frame loop's thread, the rig is updated on the game's.
@@ -505,6 +506,8 @@ extern "C" void port_vr_transit_end(const void* host) {
 
 extern "C" const void* port_vr_transit_host(void) { return sTransitHost.load(); }
 
+extern "C" int port_vr_diorama_transitions(void) { return sDioramaTransitions ? 1 : 0; }
+
 extern "C" void port_vr_pointer_touched(unsigned long long id) {
     int64_t now = port_host_time_ns();
     if (id != sLastTouchId.load() || now - sLastTouchSeen.load() > 200000000) {
@@ -576,6 +579,7 @@ vr::Setting sSettings[] = {
          sSkipHold = x;
          port_skip_set_hold_seconds(x);
      }},
+    {"diorama_transitions", 0.0f, 1.0f, 0.0f, FLAG(sDioramaTransitions)},
     {"smooth_turn", 0.0f, 1.0f, 0.0f, FLAG(sSmoothTurn)},
     {"turn_speed", 20.0f, 360.0f, 0.0f, NUMBER(sTurnSpeed)},
     {"tilt_speed", 10.0f, 180.0f, 0.0f, NUMBER(sTiltSpeed)},

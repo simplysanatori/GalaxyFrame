@@ -12,10 +12,19 @@
 // happens at once behind a short blink instead of turning the world.
 #pragma once
 
+#include <stdint.h>
+
 #include "../gx/gpu_renderer.h"
 #include "xmath.h"
 
 namespace vr {
+
+// PORT_GX_CAMERA flag: a transit or an arrival kept in the diorama
+// (diorama_transitions); the rig then follows the game camera.  Set by
+// GameScene::draw3D (kCameraTransit there); the two values must match and
+// not collide with the PORT_GX_CAMERA_* flags in port/compat.h (1..32).
+// Not in compat.h: every decomp file includes it.
+constexpr uint32_t kCameraTransit = 64;
 
 struct RigParams {
     float scale = 1.0f / 500.0f;             // metres per game unit
@@ -65,6 +74,15 @@ struct RigState {
     // changed suddenly (a switch, a room's wall), not by Mario running round
     // a small planet (that it keeps up with).
     xm::Vec3 recentUp{0, 1, 0};
+    // A transit kept in the diorama (kCameraTransit) follows the game
+    // camera; when it ends the rig settles back (no blinks) until its up has
+    // caught up with Mario's, at most settleLeft more seconds.
+    bool inTransit = false;
+    bool settle = false;
+    float settleLeft = 0.0f;
+    // The extra tilt (radians, like pitch) that gives the game camera's height
+    // during a transit; eases back to 0 afterwards.
+    float transitPitch = 0.0f;
 };
 
 // Advances the rig towards the camera's framing by dt seconds and returns

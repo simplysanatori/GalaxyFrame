@@ -77,6 +77,7 @@ bool setting(const char* key) {
     return s && s->get() != 0.0f;
 }
 bool giantOn() { return setting("giant_screen"); }
+bool giantOff() { return !giantOn(); }
 bool stereoOn() { return giantOn() && setting("stereo_screen"); }
 bool passthroughUsable() { return giantOn() && vr::passthroughAvailable(); }
 bool sharpenOn() { return setting("sharpening"); }
@@ -149,6 +150,7 @@ void skipText(float value, char* out, size_t size) {
 
 const Item kScreenItems[] = {
     {"giant_screen", "Giant screen", "Play on a big screen, no diorama", kSwitch},
+    {"diorama_transitions", "Diorama in flights", "Launch stars, pipes and arrivals stay in the diorama", kSwitch, 0, 0, 0, nullptr, giantOff},
     {"screen_distance", "Screen distance", "How far away the giant screen is", kSlider, 2.5f, 10.0f, 0.5f, "%.1f m", giantOn},
     {"passthrough", "Passthrough", nullptr, kSwitch, 0, 0, 0, nullptr, passthroughUsable, hintPassthrough},
     {"stereo_screen", "Stereoscopic 3D", nullptr, kSwitch, 0, 0, 0, nullptr, giantOn, hintStereo},
