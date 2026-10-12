@@ -9,7 +9,7 @@
 set -e
 cd "$(dirname "$0")"
 
-[ -f third_party/openxr/prefab/modules/headers/include/openxr/openxr.h ] || tools/fetch_openxr.sh
+[ -f third_party/openxr/prefab/modules/headers/include/openxr/openxr.h ] || bash tools/fetch_openxr.sh
 
 BUILD=${BUILD:-build-linux}
 

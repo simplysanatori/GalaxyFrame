@@ -20,4 +20,44 @@ if [ -n "$SteamAppId" ] && [ -x "$VRCMD" ]; then
     "$VRCMD" --set-settings-int "steam.app.$SteamAppId.${kv%=*}" "${kv#*=}" > /dev/null 2>&1 || echo "could not set SteamVR's ${kv%=*}"
   done
 fi
-exec "$HERE/galaxyquest" "$@"
+
+# Session logging, so a session can be read afterwards (tools/session-report.py):
+#  - vrtiming.log: SteamVR's compositor timing, a line a second, for the whole
+#    session (read-only; the last session's is kept as vrtiming.log.prev).
+#    GQ_VRTIMING=0 turns it off.
+#  - perfcriteria.txt: Steam's own performance log, copied next to the game's
+#    log when the game exits, if Steam wrote one during the session.
+# Neither can stop the game from starting: a missing python, missing OpenVR
+# library or an unwritable folder only means no log.
+VRT_PID=
+touch "$HOME_DIR/.session-start" 2> /dev/null
+if [ "${GQ_VRTIMING:-1}" != 0 ] && command -v python3 > /dev/null 2>&1; then
+  for f in "$HERE/vrtiming.py" "$HERE/../src/tools/vrtiming.py" "$HERE/../tools/vrtiming.py"; do
+    [ -f "$f" ] && { VRT=$f; break; }
+  done
+  if [ -n "$VRT" ] && [ -f /opt/steamvr/bin/linuxarm64/libopenvr_api.so ]; then
+    [ -f "$HOME_DIR/vrtiming.log" ] && mv -f "$HOME_DIR/vrtiming.log" "$HOME_DIR/vrtiming.log.prev" 2> /dev/null
+    env -u LD_LIBRARY_PATH python3 -I "$VRT" 86400 "$HOME_DIR/vrtiming.log" > /dev/null 2>&1 &
+    VRT_PID=$!
+  fi
+fi
+
+# Not exec: the wrapper stays to stop the logger and collect the log.  A signal
+# for the wrapper (Steam stopping the app) goes on to the game.
+"$HERE/galaxyquest" "$@" &
+GAME_PID=$!
+trap 'kill -TERM "$GAME_PID" 2> /dev/null' TERM INT HUP
+rc=0
+while kill -0 "$GAME_PID" 2> /dev/null; do  # a signal interrupts wait before the game is gone
+  wait "$GAME_PID"
+  rc=$?
+done
+trap - TERM INT HUP
+
+[ -n "$VRT_PID" ] && kill "$VRT_PID" 2> /dev/null
+PERF=${GQ_PERFCRITERIA:-$HOME/.local/share/Steam/logs/perfcriteria.txt}
+if [ -f "$PERF" ] && [ "$PERF" -nt "$HOME_DIR/.session-start" ]; then
+  [ -f "$HOME_DIR/perfcriteria.txt" ] && mv -f "$HOME_DIR/perfcriteria.txt" "$HOME_DIR/perfcriteria.txt.prev" 2> /dev/null
+  cp -f "$PERF" "$HOME_DIR/perfcriteria.txt" 2> /dev/null
+fi
+exit $rc
