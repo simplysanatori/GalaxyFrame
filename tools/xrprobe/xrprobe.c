@@ -22,9 +22,14 @@
 //   --spacewarp     XR_FB_space_warp: motion vectors (R16G16B16A16_SFLOAT,
 //                   (current - previous) NDC of the object's motion, head
 //                   motion left to the runtime) and depth chained on each
-//                   projection view as XrCompositionLayerSpaceWarpInfoFB; the
-//                   checkerboard drawn at --fps (default 60: half of 120 Hz)
-//   --spacewarp --no-mv  the same frame rate and content, nothing chained
+//                   projection view as XrCompositionLayerSpaceWarpInfoFB.
+//                   New content on every second display slot (counted from
+//                   predictedDisplayTime against the display's refresh: 60
+//                   a second at 120 Hz); the slots between submit the last
+//                   content again (same images and poses, no SpaceWarp
+//                   info).  A counter strip under the checkerboard shows
+//                   the content frame number.
+//   --spacewarp --no-mv  the same cadence and content, nothing chained
 //   --sequence-sw   cases 6 and 7: --spacewarp, then --spacewarp --no-mv, in
 //                   one session ("6 SPACE", "7 no-SPC" in each eye)
 // Options: --hz N (XR_FB_display_refresh_rate), --seconds N (per case, default
@@ -55,7 +60,6 @@
 
 #include <vulkan/vulkan.h>
 #define XR_USE_GRAPHICS_API_VULKAN
-#define XR_USE_TIMESPEC
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
@@ -186,17 +190,7 @@ static void logf_(int toStdout, const char* fmt, ...) {
 #define FLOG(...) logf_(0, __VA_ARGS__)
 
 static XrInstance g_instance = XR_NULL_HANDLE;
-static PFN_xrConvertTimespecTimeToTimeKHR toXrTime;
 
-// The host time as an XrTime (0 without XR_KHR_convert_timespec_time).
-static XrTime xrNow(void) {
-    if (!toXrTime) return 0;
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    XrTime t = 0;
-    if (XR_FAILED(toXrTime(g_instance, &ts, &t))) return 0;
-    return t;
-}
 
 static const char* xrStr(XrResult r) {
     static char buf[XR_MAX_RESULT_STRING_SIZE];
@@ -334,7 +328,6 @@ static ExtWant g_exts[] = {
     {"XR_EXT_frame_synthesis", 0, 0},          // enabled for --synth only
     {"XR_KHR_composition_layer_depth", 0, 0},  // enabled for --depth-only only
     {"XR_FB_space_warp", 0, 0},                // enabled for --spacewarp / --sequence-sw only
-    {"XR_KHR_convert_timespec_time", 0, 1},    // the --fps cap's clock (display times in host time)
 };
 #define N_EXTS (sizeof(g_exts) / sizeof(g_exts[0]))
 
@@ -667,6 +660,7 @@ typedef struct {
     double gpuMs;          // timestamp queries; < 0 when unknown
     int busyAtRelease;     // GPU work of this frame unfinished at xrReleaseSwapchainImage
     int busyAtEnd;         // ... and when xrEndFrame returned
+    int resubmit;          // SpaceWarp cases: the last content submitted again (no new frame)
     XrResult beginRes, endRes;
     uint32_t iterations;   // heavy loop count (pace)
 } FrameRec;
@@ -693,10 +687,10 @@ static void logFrame(const FrameRec* r) {
     if (r->gpuMs >= 0) snprintf(gpu, sizeof(gpu), "%.3f", r->gpuMs);
     else snprintf(gpu, sizeof(gpu), "-");
     FLOG("F n=%llu drawn=%llu pdt=%lld period_ms=%.3f render=%d rendered=%d wait_ms=%.3f gap_ms=%.3f sleep_ms=%.3f "
-         "cpu_ms=%.3f fence_ms=%.3f end_ms=%.3f gpu_ms=%s iters=%u busy_rel=%d busy_end=%d begin=%s end=%s",
+         "cpu_ms=%.3f fence_ms=%.3f end_ms=%.3f gpu_ms=%s iters=%u busy_rel=%d busy_end=%d resub=%d begin=%s end=%s",
          (unsigned long long)r->n, (unsigned long long)r->drawn, (long long)r->pdt, r->period * 1e-6,
          r->shouldRender, r->rendered, r->waitMs, r->gapMs, r->sleepMs, r->cpuMs, r->fenceWaitMs, r->endMs, gpu,
-         r->iterations, r->busyAtRelease, r->busyAtEnd, xrStr(r->beginRes), xrStr(r->endRes));
+         r->iterations, r->busyAtRelease, r->busyAtEnd, r->resubmit, xrStr(r->beginRes), xrStr(r->endRes));
 }
 
 static int cmpDouble(const void* a, const void* b) {
@@ -729,7 +723,7 @@ static void usage(FILE* f, const char* argv0) {
             "  --depth-only      XR_KHR_composition_layer_depth, checkerboard at display rate\n"
             "  --sequence        all five cases above in one session, --seconds each, case number\n"
             "                    and label drawn in each eye\n"
-            "  --spacewarp       XR_FB_space_warp (MV + depth), checkerboard at --fps (60)\n"
+            "  --spacewarp       XR_FB_space_warp (MV + depth), new content every second display slot\n"
             "  --spacewarp --no-mv  the same frame rate, nothing chained\n"
             "  --sequence-sw     the two SpaceWarp cases (6, 7) in one session\n"
             "options:\n"
@@ -1024,8 +1018,31 @@ static void drawLabel(VkCommandBuffer cmd, VkPipelineLayout layout, VkPipeline p
     vkCmdDraw(cmd, 6, 1, 0, 0);
 }
 
+// The SpaceWarp cases' content counter: a strip under the checkerboard with
+// the number of the content frame (and a hue stepping with it), so a panel
+// recording shows the content cadence.  In the motion vector pass it is
+// drawn with zero motion.
+static void drawCounter(VkCommandBuffer cmd, VkPipelineLayout layout, VkPipeline pipe, const Mat4* vp, uint64_t number,
+                        int forMv) {
+    Mat4 model = placeQuad(0.0f, -0.85f, -2.0f, 0.6f, 0.2f);
+    Push p;
+    memset(&p, 0, sizeof(p));
+    p.mvp = matMul(vp, &model);
+    if (forMv) {
+        p.aux = p.mvp;
+    } else {
+        p.aux.m[0] = 1.0f;  // mode: frame-number panel
+        p.aux.m[1] = (float)(number % 1000000);
+        p.aux.m[2] = (float)fmod((double)number / 12.0, 1.0);
+    }
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(p), &p);
+    vkCmdDraw(cmd, 6, 1, 0, 0);
+}
+
 static void summarize(const char* name, RecList* recs, uint64_t endFailures) {
-    size_t nr_ = 0, busyRel = 0, busyEnd = 0, longGaps = 0, ng = 0, ngap = 0;
+    size_t nr_ = 0, busyRel = 0, busyEnd = 0, longGaps = 0, ng = 0, ngap = 0, resubmits = 0;
+    XrTime firstPdt = 0, lastPdt_ = 0;
     double* gpu = malloc((recs->n + 1) * sizeof(double));
     double* gap = malloc((recs->n + 1) * sizeof(double));
     double* cpu = malloc((recs->n + 1) * sizeof(double));
@@ -1035,6 +1052,11 @@ static void summarize(const char* name, RecList* recs, uint64_t endFailures) {
         if (r->gapMs > 0) {
             gap[ngap++] = r->gapMs;
             if (r->period > 0 && r->gapMs > 1.5 * r->period * 1e-6) longGaps++;
+        }
+        resubmits += (size_t)r->resubmit;
+        if (r->shouldRender) {
+            if (!firstPdt) firstPdt = r->pdt;
+            lastPdt_ = r->pdt;
         }
         if (!r->rendered) continue;
         endms[nr_] = r->endMs;
@@ -1046,6 +1068,9 @@ static void summarize(const char* name, RecList* recs, uint64_t endFailures) {
     double a, b, c;
     LOG("SUMMARY %s: %zu frames, %zu rendered, %llu xrEndFrame failures", name, recs->n, nr_,
         (unsigned long long)endFailures);
+    double span = lastPdt_ > firstPdt ? (lastPdt_ - firstPdt) * 1e-9 : 0;
+    LOG("SUMMARY %s new content frames %zu (%.1f a second of display time), slots that submitted the last content again %zu",
+        name, nr_, span > 0 ? nr_ / span : 0.0, resubmits);
     percentiles(gpu, ng, &a, &b, &c);
     LOG("SUMMARY %s gpu ms p50 %.3f p95 %.3f max %.3f (%zu samples)", name, a, b, c, ng);
     percentiles(cpu, nr_, &a, &b, &c);
@@ -1103,7 +1128,7 @@ int main(int argc, char** argv) {
 
     char fpsStr[64];
     if (g_opt.fps >= 0) snprintf(fpsStr, sizeof(fpsStr), "%.1f", g_opt.fps);
-    else snprintf(fpsStr, sizeof(fpsStr), "auto (30 synth, 60 SpaceWarp, else display)");
+    else snprintf(fpsStr, sizeof(fpsStr), "auto (30 synth, else display; SpaceWarp: every 2nd slot)");
     char cfg[512];
     snprintf(cfg, sizeof(cfg),
              "mode %s, %d case(s) of %.1f s, hz %s%.1f, fps cap %s, gpu target %.1f ms, mv %s, log %s",
@@ -1212,8 +1237,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (hasExt("XR_KHR_convert_timespec_time"))
-        xrGetInstanceProcAddr(g_instance, "xrConvertTimespecTimeToTimeKHR", (PFN_xrVoidFunction*)&toXrTime);
     XrInstanceProperties ip = {XR_TYPE_INSTANCE_PROPERTIES};
     XR_CHECK(xrGetInstanceProperties(g_instance, &ip));
     LOG("runtime: %s %u.%u.%u", ip.runtimeName, XR_VERSION_MAJOR(ip.runtimeVersion),
@@ -1443,7 +1466,12 @@ int main(int argc, char** argv) {
     double started = nowSec(), windowStart = started, lastWaitReturn = 0, lastPeriodSec = 1.0 / 90.0;
     uint64_t winFrames = 0, winRendered = 0, endFailures = 0;
     XrTime prevDisplayTime = 0;
-    XrTime lastPdt = 0, leadNs = 0;  // the --fps cap's display time clock
+    // The SpaceWarp cases: new content on every second display slot, the
+    // slots between submit the last content again (same images and poses,
+    // no SpaceWarp info).  Slots are counted from predictedDisplayTime.
+    XrTime lastNewPdt = 0;
+    XrCompositionLayerProjectionView pvLast[2];
+    uint64_t content = 0;  // new content frames of the case (the counter strip)
     XrView prevViews[2];
     int havePrev = 0;
     // adaptive load: keep the measured GPU time near the target during the run
@@ -1540,35 +1568,14 @@ int main(int argc, char** argv) {
         rec.n = frameIdx++;
         rec.iterations = iterations;
 
-        // --fps: a whole number of display refreshes per frame.  SteamVR's
-        // xrWaitFrame blocks only when called before the start of the next
-        // frame; called later it returns at once with the earliest display
-        // time still reachable (H1c: a wall-clock sleep after the last
-        // return gave a mix of 1 and 2 refresh steps, 89 fps).  So the loop
-        // aims at display times: it sleeps until the deadline of the display
-        // time one refresh after the last frame's has passed, half a refresh
-        // before the one it wants, with the deadline taken from a blocking
-        // xrWaitFrame (its display time minus the host time it returned at).
-        // The refresh is the display's own (xrGetDisplayRefreshRateFB), not
-        // the predicted period, which SteamVR reports as 16.7 ms for some
-        // frames of a 120 Hz loop.  Without XR_KHR_convert_timespec_time: a
-        // sleep from the last return (the mock).
-        if (fps > 0 && lastWaitReturn > 0) {
-            if (getRate) getRate(session, &rate);  // SteamVR switches the rate after the session starts
-            double refresh = rate > 0 ? 1.0 / rate : lastPeriodSec;
-            long nRefresh = lround(1.0 / fps / refresh);
-            if (nRefresh < 1) nRefresh = 1;
-            double s_ = 0;
-            if (toXrTime && leadNs > 0 && lastPdt) {
-                XrTime want = lastPdt + (XrTime)((nRefresh - 0.5) * refresh * 1e9) - leadNs;
-                XrTime now = xrNow();
-                if (now && want > now) s_ = (want - now) * 1e-9;
-            } else {
-                double target = lastWaitReturn + nRefresh * refresh - 0.3 * refresh;
-                double now = nowSec();
-                if (target > now) s_ = target - now;
-            }
-            if (s_ > 0) {
+        // --fps (the synth cases): start the next frame no earlier than
+        // 1/fps after the last xrWaitFrame return, less half a refresh.  The
+        // SpaceWarp cases do not sleep: they pace by display slots (below).
+        if (fps > 0 && cs->mode != MODE_SW && lastWaitReturn > 0) {
+            double target = lastWaitReturn + 1.0 / fps - 0.5 * lastPeriodSec;
+            double now = nowSec();
+            if (target > now) {
+                double s_ = target - now;
                 struct timespec ts = {(time_t)s_, (long)((s_ - (time_t)s_) * 1e9)};
                 nanosleep(&ts, NULL);
                 rec.sleepMs = s_ * 1e3;
@@ -1580,17 +1587,7 @@ int main(int argc, char** argv) {
         XR_CHECK(xrWaitFrame(session, NULL, &fs));
         double w1 = nowSec();
         rec.waitMs = (w1 - w0) * 1e3;
-        // The deadline of a display time: how long before it a blocking
-        // xrWaitFrame returns.
-        if (toXrTime && rec.waitMs > 0.5) {
-            XrTime now = xrNow();
-            if (now && fs.predictedDisplayTime > now) {
-                XrTime lead = fs.predictedDisplayTime - now;
-                if (!leadNs) LOG("display time lead of a blocking xrWaitFrame: %.2f ms", lead * 1e-6);
-                leadNs = lead;
-            }
-        }
-        lastPdt = fs.predictedDisplayTime;
+
         rec.gapMs = lastWaitReturn > 0 ? (w1 - lastWaitReturn) * 1e3 : 0;
         if (lastWaitReturn > 0 && fs.shouldRender &&
             (sessionState == XR_SESSION_STATE_VISIBLE || sessionState == XR_SESSION_STATE_FOCUSED)) {
@@ -1618,7 +1615,24 @@ int main(int argc, char** argv) {
         uint32_t layerCount = 0;
         int slot = -1;
 
-        if (fs.shouldRender) {
+        // SpaceWarp cases: new content only on every second display slot,
+        // counted from predictedDisplayTime against the display's own
+        // refresh; the slots between submit the last content again.
+        int resubmit = 0;
+        if (fs.shouldRender && cs->mode == MODE_SW && lastNewPdt) {
+            if (getRate) getRate(session, &rate);
+            XrDuration r = rate > 0 ? (XrDuration)(1e9 / rate) : fs.predictedDisplayPeriod;
+            resubmit = fs.predictedDisplayTime < lastNewPdt + 2 * r - r / 2;
+        }
+        if (fs.shouldRender && resubmit) {
+            pv[0] = pvLast[0];
+            pv[1] = pvLast[1];
+            proj.space = local;
+            proj.viewCount = 2;
+            proj.views = pv;
+            layers[layerCount++] = (const XrCompositionLayerBaseHeader*)&proj;
+            rec.resubmit = 1;
+        } else if (fs.shouldRender) {
             XrViewLocateInfo vli = {XR_TYPE_VIEW_LOCATE_INFO};
             vli.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
             vli.displayTime = fs.predictedDisplayTime;
@@ -1752,6 +1766,7 @@ int main(int argc, char** argv) {
                                            sizeof(p), &p);
                         vkCmdDraw(cmd, 6, 1, 0, 0);
                         if (seq) drawLabel(cmd, layout, mvPipe, &vp_, cs->label, 1);
+                        if (cs->mode == MODE_SW) drawCounter(cmd, layout, mvPipe, &vp_, content, 1);
                     }
                     pfnEndRendering(cmd);
                 }
@@ -1810,6 +1825,7 @@ int main(int argc, char** argv) {
                                        sizeof(p), &p);
                     vkCmdDraw(cmd, 6, 1, 0, 0);
                     if (seq) drawLabel(cmd, layout, colorPipe, &vp_, cs->label, 0);
+                    if (cs->mode == MODE_SW) drawCounter(cmd, layout, colorPipe, &vp_, content, 0);
                 }
                 pfnEndRendering(cmd);
 
@@ -1899,6 +1915,14 @@ int main(int argc, char** argv) {
             rec.rendered = 1;
             rec.drawn = drawn++;
             winRendered++;
+            if (cs->mode == MODE_SW) {
+                lastNewPdt = fs.predictedDisplayTime;
+                for (int e = 0; e < 2; e++) {
+                    pvLast[e] = pv[e];
+                    pvLast[e].next = NULL;  // the SpaceWarp info goes with new content only
+                }
+                content++;
+            }
             prevDisplayTime = fs.predictedDisplayTime;
             prevViews[0] = views[0];
             prevViews[1] = views[1];
@@ -1969,7 +1993,8 @@ int main(int argc, char** argv) {
             adaptSum = 0;
             adaptCount = 0;
             lastWaitReturn = 0; // no throttle carry-over into the next case
-            lastPdt = 0;
+            lastNewPdt = 0;
+            content = 0;
         }
     }
 
