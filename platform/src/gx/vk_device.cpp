@@ -471,6 +471,9 @@ bool fillDeviceSetup(VkPhysicalDevice phys, DeviceSetup* s) {
         {e3.extendedDynamicState3ColorBlendEquation == VK_TRUE, "extendedDynamicState3ColorBlendEquation"},
         {e3.extendedDynamicState3ColorWriteMask == VK_TRUE, "extendedDynamicState3ColorWriteMask"},
         {dc.depthClipControl == VK_TRUE, "depthClipControl"},
+        // Test of the fall back to GLES: PETARI_VKTEST_MISSING=1 makes a GPU
+        // without a feature the renderer needs.
+        {!debugEnv("PETARI_VKTEST_MISSING"), "(PETARI_VKTEST_MISSING)"},
     };
     if (!missing.empty()) {
         // Features of missing extensions read as false; name the extensions only.

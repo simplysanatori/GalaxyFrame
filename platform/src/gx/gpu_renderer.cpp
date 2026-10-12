@@ -21,17 +21,29 @@ namespace {
 std::string sShaderCachePath;
 std::string sIniChoice;  // `renderer = ...` from the ini file
 bool sCreated = false;
+const char* sForcedGles = nullptr;  // forceGles(): why
 
 bool isVulkan(const char* name) { return !strcasecmp(name, "vk") || !strcasecmp(name, "vulkan"); }
 bool isGles(const char* name) { return !strcasecmp(name, "gles") || !strcasecmp(name, "gl"); }
 
-Renderer* createRenderer() {
-    sCreated = true;
+// What PETARI_GFX or the ini file asks for, and which of the two said it.
+const char* wanted(const char** from) {
     const char* want = debugEnv("PETARI_GFX");
-    const char* from = "PETARI_GFX";
+    *from = "PETARI_GFX";
     if (!want && !sIniChoice.empty()) {
         want = sIniChoice.c_str();
-        from = "renderer";
+        *from = "renderer";
+    }
+    return want;
+}
+
+Renderer* createRenderer() {
+    sCreated = true;
+    const char* from = nullptr;
+    const char* want = wanted(&from);
+    if (want && isVulkan(want) && sForcedGles) {
+        port_log("gpu: %s = %s, but %s; using GLES", from, want, sForcedGles);
+        return createGlesRenderer();
     }
     if (want && isVulkan(want)) {
         if (Renderer* r = createVulkanRenderer()) {
@@ -72,6 +84,20 @@ void selectRenderer(const char* iniPath) {
         }
     }
     fclose(f);
+}
+
+Api requestedApi() {
+    const char* from = nullptr;
+    const char* want = wanted(&from);
+    return want && isVulkan(want) ? Api::Vulkan : Api::Gles;
+}
+
+void forceGles(const char* why) {
+    if (sCreated) {
+        port_log("gpu: forceGles after the renderer was created; ignored");
+        return;
+    }
+    sForcedGles = why;
 }
 
 void setShaderCachePath(const char* path) { sShaderCachePath = path ? path : ""; }

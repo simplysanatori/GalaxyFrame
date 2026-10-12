@@ -169,6 +169,36 @@ struct App {
     bool warpSkip = false;      // the frame just rendered is not to be extrapolated
     XrPosef warpDelta{};        // its app-space delta pose
 
+    // The frame loop on Vulkan (renderEyesVk): one set of eye swapchains.
+    // At 120 Hz a game frame's eyes are rendered together on one refresh,
+    // from one xrLocateViews for the next refresh's display time, and
+    // released and submitted with exactly those poses on that next refresh,
+    // once the GPU has finished them; the refresh in between shows the last
+    // set again.  At other rates each refresh renders, waits and submits.
+    bool vk = false;
+    struct VkSet {
+        bool valid = false;
+        bool submitted = false;
+        bool now = false;  // released at the end of the refresh it was rendered in
+        XrPosef pose[2];
+        XrFovf fov[2];
+        XrExtent2Di rect[2];
+        XrSpace space = XR_NULL_HANDLE;  // the app space the poses are in
+        XrTime time = 0;                 // the display time they were located for
+    };
+    VkSet vkPending;              // rendered, not yet released
+    bool vkShownNow = false;      // this refresh released the last set (the second of a game frame's two)
+    bool uiPending[vr::kUiLayerCount] = {};  // UI layer image drawn, released with the work it was recorded with
+    XrSpace shownSpace = XR_NULL_HANDLE;     // the space of the set on show
+    XrSpace retiredSpaces[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};  // app spaces sets on show or pending may still be in
+    // The views each set was rendered from, against a locate at the display
+    // time it is shown at first (logged every 5 s).
+    int poseSets = 0, poseOnTime = 0;
+    double poseDtMax = 0.0, poseDtSum = 0.0;
+    double posePosSum[2] = {}, posePosMax[2] = {}, poseAngSum[2] = {}, poseAngMax[2] = {};
+    double poseIpdMin = 1e9, poseIpdMax = 0.0;
+    int64_t poseLogAt = 0;
+
     // Input
     XrActionSet actionSet = XR_NULL_HANDLE;
     XrAction moveAction, lookAction, aAction, bAction, xAction, yAction, triggerAction, gripAction, menuAction, stickClickAction,
@@ -248,6 +278,15 @@ bool hasExtension(const std::vector<XrExtensionProperties>& exts, const char* na
         }
     }
     return false;
+}
+
+// Whether the runtime lists an instance extension (before the instance).
+bool runtimeOffers(const char* name) {
+    uint32_t count = 0;
+    if (XR_FAILED(xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr))) return false;
+    std::vector<XrExtensionProperties> exts(count, {XR_TYPE_EXTENSION_PROPERTIES});
+    if (XR_FAILED(xrEnumerateInstanceExtensionProperties(nullptr, count, &count, exts.data()))) return false;
+    return hasExtension(exts, name);
 }
 
 void initInstance(App& a) {
@@ -674,7 +713,8 @@ void initSession(App& a) {
         int32_t h = (int32_t)lroundf(vc.recommendedImageRectHeight * scale);
         w = w < (int32_t)vc.maxImageRectWidth ? w : (int32_t)vc.maxImageRectWidth;
         h = h < (int32_t)vc.maxImageRectHeight ? h : (int32_t)vc.maxImageRectHeight;
-        for (int s = 0; s < App::kEyeSets; s++) {
+        // Vulkan: one set (renderEyesVk), the images of a swapchain take turns.
+        for (int s = 0; s < (a.vk ? 1 : App::kEyeSets); s++) {
             // Color only: the composite into the swapchain (vr::renderEye)
             // draws without depth.
             gfx.createChain(a.session, xrgfx::ImageKind::Eye, w, h, 1, &a.eyes[s][e]);
@@ -685,6 +725,10 @@ void initSession(App& a) {
 
     // SpaceWarp: per eye, motion vectors (16-bit float, as Meta recommends)
     // and depth with stencil, at the recommended size.
+    if (a.hasSpaceWarp && a.vk) {
+        port_log("XR SpaceWarp: off with the Vulkan renderer (not implemented there)");
+        a.hasSpaceWarp = false;
+    }
     if (a.hasSpaceWarp) {
         bool haveMotion = gfx.hasFormat(xrgfx::ImageKind::Motion), haveDepth = gfx.hasFormat(xrgfx::ImageKind::Depth);
         if (!haveMotion || !haveDepth) {
@@ -1141,7 +1185,14 @@ void setAppSpace(App& a, const XrPosef& poseInLocal) {
     if (XR_FAILED(xrCreateReferenceSpace(a.session, &rs, &space))) {
         return;
     }
-    xrDestroySpace(a.appSpace);
+    if (a.vk) {
+        // Sets rendered in the old space may still go out (renderEyesVk).
+        if (a.retiredSpaces[1] != XR_NULL_HANDLE) xrDestroySpace(a.retiredSpaces[1]);
+        a.retiredSpaces[1] = a.retiredSpaces[0];
+        a.retiredSpaces[0] = a.appSpace;
+    } else {
+        xrDestroySpace(a.appSpace);
+    }
     a.appSpace = space;
 }
 
@@ -1279,15 +1330,15 @@ void maybeSaveScreenShot(int k, const vr::UiLayer& l, const gpu::EfbTarget& imag
     }).detach();
 }
 
-void maybeSaveShot(App& a, int s, const uint32_t idx[2], gpu::TexHandle motionTex = 0) {
+void maybeSaveShot(App& a, const Swapchain* eyes, const XrExtent2Di* rect, const uint32_t idx[2], gpu::TexHandle motionTex = 0) {
     if (gShotIntervalNs <= 0 || port_host_time_ns() < gShotNextAt) {
         return;
     }
     gShotNextAt = port_host_time_ns() + gShotIntervalNs;
-    int w = a.setRect[s][0].width, h = a.setRect[s][0].height;  // the part rendered
+    int w = rect[0].width, h = rect[0].height;  // the part rendered
     std::shared_ptr<std::vector<unsigned char>> px(new std::vector<unsigned char>((size_t)w * h * 8));
     for (int e = 0; e < 2; e++) {
-        vrdraw::draw().readPixels(a.eyes[s][e].images[idx[e]], w, h, px->data() + (size_t)e * w * h * 4);
+        vrdraw::draw().readPixels(eyes[e].images[idx[e]], w, h, px->data() + (size_t)e * w * h * 4);
     }
     char path[512];
     snprintf(path, sizeof(path), "%s/shot_%03d_f%llu.png", gShotDir.c_str(), gShotIndex++, (unsigned long long)gpu::renderer().frameNumber());
@@ -1429,10 +1480,230 @@ void renderPair(App& a, int s, const vr::FrameInfo& frame, const XrView views[2]
         a.setPose[s][e] = views[e].pose;
         a.setFov[s][e] = views[e].fov;
     }
-    maybeSaveShot(a, s, idx);
+    maybeSaveShot(a, a.eyes[s], a.setRect[s], idx);
     finishGpu();
     for (int e = 0; e < 2; e++) {
         releaseImage(a.eyes[s][e]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The frame loop on Vulkan.  SteamVR on the Frame shows a released image at
+// once, finished or not (H1b), so an image is released only after the GPU
+// has finished it.  A game frame's two eyes cost about 13 ms of GPU time
+// (6.5 ms each at 1344x1408, more than a 120 Hz refresh), and SteamVR's
+// xrWaitFrame returns about one refresh before the display time, so a set
+// rendered and waited for within one refresh would always miss it.  At
+// 120 Hz each game frame therefore takes two refreshes:
+//   first:  one xrLocateViews for the next refresh's display time, the
+//           game frame picked up, both eyes recorded into one command buffer
+//           from those views and submitted; the refresh itself shows the last
+//           set again (the compositor reprojects it);
+//   second: the fence waited for (the GPU had the refresh in between), both
+//           images released, and the set submitted with exactly the poses
+//           and fields of view it was rendered with.
+// No image is held longer than that one refresh and the right eye is never
+// rendered apart from the left (frame.2's paired steps did both, and the
+// right eye landed at a random offset).  At other refresh rates each refresh
+// renders, waits for the GPU and submits its own set.
+// ---------------------------------------------------------------------------
+
+// Pose check of a set going on show: its views against a locate at the
+// display time it is first shown at (a recurrence of an eye landing apart
+// from the other shows here without a headset).
+void notePoses(App& a, const App::VkSet& set, XrTime displayTime) {
+    XrView now[2] = {{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
+    XrViewLocateInfo li{XR_TYPE_VIEW_LOCATE_INFO};
+    li.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+    li.displayTime = displayTime;
+    li.space = set.space;
+    XrViewState vs{XR_TYPE_VIEW_STATE};
+    uint32_t n = 0;
+    if (XR_FAILED(xrLocateViews(a.session, &li, &vs, 2, &n, now)) || n < 2) return;
+    a.poseSets++;
+    double dt = fabs((double)(set.time - displayTime)) / 1e6;
+    a.poseOnTime += dt < 0.5;
+    a.poseDtSum += dt;
+    a.poseDtMax = fmax(a.poseDtMax, dt);
+    for (int e = 0; e < 2; e++) {
+        const XrVector3f& p = set.pose[e].position;
+        const XrVector3f& q = now[e].pose.position;
+        double d = sqrt((p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y) + (p.z - q.z) * (p.z - q.z)) * 1000.0;
+        const XrQuaternionf& r = set.pose[e].orientation;
+        const XrQuaternionf& s = now[e].pose.orientation;
+        double dot = fabs(r.x * s.x + r.y * s.y + r.z * s.z + r.w * s.w);
+        double ang = 2.0 * acos(fmin(1.0, dot)) * 57.29578;
+        a.posePosSum[e] += d;
+        a.posePosMax[e] = fmax(a.posePosMax[e], d);
+        a.poseAngSum[e] += ang;
+        a.poseAngMax[e] = fmax(a.poseAngMax[e], ang);
+    }
+    const XrVector3f& l = set.pose[0].position;
+    const XrVector3f& r = set.pose[1].position;
+    double ipd = sqrt((l.x - r.x) * (l.x - r.x) + (l.y - r.y) * (l.y - r.y) + (l.z - r.z) * (l.z - r.z)) * 1000.0;
+    a.poseIpdMin = fmin(a.poseIpdMin, ipd);
+    a.poseIpdMax = fmax(a.poseIpdMax, ipd);
+    int64_t t = port_host_time_ns();
+    if (t - a.poseLogAt >= 5000000000ll) {
+        if (a.poseLogAt) {
+            int k = a.poseSets;
+            port_log("vr: views of %d sets: %d for the display time they went out at (off %.2f ms avg, %.2f max); against a locate then: left eye "
+                     "%.2f mm %.3f deg avg, %.2f mm %.3f deg max; right eye %.2f mm %.3f deg avg, %.2f mm %.3f deg max; eye distance %.2f-%.2f mm",
+                     k, a.poseOnTime, a.poseDtSum / k, a.poseDtMax, a.posePosSum[0] / k, a.poseAngSum[0] / k, a.posePosMax[0], a.poseAngMax[0],
+                     a.posePosSum[1] / k, a.poseAngSum[1] / k, a.posePosMax[1], a.poseAngMax[1], a.poseIpdMin, a.poseIpdMax);
+        }
+        a.poseLogAt = t;
+        a.poseSets = a.poseOnTime = 0;
+        a.poseDtSum = a.poseDtMax = 0.0;
+        for (int e = 0; e < 2; e++) a.posePosSum[e] = a.posePosMax[e] = a.poseAngSum[e] = a.poseAngMax[e] = 0.0;
+        a.poseIpdMin = 1e9;
+        a.poseIpdMax = 0.0;
+    }
+}
+
+// The UI layer images drawn since the last release go back to the runtime
+// (their work is finished).
+void releaseUiVk(App& a) {
+    for (int k = 0; k < vr::kUiLayerCount; k++) {
+        if (!a.uiPending[k]) continue;
+        releaseImage(a.ui[k]);
+        a.uiPending[k] = false;
+        a.uiHasImage[k] = true;
+    }
+}
+
+// The pending set (and the UI layer images recorded with it) released once
+// the GPU has finished it, and on show from this refresh.  `due`: its
+// display time has come (the second refresh of a game frame), so a GPU not
+// done by now counts as a set not finished when due.
+void showPendingVk(App& a, XrTime displayTime, bool due) {
+    App::VkSet& p = a.vkPending;
+    if (!p.valid) return;
+    xrgfx::Gfx& gfx = xrgfx::gfx();
+    if (!p.submitted) {
+        a.renderedFence = gfx.submit();
+        a.renderedFenceAt = port_host_time_ns();
+        p.submitted = true;
+    }
+    int64_t t0 = port_host_time_ns();
+    if (due) {
+        a.fenceGapNs += t0 - a.renderedFenceAt;
+        a.fenceChecks++;
+    }
+    if (!gfx.waitFence(a.renderedFence, 0)) {
+        gfx.waitFence(a.renderedFence, 1000000000);
+        if (due) {
+            a.fenceWaits++;
+            int64_t waited = port_host_time_ns() - t0;
+            a.fenceWaitNs += waited;
+            if (waited > a.fenceWaitMaxNs) a.fenceWaitMaxNs = waited;
+        }
+    }
+    a.renderedFence = 0;
+    for (int e = 0; e < 2; e++) {
+        releaseImage(a.eyes[0][e]);
+        a.setPose[0][e] = p.pose[e];
+        a.setFov[0][e] = p.fov[e];
+        a.setRect[0][e] = p.rect[e];
+    }
+    releaseUiVk(a);
+    a.shownSet = 0;
+    a.shownSpace = p.space;
+    if (due) notePoses(a, p, displayTime);
+    p.valid = false;
+}
+
+// The eyes of a refresh on Vulkan (see above).
+void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration period, bool paired) {
+    a.vkShownNow = false;
+    if (a.vkPending.valid) {
+        // The second refresh of a game frame (or a set left over when the
+        // display left 120 Hz or the session stopped rendering).
+        showPendingVk(a, fs.predictedDisplayTime, fs.shouldRender);
+        a.vkShownNow = true;
+    }
+    if (!fs.shouldRender) {
+        updateInput(a, fs.predictedDisplayTime);
+        return;
+    }
+    if (paired && a.vkShownNow) {
+        // The game starts its next frame here with PETARI_RETRACE_STEP=2.
+        if (gBooted && !retraceInFirstStep()) port_vi_retrace();
+        return;
+    }
+    // Render: for the next refresh's display time at 120 Hz, for this one's
+    // otherwise.
+    XrTime time = paired ? fs.predictedDisplayTime + refresh : fs.predictedDisplayTime;
+    updateInput(a, time);
+    XrView views[2];
+    locateViews(a, time, views);
+    vr::FrameInfo frame = frameInfo(a, views, time);
+    // One eye's share of the GPU: as with the paired GLES steps (the
+    // compositor shares the GPU), or both eyes in one refresh.
+    frame.eyeBudgetMs = paired ? refresh * 0.65f / 1e6f : period / 2e6f;
+    int64_t t0 = port_host_time_ns();
+    vr::beginFrame(frame);
+    int64_t t1 = port_host_time_ns();
+    if (paired && gBooted && retraceInFirstStep()) port_vi_retrace();
+    uint32_t idx[2];
+    for (int e = 0; e < 2; e++) {
+        idx[e] = acquireImage(a.eyes[0][e]);
+    }
+    int64_t t2 = port_host_time_ns();
+    App::VkSet& p = a.vkPending;
+    for (int e = 0; e < 2; e++) {
+        Swapchain& sc = a.eyes[0][e];
+        vr::Extent used = vr::renderEye(e, frame, sc.images[idx[e]], sc.width, sc.height);
+        p.rect[e] = {used.width, used.height};
+        p.pose[e] = views[e].pose;
+        p.fov[e] = views[e].fov;
+    }
+    int64_t t3 = port_host_time_ns();
+    p.valid = true;
+    p.submitted = false;
+    p.now = !paired;
+    p.space = a.appSpace;
+    p.time = time;
+    // A late first step, broken down as on GLES (a few per 10 s).
+    static int lateLogged = 0;
+    static int64_t lateLogWindow = 0;
+    if (paired && t3 - a.workStartNs > refresh * 3 / 4) {
+        if (t3 - lateLogWindow > 10000000000ll) {
+            lateLogWindow = t3;
+            lateLogged = 0;
+        }
+        if (lateLogged++ < 3) {
+            port_log("vr: late first step: %.1f ms (before pickup %.1f, pickup %.1f, acquire %.1f, both eyes %.1f)", (t3 - a.workStartNs) / 1e6,
+                     (t0 - a.workStartNs) / 1e6, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6);
+        }
+    }
+    maybeSaveShot(a, a.eyes[0], p.rect, idx);
+}
+
+// The end of a refresh's work on Vulkan, after the UI layers were drawn:
+// one submission for everything recorded; what goes out in this refresh is
+// released once it has finished.
+void finishFrameVk(App& a, const XrFrameState& fs) {
+    App::VkSet& p = a.vkPending;
+    bool ui = false;
+    for (bool b : a.uiPending) ui |= b;
+    if (p.valid && !p.submitted) {
+        a.renderedFence = xrgfx::gfx().submit();
+        a.renderedFenceAt = port_host_time_ns();
+        p.submitted = true;
+    } else if (ui) {
+        xrgfx::Fence f = xrgfx::gfx().submit();
+        if (!p.valid) {
+            xrgfx::gfx().waitFence(f, 1000000000);
+        }
+    }
+    if (p.valid && !p.now) {
+        return;  // released on the next refresh, with the UI images drawn now
+    }
+    if (p.valid) {
+        showPendingVk(a, fs.predictedDisplayTime, false);
+    } else {
+        releaseUiVk(a);
     }
 }
 
@@ -1569,7 +1840,9 @@ void renderFrame(App& a) {
     }
 
     bool warpFrame = false;  // this frame goes out with motion vectors
-    if (!fs.shouldRender) {
+    if (a.vk) {
+        renderEyesVk(a, fs, refresh, period, paired);
+    } else if (!fs.shouldRender) {
         dropHeldEye(a);
         discardRendered(a);
         updateInput(a, fs.predictedDisplayTime);
@@ -1622,7 +1895,7 @@ void renderFrame(App& a) {
         a.warpSkip = vr::finishMotion(&dq, &dp);
         a.warpDelta.orientation = {dq.x, dq.y, dq.z, dq.w};
         a.warpDelta.position = {dp.x, dp.y, dp.z};
-        maybeSaveShot(a, s, idx, a.motion[0].images[motionIdx[0]].color);
+        maybeSaveShot(a, a.eyes[s], a.setRect[s], idx, a.motion[0].images[motionIdx[0]].color);
         for (int e = 0; e < 2; e++) {
             releaseImage(a.eyes[s][e]);
             releaseImage(a.motion[e]);
@@ -1697,7 +1970,7 @@ void renderFrame(App& a) {
         a.setRect[s][1] = {used.width, used.height};
         a.setPose[s][1] = views[1].pose;
         a.setFov[s][1] = views[1].fov;
-        maybeSaveShot(a, s, idx);
+        maybeSaveShot(a, a.eyes[s], a.setRect[s], idx);
         // Both images stay acquired until the next refresh (showRendered):
         // the compositor would read them before the GPU is done.
         a.renderedFence = xrgfx::gfx().submit();
@@ -1718,6 +1991,41 @@ void renderFrame(App& a) {
         renderPair(a, a.renderSet, frame, views);
         a.shownSet = a.renderSet;
         a.renderSet = (a.renderSet + 1) % App::kEyeSets;
+    }
+
+    // The panels with text, over the eye layer: their images are drawn when
+    // they changed (a layer shows the image last released).  On Vulkan an
+    // image is released once the work it was recorded with has finished
+    // (finishFrameVk, showPendingVk).
+    vr::UiLayer uiState[vr::kUiLayerCount];
+    bool uiVisible[vr::kUiLayerCount] = {};
+    if (fs.shouldRender && (a.shownSet >= 0 || a.vkPending.valid) && vr::uiLayers()) {
+        for (int k : vr::kUiLayerOrder) {
+            vr::UiLayer l = vr::uiLayer(k);
+            uiState[k] = l;
+            if (!l.visible) continue;
+            uiVisible[k] = true;
+            Swapchain& sc = a.ui[k];
+            if ((l.changed || !a.uiHasImage[k]) && !a.uiPending[k]) {
+                uint32_t idx = acquireImage(sc);
+                vr::drawUiLayer(k, sc.images[idx]);
+                if (k == vr::kScreenLayer || k == vr::kScreenRightLayer) {
+                    maybeSaveScreenShot(k, l, sc.images[idx], l.imageWidth ? l.imageWidth : sc.width, l.imageHeight ? l.imageHeight : sc.height);
+                }
+                if (sc.mips > 1) {
+                    vrdraw::draw().generateMips(sc.images[idx].color);
+                }
+                if (a.vk) {
+                    a.uiPending[k] = true;
+                } else {
+                    releaseImage(sc);
+                    a.uiHasImage[k] = true;
+                }
+            }
+        }
+    }
+    if (a.vk) {
+        finishFrameVk(a, fs);
     }
 
     XrCompositionLayerProjectionView projViews[2] = {{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}, {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
@@ -1763,33 +2071,20 @@ void renderFrame(App& a) {
                 projViews[e].next = &w;
             }
         }
-        layer.space = a.appSpace;
+        layer.space = a.vk ? a.shownSpace : a.appSpace;  // Vulkan: the space the set's poses were located in
         layer.viewCount = 2;
         layer.views = projViews;
         layerCount = 1;
     }
-    // The panels with text, over the eye layer (their images are drawn when
-    // they changed; a layer shows the image last released).
+    // The panels' quad layers.
     XrCompositionLayerQuad quads[vr::kUiLayerCount];
     XrCompositionLayerSettingsFB quadSettings[vr::kUiLayerCount];
     uint32_t quadCount = 0;
     if (layerCount && vr::uiLayers()) {
         for (int k : vr::kUiLayerOrder) {
-            vr::UiLayer l = vr::uiLayer(k);
-            if (!l.visible) continue;
+            if (!uiVisible[k] || !a.uiHasImage[k]) continue;
+            const vr::UiLayer& l = uiState[k];
             Swapchain& sc = a.ui[k];
-            if (l.changed || !a.uiHasImage[k]) {
-                uint32_t idx = acquireImage(sc);
-                vr::drawUiLayer(k, sc.images[idx]);
-                if (k == vr::kScreenLayer || k == vr::kScreenRightLayer) {
-                    maybeSaveScreenShot(k, l, sc.images[idx], l.imageWidth ? l.imageWidth : sc.width, l.imageHeight ? l.imageHeight : sc.height);
-                }
-                if (sc.mips > 1) {
-                    vrdraw::draw().generateMips(sc.images[idx].color);
-                }
-                releaseImage(sc);
-                a.uiHasImage[k] = true;
-            }
             XrCompositionLayerQuad& q = quads[quadCount++];
             q = {XR_TYPE_COMPOSITION_LAYER_QUAD};
             q.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;  // premultiplied
@@ -2031,7 +2326,16 @@ extern "C" __attribute__((visibility("default"))) void port_linux_main(const cha
     // the OpenXR session is bound to the same one.
     gpu::selectRenderer((ext + "/petari_vr.ini").c_str());
     vr::loadSettings((ext + "/petari_vr.ini").c_str());  // before the swapchains are sized
+#ifndef __ANDROID__
+    // A Vulkan renderer needs the runtime's Vulkan binding: without it the
+    // renderer is GLES from the start (the presentation and the renderer
+    // always use the same API).
+    if (gpu::requestedApi() == gpu::Api::Vulkan && !runtimeOffers("XR_KHR_vulkan_enable2")) {
+        gpu::forceGles("the OpenXR runtime has no XR_KHR_vulkan_enable2");
+    }
+#endif
     xrgfx::select(xrgfx::wantedApi());
+    a.vk = xrgfx::gfx().api() == xrgfx::Api::Vulkan;
     xrgfx::gfx().createContext();
     initInstance(a);
     initActions(a);
