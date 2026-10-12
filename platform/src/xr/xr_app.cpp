@@ -93,6 +93,7 @@ struct App {
     bool sessionRunning = false;
     bool focused = false;
     bool pausedInGameplay = false;  // focus was lost during ordinary gameplay
+    int64_t focusLostAt = 0;        // host time (ns) focus was lost
     uint32_t dpad = 0;              // D-pad direction held by the right stick
     bool stickClickHeld = false;    // the right stick's click, for its edge
     bool dpadTurned = false;        // that flick was a snap turn of the diorama, not the D-pad
@@ -1194,7 +1195,10 @@ void updateInput(App& a, XrTime time) {
 }
 
 // The game only runs while the session has input focus.  Coming back to
-// gameplay opens the game's pause menu, as the Wii's HOME menu did.
+// gameplay opens the game's pause menu, as the Wii's HOME menu did, but only
+// after a real absence: SteamVR sometimes takes focus for a few milliseconds
+// (FOCUSED -> VISIBLE -> SYNCHRONIZED and straight back), and opening the
+// menu then looked like the settings panel opening by itself.
 void updateFocus(App& a) {
     bool focused = a.state == XR_SESSION_STATE_FOCUSED;
     if (focused == a.focused) {
@@ -1204,6 +1208,7 @@ void updateFocus(App& a) {
     if (!focused) {
         uint32_t flags = gpu::renderer().camera().flags;
         a.pausedInGameplay = (flags & PORT_GX_CAMERA_DIORAMA) && !(flags & PORT_GX_CAMERA_POINTER_UI);
+        a.focusLostAt = port_host_time_ns();
         if (a.sessionRunning) {
             for (int h = 0; h < 2; h++) {
                 XrHapticActionInfo hi{XR_TYPE_HAPTIC_ACTION_INFO};
@@ -1214,7 +1219,12 @@ void updateFocus(App& a) {
         }
         a.lastRumble = 0;
     } else if (a.pausedInGameplay) {
-        port_input_request_pause();  // back from the system menu: the game's pause menu
+        int64_t away = port_host_time_ns() - a.focusLostAt;
+        if (away > 1000000000ll) {
+            port_input_request_pause();  // back from the system menu: the game's pause menu
+        } else {
+            port_log("vr: focus back after %.0f ms: no pause menu", away / 1e6);
+        }
         a.pausedInGameplay = false;
     }
     port_set_paused(!focused);
