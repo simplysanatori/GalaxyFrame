@@ -2,11 +2,10 @@
 // (vr_game.cpp).
 #pragma once
 
-#include <GLES3/gl32.h>
-
 #include <string>
 #include <vector>
 
+#include "../gx/gl_renderer.h"
 #include "xmath.h"
 
 namespace vr {
@@ -187,12 +186,13 @@ bool uiLayers();
 void uiLayerSize(int which, int* width, int* height);
 // A UI layer's state after the eyes of a frame or refresh were rendered.
 UiLayer uiLayer(int which);
-// Draws UI layer `which` into `fbo` (a swapchain image of uiLayerSize;
+// Draws UI layer `which` into `dst` (a swapchain image of uiLayerSize;
 // premultiplied alpha, sRGB).
-void drawUiLayer(int which, GLuint fbo);
+void drawUiLayer(int which, const gpu::EfbTarget& dst);
 // Composites a UI layer's image (`texture`, as drawUiLayer left it) into
-// the bound eye image, as the compositor would (the headless simulator).
-void compositeUiLayer(int which, GLuint texture, const xm::Mat4& viewProj);
+// the lower left `viewportWidth` x `viewportHeight` of the eye image `dst`,
+// as the compositor would (the headless simulator).
+void compositeUiLayer(int which, gpu::TexHandle texture, const xm::Mat4& viewProj, const gpu::EfbTarget& dst, int viewportWidth, int viewportHeight);
 
 // The runtime's performance counters (XR_META_performance_metrics), after
 // each frame: the GPU time of the app's last frame and of the compositor's
@@ -206,7 +206,7 @@ void beginFrame(const FrameInfo& frame);
 // Display refreshes the frame loop just missed (the dynamic resolution
 // steps down when they add up).
 void noteMissedRefreshes(int count);
-// Renders eye `eye` into `fbo` (a swapchain image, sRGB, width x height).
+// Renders eye `eye` into `dst` (a swapchain image, sRGB, width x height).
 // Returns the part of the image used, from its lower left corner: with
 // Super Resolution, the diorama at its render size when that fits (the
 // compositor scales it to the display in one step, with Meta Quest Super
@@ -214,27 +214,27 @@ void noteMissedRefreshes(int count);
 struct Extent {
     int width, height;
 };
-Extent renderEye(int eye, const FrameInfo& frame, GLuint fbo, int width, int height);
+Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int width, int height);
 
 // SpaceWarp (Meta's XR_FB_space_warp).  setMotionSize: the size of the
 // motion vector and depth images, before the first frame with
 // FrameInfo::motion.  renderMotion: after renderEye for both eyes of such a
 // frame, eye `eye`'s motion vectors (into `motionTex`, RGBA16F) and depth
-// (`depthTex`, GL_DEPTH24_STENCIL8).  finishMotion: once both eyes are
+// (`depthTex`, depth with 8 bit stencil).  finishMotion: once both eyes are
 // done, the frame's app-space delta pose (the room's pose in the game world
 // relative to the last frame's, as XrCompositionLayerSpaceWarpInfoFB wants
 // it); returns true when the compositor should not extrapolate from the
 // frame (the view changed as a whole: a cut, a fade between the diorama and
 // the virtual screen).
 void setMotionSize(int width, int height);
-void renderMotion(int eye, const FrameInfo& frame, GLuint motionTex, GLuint depthTex);
+void renderMotion(int eye, const FrameInfo& frame, gpu::TexHandle motionTex, gpu::TexHandle depthTex);
 bool finishMotion(xm::Quat* deltaOrientation, xm::Vec3* deltaPosition);
 // Debug view of a motion vector image (motion size, RGBA8, rows bottom up
 // as port_headless_write_png takes them):
 // red / green = horizontal / vertical motion around grey (1/40 of the view
 // per frame saturates), blue = 0 world, 128 fixed in the room, 255 player;
 // `summary` gets the average motion of each kind of pixel.
-void motionDebugImage(GLuint motionTex, std::vector<unsigned char>* rgba, std::string* summary);
+void motionDebugImage(gpu::TexHandle motionTex, std::vector<unsigned char>* rgba, std::string* summary);
 // Maps a controller aim ray (stage space) to the Wii pointer (-1..1).
 bool pointerFromRay(xm::Vec3 origin, xm::Vec3 dir, float* x, float* y);
 // The controller's aim is not tracked: no laser until pointerFromRay again.
@@ -249,7 +249,7 @@ void setAimLength(float metres);
 
 // Draws a premultiplied overlay texture with the model-view-projection
 // `mvp` (a unit quad around the origin), faded by `alpha`.
-void drawOverlayQuad(GLuint texture, const xm::Mat4& mvp, float alpha);
+void drawOverlayQuad(gpu::TexHandle texture, const xm::Mat4& mvp, float alpha);
 
 // The settings panel beside the game's pause menu (vr_settings.cpp).
 // settingsInit: after the GL context exists; changes are saved to `iniPath`.
