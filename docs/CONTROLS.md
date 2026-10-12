@@ -367,9 +367,11 @@ defaults).
 Every setting of the VR settings panel is a line of `petari_vr.ini`, next to
 the game data in `/sdcard/Android/data/com.galaxy.quest/files/`. The panel
 writes it for you; you can also create or edit it yourself, with any of
-these lines. The file is read when the app starts.
+these lines. The file is read when the app starts. On the Steam Frame it is
+`~/.local/share/GalaxyFrame/petari_vr.ini`.
 
 ```
+# GalaxyFrame VR settings (see docs/CONTROLS.md)
 # Size of the world (1 = default, 1.5 = half as big again)
 diorama_scale = 1
 # Where Mario stands: metres below your eyes and in front of you (the

@@ -56,18 +56,18 @@ Known:
 1. Get the repository:
 
    ```sh
-   git clone https://github.com/simplysanatori/GalaxyQuest-steam-frame.git galaxyframe
-   cd galaxyframe
+   git clone https://github.com/simplysanatori/GalaxyFrame.git
+   cd GalaxyFrame
    ```
 
-2. Download `galaxyframe-1.0.0-linux-arm64.tar.gz` and `SHA256SUMS` from the [Releases](https://github.com/simplysanatori/GalaxyQuest-steam-frame/releases) page. Check the download and install it:
+2. Download `galaxyframe-1.0.0-linux-arm64.tar.gz` and `SHA256SUMS` from the [Releases](https://github.com/simplysanatori/GalaxyFrame/releases) page. Check the download and install it:
 
    ```sh
    sha256sum -c --ignore-missing SHA256SUMS
    steam-frame/install.sh ~/Downloads/galaxyframe-1.0.0-linux-arm64.tar.gz
    ```
 
-   The installer copies the program to `~/Games/GalaxyQuest/app`. It adds **Super Mario Galaxy VR** to your Steam library as a non-Steam shortcut, or updates the entry if it is there. It sets SteamVR's per-app settings for that shortcut. The script talks to Steam through its local debugging port, which SteamOS has on by default.
+   The installer copies the program to `~/Games/GalaxyFrame/app`. It adds **Super Mario Galaxy VR** to your Steam library as a non-Steam shortcut, or updates the entry if it is there. It sets SteamVR's per-app settings for that shortcut. The script talks to Steam through its local debugging port, which SteamOS has on by default.
 
 3. Convert your disc, once. This takes a few minutes and 3.3 GB. With `--no-movies` it takes 2.3 GB less, and the prologue and ending movies play as black.
 
@@ -75,7 +75,7 @@ Known:
    steam-frame/prepare-game.sh /path/to/SuperMarioGalaxy.rvz
    ```
 
-   The script downloads [nodtool](https://github.com/encounter/nod) once, checks its sha256, extracts the disc and converts it to `~/.local/share/GalaxyQuest/game`. The extracted copy is deleted afterwards.
+   The script downloads [nodtool](https://github.com/encounter/nod) once, checks its sha256, extracts the disc and converts it to `~/.local/share/GalaxyFrame/game`. The extracted copy is deleted afterwards.
 
 4. Put the headset on and launch **Super Mario Galaxy VR** from your Steam library.
 
@@ -88,6 +88,8 @@ Known:
    It boots the game into 20 galaxies one after another and fills the shader cache. Your saves are copied first and left alone.
 
 To update, download the new tarball and run `install.sh` again. Your game files, saves and settings stay where they are.
+
+If you ran this port under its old name GalaxyQuest, `install.sh` moves `~/.local/share/GalaxyQuest` to `~/.local/share/GalaxyFrame` and `~/Games/GalaxyQuest/app` to `~/Games/GalaxyFrame/app` once, removes the old `galaxyquest` program files and points the Steam entry at the new ones. It tells you what it moved.
 
 The installer changes nothing outside the folders listed under [Files](#files), the Steam shortcut and SteamVR's settings for that shortcut.
 
@@ -146,7 +148,7 @@ Press Menu or View in the game. The pause menu opens, with the VR settings panel
 | Comfort | Planet turns (smooth, steps or off), turn smoothing, comfort vignette, vignette at slow and at fast movement |
 | Display | Resolution, sharpening and its strength, language |
 
-Everything on the panel is also in `~/.local/share/GalaxyQuest/petari_vr.ini`, with a comment on each line.
+Everything on the panel is also in `~/.local/share/GalaxyFrame/petari_vr.ini`, with a comment on each line.
 
 Two settings matter most:
 
@@ -185,10 +187,11 @@ What did not help, so you know: SteamVR on the Frame accepts both frame synthesi
 
 | What | Where |
 |---|---|
-| Program | `~/Games/GalaxyQuest/app` |
-| Game files, saves, settings, shader caches | `~/.local/share/GalaxyQuest` (`game/`, `nand/`, `petari_vr.ini`, `spirv.bin`, `pipelines.bin`) |
-| Logs | `~/.local/share/GalaxyQuest/petari_log.txt` (the game), `launch.log` (the launch wrapper), `vrtiming.log` (SteamVR's compositor timing) |
-| Optional test settings | `~/.local/share/GalaxyQuest/petari_debug.env`, `NAME=value` lines read at start |
+| Program | `~/Games/GalaxyFrame/app` |
+| Game files, saves, settings, shader caches | `~/.local/share/GalaxyFrame` (`game/`, `nand/`, `petari_vr.ini`, `spirv.bin`, `pipelines.bin`) |
+| Logs | `~/.local/share/GalaxyFrame/petari_log.txt` (the game), `launch.log` (the launch wrapper), `vrtiming.log` (SteamVR's compositor timing) |
+| Downloaded tools | `~/.cache/galaxyframe` (nodtool, from `prepare-game.sh`) |
+| Optional test settings | `~/.local/share/GalaxyFrame/petari_debug.env`, `NAME=value` lines read at start |
 
 ## Troubleshooting
 
@@ -203,13 +206,13 @@ What did not help, so you know: SteamVR on the Frame accepts both frame synthesi
 
 ## Reporting a problem
 
-Open an [issue](https://github.com/simplysanatori/GalaxyQuest-steam-frame/issues) with what you did, what you expected and what happened, your disc's region, and `petari_log.txt` and `launch.log` from `~/.local/share/GalaxyQuest`. If the problem was in the session before your last one, attach `petari_log.txt.prev` instead.
+Open an [issue](https://github.com/simplysanatori/GalaxyFrame/issues) with what you did, what you expected and what happened, your disc's region, and `petari_log.txt` and `launch.log` from `~/.local/share/GalaxyFrame`. If the problem was in the session before your last one, attach `petari_log.txt.prev` instead.
 
 These logs hold file paths under your home folder, the Steam shortcut's app id and the SteamVR settings. They hold no account names, network addresses or headset serial numbers. SteamVR's own logs can contain device serial numbers, so check them before you attach them.
 
 ## Build from source
 
-See [STEAM_FRAME.md](STEAM_FRAME.md). The build runs on the Frame itself with the tools SteamOS has, in about 35 minutes the first time. `tools/privacy-check.sh` checks the tree, the history and a release tarball for personal data before publishing.
+See [docs/TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md). The build runs on the Frame itself with the tools SteamOS has, in about 35 minutes the first time. `tools/privacy-check.sh` checks the tree, the history and a release tarball for personal data before publishing.
 
 ## Support
 
@@ -239,4 +242,4 @@ I wanted Super Mario Galaxy on my Frame without Lepton, so I started from Galaxy
 
 This is vibe coded, with manual review throughout. I wrote it with Claude Code, using Anthropic's Fable 5.1 and Opus 5.5 models running on the Frame itself. I chose what to build, reviewed the code and the scripts as they were written, tested each build in the headset and reported what I saw; Claude read the logs and changed the code. GalaxyQuest is also AI-written, as its README says. Neither the GalaxyQuest author nor the Petari team has reviewed this port. If that is not for you, no worries. Read the code before trusting it; it is a starting point for anyone who wants Super Mario Galaxy, or another GalaxyQuest-style port, on the Frame.
 
-Developer notes, the probe results and what was learned about SteamVR on the Frame are in [STEAM_FRAME.md](STEAM_FRAME.md).
+Developer notes, the probe results and what was learned about SteamVR on the Frame are in [docs/TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md).
