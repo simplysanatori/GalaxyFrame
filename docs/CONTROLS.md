@@ -21,22 +21,32 @@ controllers are mapped onto them like this. The mapping lives in
 | Right stick left / right | D-pad left / right | In the diorama: turn it smoothly round Mario, faster the further you push (a dead zone of 15%, then up to 120° a second, with the edges of the view darkened while it turns); with *Smooth turning* off, a step (45°) at a time behind a short blink. On the giant screen: turn the game camera around Mario in steps, where the level allows it. Pushing the stick right turns the view to the right; with *Invert camera* off (see the VR settings) it moves the camera to the right instead, as the Wii's D-pad did |
 | Right stick up / down | D-pad up / down, with *Smooth turning* off and in a menu's lists | With *Smooth turning* on, in the diorama: tilt the view round Mario, up to see him from higher (a dead zone of 15%, then up to 60° a second; the same curve as the turn; the tilt is kept within -60° and +60°, never past straight down) |
 | Right stick click | D-pad up | First-person look (shown on the virtual screen) |
-| Right grip held, right stick up / down | None | With *Smooth turning* on: lower or raise the diorama smoothly (*Height*, 0.4 m a second at the stop), saved to the settings file a moment after you stop |
-| Right grip held, right stick left / right | None | The same for the world's size (*World size*, up to 1.8 times a second), 0.5 to 3 |
 
 With *Smooth turning* off, the right stick up is the D-pad up (first-person
-look) and the stick down is the D-pad down, as before, and the grip does
-nothing. On the Steam Frame controllers the left D-pad's up is the Wii
-D-pad up too (first-person look) in either case. The right grip is
-otherwise unused.
+look) and the stick down is the D-pad down, as before. On the Steam Frame
+controllers the left D-pad's up is the Wii D-pad up too (first-person look)
+in either case.
+
+**Steam Frame: diorama height and size.** In the diorama, with *Smooth
+turning* on or off, hold the left grip and use the left D-pad: up and down
+raise and lower the diorama (*Height*, 0.4 m a second), right and left make
+the world bigger and smaller (*World size*, up to 1.8 times a second, 0.5 to
+3). The values are saved to the settings file a moment after you stop. While
+the left grip is held, the D-pad reaches nothing else (no Wii D-pad, no
+first person, no turn), and the grip is not C there (the left bumper still
+is); outside the diorama the left grip is C as before. The Touch Plus
+controllers have no D-pad, so they have none of this.
 
 **Left-handed** (Game tab of the VR settings, or `left_handed = 1`): the
 left controller is the Remote (laser, pointer, settings panel clicks, the
 tick when it touches a target, shoot trigger, spin bumper, tilt for the Star
-Ball and the Ray, flick to spin, stick click for first person, and the grip
-and stick that turn and tilt the diorama), and the right controller is the
+Ball and the Ray, flick to spin, stick click for first person, and the
+stick that turns and tilts the diorama), and the right controller is the
 Nunchuk (its stick moves Mario, its trigger crouches, its grip or bumper is
-C). The face buttons, Menu, View and the D-pad stay where they are.
+C). The face buttons, Menu, View and the D-pad stay where they are. The
+Frame's D-pad is on the left controller only, so the left grip stays the
+modifier for the diorama's height and size, and it is free for that because
+C is on the right grip then.
 
 Rumble is played on both controllers' haptics.
 
@@ -241,8 +251,7 @@ has no effect as things are (the 3D depth while the 3D is off) is dimmed.
   within the first 15%, about 30 degrees a second at half, 120 degrees a
   second at the stop), with no blink. The edges of the view darken while it
   turns (*Turn vignette*). The stick's up and down tilt the view round Mario
-  (see the controls table), and with the right grip held it sets the
-  diorama's height and size. The left controller's D-pad left and right turn
+  (see the controls table). The left controller's D-pad left and right turn
   it at a steady 60 degrees a second. Off, each push turns it 45 degrees
   behind a short blink, and up and down are the D-pad's. It does not change
   the giant screen.

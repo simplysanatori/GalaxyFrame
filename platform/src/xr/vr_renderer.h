@@ -175,13 +175,15 @@ bool smoothTurning();
 // Likewise for the tilt: not on a menu's list (pointer UI), where the stick's
 // up and down are still the D-pad's.
 bool smoothTilting();
+// The diorama is shown (any smooth_turn).
+bool dioramaShown();
 // x turns the diorama (invert_camera honoured, turn_speed at the stop), y
 // tilts it (positive: seen from higher, tilt_speed at the stop).
 void smoothTurn(float x, float y);
-// The right grip held (smooth turning on): the stick's y raises or lowers the
-// diorama (diorama_height), x makes it smaller or bigger (diorama_scale); saved
-// to the file a moment after the last change.  Call every update (0, 0 when
-// not held).
+// The left D-pad with the left grip held (in the diorama, smooth_turn or not):
+// y raises or lowers the diorama (diorama_height), x makes it smaller or bigger
+// (diorama_scale); saved to the file a moment after the last change.  Call
+// every update (0, 0 when not held).
 void dioramaAdjust(float x, float y);
 // left_handed: the left controller points (the laser, the pointer, the settings
 // panel and the haptic ticks) and the hands' sticks, triggers, grips and

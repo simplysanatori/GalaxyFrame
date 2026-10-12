@@ -683,6 +683,7 @@ bool snapTurn(int dir) {
 }
 
 bool smoothTurning() { return sSmoothTurn && sVrMode && sRig.valid && !sRigParams.turnWithCamera; }
+bool dioramaShown() { return sVrMode && sRig.valid; }
 bool smoothTilting() { return smoothTurning() && !(gpu::renderer().camera().flags & PORT_GX_CAMERA_POINTER_UI); }
 bool leftHanded() { return sLeftHanded; }
 namespace {
@@ -699,9 +700,9 @@ void smoothTurn(float x, float y) {
     sStickTurnAt.store(port_host_time_ns());
 }
 void dioramaAdjust(float x, float y) {
-    // The stick with the grip held: up raises the diorama (Mario nearer your
-    // eyes), right makes the world bigger.  Saved to the file a moment after
-    // the last change, as the panel does.
+    // The left D-pad with the left grip held: up raises the diorama (Mario
+    // nearer your eyes), right makes the world bigger.  Saved to the file a
+    // moment after the last change, as the panel does.
     static int64_t sLastNs = 0, sChangedNs = 0;
     static bool sUnsaved = false;
     int64_t now = port_host_time_ns();
@@ -710,12 +711,12 @@ void dioramaAdjust(float x, float y) {
     const Setting* height = findSetting("diorama_height");
     const Setting* scale = findSetting("diorama_scale");
     float cy = stickCurve(y), cx = stickCurve(x);
-    if (smoothTurning() && cy != 0.0f && height) {
+    if (dioramaShown() && cy != 0.0f && height) {
         height->set(fminf(1.6f, fmaxf(0.0f, height->get() - cy * 0.4f * dt)));  // m/s at the stop
         sChangedNs = now;
         sUnsaved = true;
     }
-    if (smoothTurning() && cx != 0.0f && scale) {
+    if (dioramaShown() && cx != 0.0f && scale) {
         scale->set(fminf(3.0f, fmaxf(0.5f, scale->get() * expf(cx * 0.6f * dt))));  // up to 1.8x a second
         sChangedNs = now;
         sUnsaved = true;
