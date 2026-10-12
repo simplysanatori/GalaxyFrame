@@ -178,6 +178,7 @@ const Item kPictureItems[] = {
 const Item kGameItems[] = {
     {"language", "Language", nullptr, kStepper, 0, 0, 0, nullptr, severalLanguages, hintLanguage, languageOptions, languageText, languageGet,
      languageSet, languageFile},
+    {"smooth_turn", "Smooth turning", "Turn the diorama smoothly with the stick instead of in steps", kSwitch},
     {"invert_camera", "Invert camera", nullptr, kSwitch, 0, 0, 0, nullptr, nullptr, hintInvert},
     {"skip_hold", "Hold A to skip", "Cutscenes and dialogues", kStepper, 0.0f, 3.0f, 0.25f, nullptr, nullptr, nullptr, nullptr, skipText},
 };

@@ -900,12 +900,19 @@ void updateInput(App& a, XrTime time) {
     // D-pad's sides for its camera, CameraLocalUtil.cpp): pushing the stick
     // right turns the view to the right.  Up is the first-person view.  A
     // direction engages past 0.7 and releases below 0.4, one press per flick.
+    // With smooth turning (smooth_turn) the stick's X turns the diorama in
+    // proportion to its deflection instead (vr::smoothTurn), and left and
+    // right are no D-pad presses there.
     XrVector2f look = getVec2(a, a.lookAction);
     float lx = fabsf(look.x), ly = fabsf(look.y);
+    const bool smooth = vr::smoothTurning();
+    float turnX = 0.0f;
     if (a.dpad == 0) {
         if (lx > 0.7f && lx >= ly) {
-            a.dpad = look.x < 0.0f ? W_LEFT : W_RIGHT;
-            a.dpadTurned = vr::snapTurn((look.x < 0.0f ? -1 : 1) * (vr::invertCamera() ? -1 : 1));
+            if (!smooth) {
+                a.dpad = look.x < 0.0f ? W_LEFT : W_RIGHT;
+                a.dpadTurned = vr::snapTurn((look.x < 0.0f ? -1 : 1) * (vr::invertCamera() ? -1 : 1));
+            }
         } else if (ly > 0.7f) {
             a.dpad = look.y > 0.0f ? W_UP : W_DOWN;
         }
@@ -914,6 +921,7 @@ void updateInput(App& a, XrTime time) {
         a.dpadTurned = false;
     }
     if (!a.dpadTurned) pad.buttons |= a.dpad;
+    if (smooth && a.dpad != W_UP && a.dpad != W_DOWN) turnX = look.x;
     // The Steam Frame's D-pad: the Wii Remote's, left and right turning the
     // diorama like the right stick.  Bumpers: left centres the camera (C),
     // right spins (below).
@@ -921,12 +929,16 @@ void updateInput(App& a, XrTime time) {
         uint32_t held = getBool(a, a.dpadUpAction) ? W_UP : getBool(a, a.dpadDownAction) ? W_DOWN
                         : getBool(a, a.dpadLeftAction) ? W_LEFT : getBool(a, a.dpadRightAction) ? W_RIGHT : 0;
         if (held != a.padDpad) {
-            a.padDpadTurned = (held == W_LEFT || held == W_RIGHT) && vr::snapTurn((held == W_LEFT ? -1 : 1) * (vr::invertCamera() ? -1 : 1));
+            a.padDpadTurned = (held == W_LEFT || held == W_RIGHT) &&
+                              (smooth || vr::snapTurn((held == W_LEFT ? -1 : 1) * (vr::invertCamera() ? -1 : 1)));
             a.padDpad = held;
         }
         if (!a.padDpadTurned) pad.buttons |= held;
+        // Held, left and right turn at a steady 0.7 of the stick's deflection (about 60 degrees a second).
+        if (smooth && a.padDpadTurned && turnX == 0.0f) turnX = held == W_LEFT ? -0.7f : held == W_RIGHT ? 0.7f : 0.0f;
         if (getBool(a, a.bumperAction, a.handPath[0])) pad.buttons |= W_C;
     }
+    if (smooth) vr::smoothTurn(turnX);
 
     // Spin: B or Y, or flicking the right controller like a Wii Remote,
     // produces the acceleration spike the game reads as a remote shake (some

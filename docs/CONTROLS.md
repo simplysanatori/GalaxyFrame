@@ -18,7 +18,7 @@ controllers are mapped onto them like this. The mapping lives in
 | Left grip | C | Put the camera behind Mario |
 | Menu (left) | + | Pause menu (one press) |
 | X | − | Pause menu (one press) |
-| Right stick left / right | D-pad left / right | In the diorama: turn it a step (45°) round Mario, behind a short blink. On the giant screen: turn the game camera around Mario in steps, where the level allows it. Pushing the stick right turns the view to the right; with *Invert camera* off (see the VR settings) it moves the camera to the right instead, as the Wii's D-pad did |
+| Right stick left / right | D-pad left / right | In the diorama: turn it smoothly round Mario, faster the further you push (a dead zone of 15%, then up to 120° a second, with the edges of the view darkened while it turns); with *Smooth turning* off, a step (45°) at a time behind a short blink. On the giant screen: turn the game camera around Mario in steps, where the level allows it. Pushing the stick right turns the view to the right; with *Invert camera* off (see the VR settings) it moves the camera to the right instead, as the Wii's D-pad did |
 | Right stick up, or click | D-pad up | First-person look (shown on the virtual screen); page up in lists |
 | Right stick down | D-pad down | Page down in lists |
 
@@ -173,7 +173,9 @@ has no effect as things are (the 3D depth while the 3D is off) is dimmed.
   you fades away between you and him.
 - **Turn with the camera** (off by default): the world turns with the game
   camera as it swings round Mario, as early versions did; off, the world
-  keeps its facing and the right stick turns it in steps.
+  keeps its facing and the right stick turns it (see *Smooth turning*).
+  With this on the stick turns the game camera, as on the giant screen,
+  and *Smooth turning* has no effect.
 
 **Picture**
 
@@ -218,6 +220,13 @@ has no effect as things are (the 3D depth while the 3D is off) is dimmed.
   English, French and Spanish on the American one. English by default. The
   game reads it when it starts, so a change shows the next time you start
   the app (the panel says so until then).
+- **Smooth turning** (on by default): the right stick turns the diorama
+  smoothly round Mario, in proportion to how far you push it (nothing
+  within the first 15%, about 30 degrees a second at half, 120 degrees a
+  second at the stop), with no blink. The edges of the view darken while it
+  turns (*Turn vignette*). The left controller's D-pad left and right turn it
+  at a steady 60 degrees a second. Off, each push turns it 45 degrees behind
+  a short blink. It does not change the giant screen.
 - **Invert camera** (on by default): pushing the right stick to the right
   turns the view to the right, in the diorama and on the giant screen (the
   camera itself goes round Mario to the left). Off, the stick moves the
@@ -323,8 +332,12 @@ stereo_resolution = 0.8
 # game_path = /storage/emulated/0/Download/cooked
 # 1 turns the diorama with the game camera as it swings round Mario (as
 # early versions did); 0 keeps the world's facing, and the right stick
-# turns it in 45 degree steps.
+# turns it (see smooth_turn).
 turn_with_camera = 0
+# 1: the right stick turns the diorama smoothly, in proportion to its
+# deflection (up to 120 degrees a second, no blink); 0: in 45 degree steps
+# behind a short blink.
+smooth_turn = 1
 # Ask the headset for high CPU and GPU clock levels (Meta's SustainedHigh,
 # the CPU at 1.92 GHz on Quest 3). 0 leaves the clocks to the system, which
 # runs the CPU slower to save battery, and more frames come late.
