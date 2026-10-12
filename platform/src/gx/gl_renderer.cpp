@@ -656,8 +656,8 @@ void GlImpl::upload(Prepared& p, bool syncPrograms) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, (GLint)img->levels - 1);
         img->gpuVersion = img->version;
         // Images never change once recorded, so the pixels are not needed
-        // again (except by the PETARI_DUMP texture dump).
-        static const bool keepPixels = debugEnv("PETARI_DUMP") != nullptr;
+        // again (except by the PETARI_DUMP texture dump and PETARI_FRAMESAVE).
+        static const bool keepPixels = debugEnv("PETARI_DUMP") != nullptr || debugEnv("PETARI_FRAMESAVE") != nullptr;
         if (!keepPixels) {
             std::vector<uint32_t>().swap(img->rgba);
         }

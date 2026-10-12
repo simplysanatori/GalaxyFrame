@@ -161,6 +161,12 @@ private:
 
 FrameQueue& frameQueue();
 
+// Headless frame replay (PETARI_FRAMELOAD, headless_render.cpp): while held,
+// the game thread waits in its next publish (so nothing it reports to the VR
+// presentation changes), and injectFrame publishes a loaded frame instead.
+void holdGameFrames(bool hold);
+void injectFrame(std::unique_ptr<Frame> f);
+
 // Installs the recording backend (game thread side of the renderer).
 void useRecorderBackend();
 
