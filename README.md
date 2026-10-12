@@ -97,8 +97,8 @@ The game sees a Wii Remote with a Nunchuk. The Frame controllers are mapped onto
 | Left grip or left bumper | C | Put the game camera behind Mario |
 | **Menu** (right) | Plus (+) | Pause menu, with the VR settings panel beside it |
 | **View** (left) | Minus (-) | Pause menu, as Menu does |
-| D-pad (left) | D-pad | The Wii D-pad. In the diorama, left and right turn it 45 degrees round Mario |
-| Right stick left / right | D-pad left / right | In the diorama, turn it 45 degrees round Mario behind a short blink. On the giant screen, turn the game camera where the level allows it |
+| D-pad (left) | D-pad | The Wii D-pad. In the diorama, left and right turn it round Mario (smoothly, or 45 degrees at a time with *Smooth turning* off) |
+| Right stick left / right | D-pad left / right | In the diorama, turn it smoothly round Mario, faster the further you push (up to 120 degrees a second). With *Smooth turning* off in the VR settings: 45 degree steps behind a short blink. On the giant screen, turn the game camera where the level allows it |
 | Right stick up, or click the right stick | D-pad up | First-person look. Page up in lists |
 | Right stick down | D-pad down | Page down in lists |
 | Right controller aim | Pointer | Collect star bits, grab Pull Stars, point at menus and the VR settings panel |

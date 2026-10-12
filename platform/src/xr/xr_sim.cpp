@@ -150,6 +150,18 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
             sTurnsDone = index + 1;
         }
     }
+    // PETARI_XRSIM_STICK="t0-t1:x;...": the right stick's X held at x
+    // (-1..1) from t0 to t1 s after boot, for smooth turning (smooth_turn).
+    if (const char* spec = getenv("PETARI_XRSIM_STICK")) {
+        const char* t0env = getenv("PETARI_T0_MS");
+        double now = (port_host_time_ns() / 1000000 - (t0env ? atoll(t0env) : 0)) / 1000.0;
+        float held = 0.0f;
+        for (const char* p = spec; p && *p; p = strchr(p, ';') ? strchr(p, ';') + 1 : nullptr) {
+            float t0, t1, x;
+            if (sscanf(p, "%f-%f:%f", &t0, &t1, &x) == 3 && now >= t0 && now < t1) held = x;
+        }
+        if (vr::smoothTurning()) vr::smoothTurn(held);
+    }
     // PETARI_XRSIM_TIMING=1: each frame's eyes and UI layers timed apart,
     // the GPU finished before and after each (wall time with the GPU's work;
     // the CPU time to record them), averaged into one log line per call.
