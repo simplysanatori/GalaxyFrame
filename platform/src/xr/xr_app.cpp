@@ -229,6 +229,14 @@ struct App {
     // The room around the giant screen (the passthrough setting): Meta's
     // passthrough (XR_FB_passthrough) as a layer under the eye layer, made
     // when the setting first asks for it and paused while it does not.
+    // Eye tracking (XR_EXT_eye_gaze_interaction), for foveation.
+    bool hasGaze = false;
+    XrActionSet gazeSet = XR_NULL_HANDLE;
+    XrAction gazeAction = XR_NULL_HANDLE;
+    XrSpace gazeSpace = XR_NULL_HANDLE;
+    int gazeSamples = 0, gazeMisses = 0;
+    int64_t gazeLogAt = 0;
+
     bool hasPassthrough = false;
     XrPassthroughFB passthrough = XR_NULL_HANDLE;
     XrPassthroughLayerFB passthroughLayer = XR_NULL_HANDLE;
@@ -360,6 +368,11 @@ void initInstance(App& a) {
     if (a.hasPassthrough) {
         enable.push_back(XR_FB_PASSTHROUGH_EXTENSION_NAME);
     }
+    // Eye tracking, for the foveation of the eye renders (Vulkan only).
+    a.hasGaze = a.vk && hasExtension(exts, XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
+    if (a.hasGaze) {
+        enable.push_back(XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
+    }
     std::string names;
     for (const auto& e : exts) {
         names += ' ';
@@ -399,7 +412,16 @@ void initInstance(App& a) {
         passProps.next = props.next;
         props.next = &passProps;
     }
+    XrSystemEyeGazeInteractionPropertiesEXT gazeProps{XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT};
+    if (a.hasGaze) {
+        gazeProps.next = props.next;
+        props.next = &gazeProps;
+    }
     XR_CHECK(xrGetSystemProperties(a.instance, a.system, &props));
+    if (a.hasGaze) {
+        a.hasGaze = gazeProps.supportsEyeGazeInteraction == XR_TRUE;
+        port_log("XR eye gaze: %s", a.hasGaze ? "supported" : "extension listed, but the system does not support it");
+    }
     if (a.hasPassthrough) {
         a.hasPassthrough = (passProps.capabilities & XR_PASSTHROUGH_CAPABILITY_BIT_FB) != 0;
         port_log("XR passthrough: %s (capabilities 0x%x)", a.hasPassthrough ? "available" : "not on this headset", (unsigned)passProps.capabilities);
@@ -672,6 +694,32 @@ void initActions(App& a) {
     }
 }
 
+// The eye gaze as a pose action of its own set (XR_EXT_eye_gaze_interaction),
+// for the foveation of the eye renders.
+void initGazeActions(App& a) {
+    if (!a.hasGaze) return;
+    XrActionSetCreateInfo ci{XR_TYPE_ACTION_SET_CREATE_INFO};
+    strcpy(ci.actionSetName, "eye_gaze");
+    strcpy(ci.localizedActionSetName, "Eye gaze");
+    if (XR_FAILED(xrCreateActionSet(a.instance, &ci, &a.gazeSet))) return;
+    XrActionCreateInfo ac{XR_TYPE_ACTION_CREATE_INFO};
+    ac.actionType = XR_ACTION_TYPE_POSE_INPUT;
+    strcpy(ac.actionName, "gaze");
+    strcpy(ac.localizedActionName, "Gaze");
+    XrResult r = xrCreateAction(a.gazeSet, &ac, &a.gazeAction);
+    XrActionSuggestedBinding b{a.gazeAction, path(a, "/user/eyes_ext/input/gaze_ext/pose")};
+    XrInteractionProfileSuggestedBinding s{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+    s.interactionProfile = path(a, "/interaction_profiles/ext/eye_gaze_interaction");
+    s.suggestedBindings = &b;
+    s.countSuggestedBindings = 1;
+    if (XR_SUCCEEDED(r)) r = xrSuggestInteractionProfileBindings(a.instance, &s);
+    port_log("bindings for the eye gaze: %d", (int)r);
+    if (XR_FAILED(r)) {
+        xrDestroyActionSet(a.gazeSet);
+        a.gazeSet = XR_NULL_HANDLE;
+    }
+}
+
 void initSession(App& a) {
     xrgfx::Gfx& gfx = xrgfx::gfx();
     XrSessionCreateInfo sci{XR_TYPE_SESSION_CREATE_INFO};
@@ -688,9 +736,16 @@ void initSession(App& a) {
     XR_CHECK(xrCreateReferenceSpace(a.session, &rs, &a.viewSpace));
 
     XrSessionActionSetsAttachInfo att{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
-    att.countActionSets = 1;
-    att.actionSets = &a.actionSet;
+    XrActionSet sets[2] = {a.actionSet, a.gazeSet};
+    att.countActionSets = a.gazeSet != XR_NULL_HANDLE ? 2 : 1;
+    att.actionSets = sets;
     XR_CHECK(xrAttachSessionActionSets(a.session, &att));
+    if (a.gazeSet != XR_NULL_HANDLE) {
+        XrActionSpaceCreateInfo gsci{XR_TYPE_ACTION_SPACE_CREATE_INFO};
+        gsci.action = a.gazeAction;
+        gsci.poseInActionSpace.orientation.w = 1.0f;
+        if (XR_FAILED(xrCreateActionSpace(a.session, &gsci, &a.gazeSpace))) a.gazeSpace = XR_NULL_HANDLE;
+    }
     for (int h = 0; h < 2; h++) {
         XrActionSpaceCreateInfo asci{XR_TYPE_ACTION_SPACE_CREATE_INFO};
         asci.action = a.aimPoseAction;
@@ -868,10 +923,10 @@ void applyHaptic(App& a, XrPath hand, float amplitude, int64_t durationNs) {
 }
 
 void updateInput(App& a, XrTime time) {
-    XrActiveActionSet active{a.actionSet, XR_NULL_PATH};
+    XrActiveActionSet active[2] = {{a.actionSet, XR_NULL_PATH}, {a.gazeSet, XR_NULL_PATH}};  // and the eye gaze (foveation)
     XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
-    sync.countActiveActionSets = 1;
-    sync.activeActionSets = &active;
+    sync.countActiveActionSets = a.gazeSet != XR_NULL_HANDLE ? 2 : 1;
+    sync.activeActionSets = active;
     if (XR_FAILED(xrSyncActions(a.session, &sync))) {
         return;
     }
@@ -1710,6 +1765,47 @@ void updateAimVk(App& a, XrTime time) {
     vr::updateAimPose({loc.pose.position.x, loc.pose.position.y, loc.pose.position.z}, xm::rotate(q, {0, 0, -1}));
 }
 
+// Where the eyes look at `time`, per eye in its normalized device
+// coordinates (frame.gaze), when the eye tracker has a gaze then.  Logs every
+// 10 s how many refreshes had one.
+void locateGaze(App& a, XrTime time, vr::FrameInfo& frame) {
+    frame.gazeValid = false;
+    if (a.gazeSpace == XR_NULL_HANDLE) return;
+    XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
+    const XrSpaceLocationFlags need = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+    bool ok = XR_SUCCEEDED(xrLocateSpace(a.gazeSpace, a.appSpace, time, &loc)) && (loc.locationFlags & need) == need;
+    if (ok) {
+        xm::Quat q{loc.pose.orientation.x, loc.pose.orientation.y, loc.pose.orientation.z, loc.pose.orientation.w};
+        xm::Vec3 d = xm::rotate(q, {0.0f, 0.0f, -1.0f});
+        for (int e = 0; e < 2 && ok; e++) {
+            // The gaze direction through the eye's projection (a direction:
+            // the eye's position does not matter).
+            const xm::Quat& o = frame.eyes[e].orientation;
+            xm::Vec3 v = xm::rotate(xm::Quat{-o.x, -o.y, -o.z, o.w}, d);
+            const float* m = frame.eyes[e].proj.m;
+            float cx = m[0] * v.x + m[4] * v.y + m[8] * v.z, cy = m[1] * v.x + m[5] * v.y + m[9] * v.z, cw = m[3] * v.x + m[7] * v.y + m[11] * v.z;
+            if (cw <= 1e-4f) {
+                ok = false;
+                break;
+            }
+            frame.gaze[e][0] = fminf(2.0f, fmaxf(-2.0f, cx / cw));
+            frame.gaze[e][1] = fminf(2.0f, fmaxf(-2.0f, cy / cw));
+        }
+    }
+    frame.gazeValid = ok;
+    a.gazeSamples += ok;
+    a.gazeMisses += !ok;
+    int64_t t = port_host_time_ns();
+    if (t - a.gazeLogAt > 10000000000ll) {
+        if (a.gazeLogAt || ok) {
+            port_log("vr: eye gaze in %d of %d refreshes (left eye at %.2f %.2f)", a.gazeSamples, a.gazeSamples + a.gazeMisses, frame.gaze[0][0],
+                     frame.gaze[0][1]);
+        }
+        a.gazeLogAt = t;
+        a.gazeSamples = a.gazeMisses = 0;
+    }
+}
+
 // The eyes of a refresh on Vulkan (see above): a new set into vkNew, for the
 // next refresh's display time; the set of the last refresh goes out in
 // finishFrameVk, after this one's work is submitted (the GPU finishes it
@@ -1741,6 +1837,7 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
     locateViews(a, time, views);
     vr::FrameInfo frame = frameInfo(a, views, time);
     frame.newFrameDue = gameRefresh;
+    locateGaze(a, time, frame);
     // One eye's share of the GPU: both eyes on every refresh beside the
     // compositor, or one refresh each as with the paired GLES steps.
     frame.eyeBudgetMs = every ? (paired ? refresh : period) * 0.4f / 1e6f : refresh * 0.65f / 1e6f;
@@ -2450,6 +2547,7 @@ extern "C" __attribute__((visibility("default"))) void port_linux_main(const cha
     xrgfx::gfx().createContext();
     initInstance(a);
     initActions(a);
+    initGazeActions(a);
     initSession(a);
     gpu::setShaderCachePath((internal + "/shaders.bin").c_str());
     vr::init();

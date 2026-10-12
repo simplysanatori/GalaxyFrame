@@ -109,6 +109,18 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
         eye.height = kH;
     }
     fi.cullTanX = fi.cullTanY = tanf(48.0f * 3.14159265f / 180.0f);
+    // PETARI_XRSIM_GAZE="x,y": a gaze at that point of both eyes' normalized
+    // device coordinates, as eye tracking would give (foveation tests).
+    if (const char* g = getenv("PETARI_XRSIM_GAZE")) {
+        float gx = 0.0f, gy = 0.0f;
+        if (sscanf(g, "%f,%f", &gx, &gy) == 2) {
+            fi.gazeValid = true;
+            for (int e = 0; e < 2; e++) {
+                fi.gaze[e][0] = gx;
+                fi.gaze[e][1] = gy;
+            }
+        }
+    }
     fi.motion = sMotion;
     // PETARI_XRSIM_BUDGET=<ms>: GPU time allowed per eye, to exercise the
     // dynamic resolution (none: the render scale stays at 1).

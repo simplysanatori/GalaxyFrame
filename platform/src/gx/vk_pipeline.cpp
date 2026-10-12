@@ -106,6 +106,9 @@ struct FixedState {
 
     void fill(VkGraphicsPipelineCreateInfo& ci) {
         ci.pNext = &rendering;
+        // Every pipeline may draw in a foveated eye render (a fragment
+        // density map attachment, VulkanRenderer::setFoveation).
+        if (device().fragmentDensityMap) ci.flags |= VK_PIPELINE_CREATE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_BIT_EXT;
         ci.pInputAssemblyState = &ia;
         ci.pViewportState = &vp;
         ci.pRasterizationState = &rs;

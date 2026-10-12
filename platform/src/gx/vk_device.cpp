@@ -428,6 +428,8 @@ bool fillDeviceSetup(VkPhysicalDevice phys, DeviceSetup* s) {
     if (debugEnv("PETARI_VKNOHIC")) hostCopyExt = false;  // test the staging upload path
     bool lineExt = hasExtension(exts, VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME);
     bool budgetExt = hasExtension(exts, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    // Foveation of the eye renders (VulkanRenderer::setFoveation).
+    bool fdmExt = hasExtension(exts, VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME) && !(debugEnv("PETARI_VKFDM") && !strcmp(debugEnv("PETARI_VKFDM"), "0"));
 
     // Features.
     VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
@@ -440,6 +442,7 @@ bool fillDeviceSetup(VkPhysicalDevice phys, DeviceSetup* s) {
     VkPhysicalDeviceDepthClipControlFeaturesEXT dc{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT};
     VkPhysicalDeviceHostImageCopyFeaturesEXT hc{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT};
     VkPhysicalDeviceLineRasterizationFeaturesEXT lr{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_FEATURES_EXT};
+    VkPhysicalDeviceFragmentDensityMapFeaturesEXT fd{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT};
     f2.pNext = &f12;
     f12.pNext = &dr;
     dr.pNext = &s2;
@@ -455,6 +458,10 @@ bool fillDeviceSetup(VkPhysicalDevice phys, DeviceSetup* s) {
     if (lineExt) {
         *tail = &lr;
         tail = &lr.pNext;
+    }
+    if (fdmExt) {
+        *tail = &fd;
+        tail = &fd.pNext;
     }
     vkGetPhysicalDeviceFeatures2(phys, &f2);
     struct {
@@ -502,6 +509,8 @@ bool fillDeviceSetup(VkPhysicalDevice phys, DeviceSetup* s) {
     }
     if (bresenham) s->extensions[count++] = VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME;
     if (budgetExt) s->extensions[count++] = VK_EXT_MEMORY_BUDGET_EXTENSION_NAME;
+    bool fdm = fdmExt && fd.fragmentDensityMap == VK_TRUE && fd.fragmentDensityMapNonSubsampledImages == VK_TRUE;
+    if (fdm) s->extensions[count++] = VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME;
 
     // What is enabled: only the features the renderer uses.
     s->f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
@@ -547,6 +556,13 @@ bool fillDeviceSetup(VkPhysicalDevice phys, DeviceSetup* s) {
         *next = &s->lines;
         next = &s->lines.pNext;
     }
+    if (fdm) {
+        s->fdm.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT;
+        s->fdm.fragmentDensityMap = VK_TRUE;
+        s->fdm.fragmentDensityMapNonSubsampledImages = VK_TRUE;
+        *next = &s->fdm;
+        next = &s->fdm.pNext;
+    }
 
     s->queueFamily = family;
     s->queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -562,6 +578,7 @@ bool fillDeviceSetup(VkPhysicalDevice phys, DeviceSetup* s) {
     s->hostImageCopy = hostCopy;
     s->lineBresenham = bresenham;
     s->memoryBudget = budgetExt;
+    s->fragmentDensityMap = fdm;
     s->topologyUnrestricted = e3p.dynamicPrimitiveTopologyUnrestricted == VK_TRUE;
     return true;
 }
@@ -604,6 +621,15 @@ bool adoptDevice(VkPhysicalDevice phys, VkDevice device, uint32_t queueFamily, u
     sDev.hostImageCopy = setup->hostImageCopy && vkCopyMemoryToImageEXT && vkTransitionImageLayoutEXT;
     sDev.lineBresenham = setup->lineBresenham;
     sDev.memoryBudget = setup->memoryBudget;
+    sDev.fragmentDensityMap = setup->fragmentDensityMap;
+    if (sDev.fragmentDensityMap) {
+        VkPhysicalDeviceFragmentDensityMapPropertiesEXT fp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_PROPERTIES_EXT};
+        VkPhysicalDeviceProperties2 pp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        pp.pNext = &fp;
+        vkGetPhysicalDeviceProperties2(phys, &pp);
+        sDev.fdmTexelMin = fp.minFragmentDensityTexelSize;
+        sDev.fdmTexelMax = fp.maxFragmentDensityTexelSize;
+    }
     sDev.topologyUnrestricted = setup->topologyUnrestricted;
     sDev.maxAnisotropy = sDev.props.limits.maxSamplerAnisotropy;
     VkFormatProperties fp;

@@ -102,6 +102,11 @@ float sResolution = 1.6f;     // largest eye size, relative to the headset's rec
 float sResolution = 0.8f;
 #endif
 float sRefreshRate = 120.0f;  // requested display refresh rate, Hz
+// Foveation of the eye renders round the eye-tracked gaze (foveation,
+// foveation_radius, foveation_edge; see vr_renderer.h).  Never without gaze.
+float sFoveation = 0.0f;       // 0 off, 1 low, 2 medium, 3 high, 4 custom (off: see vr_renderer.h)
+float sFoveaRadiusPct = 30.0f;  // custom: full-resolution radius, % of the half field of view
+float sFoveaEdgePct = 50.0f;    // custom: resolution at the fringes, % of full
 bool sHighClocks = true;      // ask for Meta's SustainedHigh CPU/GPU levels
 bool sHaptics = true;         // controller haptics: rumble and pointer ticks (haptics)
 bool sSpaceWarp = true;       // Application SpaceWarp at 120 Hz
@@ -577,6 +582,9 @@ vr::Setting sSettings[] = {
     {"resolution", 0.5f, 2.0f, 0.0f, NUMBER(sResolution)},
     {"min_resolution", 0.5f, 1.25f, 0.0f, NUMBER(sMinScale)},
     {"refresh_rate", 60.0f, 144.0f, 0.0f, NUMBER(sRefreshRate)},
+    {"foveation", 0.0f, 4.0f, 0.0f, NUMBER(sFoveation)},
+    {"foveation_radius", 10.0f, 60.0f, 0.0f, NUMBER(sFoveaRadiusPct)},
+    {"foveation_edge", 25.0f, 100.0f, 0.0f, NUMBER(sFoveaEdgePct)},
     {"high_clocks", 0.0f, 1.0f, 0.0f, FLAG(sHighClocks)},
     {"haptics", 0.0f, 1.0f, 0.0f, FLAG(sHaptics)},
     {"space_warp", 0.0f, 1.0f, 0.0f, FLAG(sSpaceWarp)},
@@ -635,6 +643,15 @@ void loadSettings(const char* path) {
         }
         if (sscanf(line, " renderer = %31[A-Za-z0-9_]", text) == 1) {
             continue;  // the graphics API, read by gpu::selectRenderer
+        }
+        // foveation = off | low | medium | high | custom (or 0 to 4).
+        if (sscanf(line, " foveation = %31[a-z]", text) == 1) {
+            static const char* const kNames[] = {"off", "low", "medium", "high", "custom"};
+            for (int i = 0; i < 5; i++) {
+                if (!strcmp(text, kNames[i])) sFoveation = (float)i;
+            }
+            port_log("%s: foveation = %s", path, text);
+            continue;
         }
         if (sscanf(line, " language = %31[A-Za-z]", text) == 1) {
             port_language_set(text);
@@ -1260,6 +1277,25 @@ void beginFrame(const FrameInfo& frame) {
     sRenderNs = port_host_time_ns() - frameStartNs;
 }
 
+// The foveation setting as the full-resolution radius (normalized device
+// coordinates: a fraction of the half field of view; 0 = off) and the
+// density at the fringes (fraction of full per axis).
+void foveationLevel(float* radius, float* edge) {
+    // Presets: low, medium, high.
+    static const float kRadius[3] = {0.45f, 0.30f, 0.20f}, kEdge[3] = {0.5f, 0.5f, 0.25f};
+    int level = (int)lroundf(sFoveation);
+    if (level <= 0) {
+        *radius = 0.0f;
+        *edge = 1.0f;
+    } else if (level <= 3) {
+        *radius = kRadius[level - 1];
+        *edge = kEdge[level - 1];
+    } else {
+        *radius = fminf(0.6f, fmaxf(0.1f, sFoveaRadiusPct / 100.0f));
+        *edge = fminf(1.0f, fmaxf(0.25f, sFoveaEdgePct / 100.0f));
+    }
+}
+
 Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int width, int height) {
     int64_t eyeStartNs = port_host_time_ns();
     sWipeDim = 0.0f;
@@ -1292,6 +1328,24 @@ Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int
         ev.eyePos[1] = viewFromEye.at(1, 3);
         ev.eyePos[2] = viewFromEye.at(2, 3);
         ev.depthSnapshot = sMotionOn ? &sSnap[eye] : nullptr;
+        // Foveation follows the eye's gaze, and only the gaze: without eye
+        // tracking the eyes render at full density.
+        float radius, edge;
+        foveationLevel(&radius, &edge);
+        static bool sFoveated[2] = {false, false};
+        static int sFoveaLogged = -1;
+        bool foveate = frame.gazeValid && radius > 0.0f;
+        if (radius > 0.0f && !frame.gazeValid && sFoveaLogged != 0) {
+            port_log("vr: foveation %.0f wanted, but no eye-tracked gaze: the eyes render at full resolution", sFoveation);
+            sFoveaLogged = 0;
+        } else if (foveate && sFoveaLogged != 1) {
+            port_log("vr: foveation round the gaze: full resolution within %.0f%% of the half field of view, %.0f%% at the fringes", radius * 100.0f,
+                     edge * 100.0f);
+            sFoveaLogged = 1;
+        }
+        if (foveate || sFoveated[eye]) {
+            sFoveated[eye] = r.setFoveation(sEye[eye], frame.gaze[eye][0], frame.gaze[eye][1], foveate ? edge : 0.0f, radius) && foveate;
+        }
         r.render(sEye[eye], &ev, &sHud, eye == 0 ? gpu::HudMode::Target : gpu::HudMode::Skip);
         if (eye == 0) {
             sHudFresh = true;
