@@ -1,5 +1,6 @@
 #version 450
-// xrprobe: XR_EXT_frame_synthesis motion vectors, (CurrNDC - PrevNDC).xyz in
+// xrprobe: motion vectors for XR_EXT_frame_synthesis and XR_FB_space_warp
+// (both take (CurrNDC - PrevNDC).xyz of the content, head motion excluded) in
 // Vulkan NDC ([-1,-1,0]..[1,1,1]); alpha is ignored by the runtime.
 #extension GL_GOOGLE_include_directive : require
 #include "common.glsl"
