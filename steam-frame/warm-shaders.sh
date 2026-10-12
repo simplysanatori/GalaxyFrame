@@ -2,7 +2,7 @@
 # Fills the shader cache ahead of play: boots the game headless (no headset)
 # into one galaxy after another, with the VR presentation simulated, so the
 # shaders each galaxy's materials need are compiled now and saved to
-# ~/.local/share/GalaxyQuest/shaders.bin, not during play (a new area's
+# ~/.local/share/GalaxyFrame/shaders.bin, not during play (a new area's
 # shaders cost about a second of dropped frames the first time).
 #   steam-frame/warm-shaders.sh [Galaxy[:scenario] ...]
 # Without arguments, upstream's tour list (20 galaxies, about 130 s each).
@@ -11,9 +11,9 @@
 # and left as they are.  Not while the game is running.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-HOME_DIR=${GALAXYQUEST_HOME:-$HOME/.local/share/GalaxyQuest}
-GAME=${GALAXYQUEST_GAME:-$HOME_DIR/game}
-APP=$HOME/Games/GalaxyQuest/app
+HOME_DIR=${GALAXYFRAME_HOME:-${GALAXYQUEST_HOME:-$HOME/.local/share/GalaxyFrame}}  # GALAXYQUEST_HOME: the old name
+GAME=${GALAXYFRAME_GAME:-${GALAXYQUEST_GAME:-$HOME_DIR/game}}
+APP=${GALAXYFRAME_APP:-${GALAXYQUEST_APP:-$HOME/Games/GalaxyFrame/app}}
 if [ -x "$APP/petari_headless" ]; then
   RUNNER=$APP/petari_headless
 elif [ -x "$HERE/../build-linux/petari_headless" ]; then
@@ -24,7 +24,7 @@ else
 fi
 [ -d "$GAME/files" ] || { echo "no game files at $GAME (steam-frame/prepare-game.sh first)" >&2; exit 1; }
 [ -d "$HOME_DIR/nand/title" ] || { echo "no save files at $HOME_DIR/nand: start the game once and make a save" >&2; exit 1; }
-pgrep -x galaxyquest > /dev/null && { echo "the game is running; quit it first" >&2; exit 1; }
+pgrep -x galaxyframe > /dev/null && { echo "the game is running; quit it first" >&2; exit 1; }
 
 GALAXIES=("$@")
 if [ ${#GALAXIES[@]} -eq 0 ]; then
@@ -41,7 +41,7 @@ PRESSES=$(for t in $(seq 44 3 77); do printf ",%s-%s.2:A" $t $t; done)
 LATE=$(for t in $(seq 95 4 125); do printf ",%s-%s.2:A" $t $t; done)
 MENU="28-28.4:A|B,30-36:PX=-0.25|PY=0.27,33-33.2:A,36-42:PX=0.52|PY=0.78,38-38.2:A"
 
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/galaxyquest-warm.XXXXXX")
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/galaxyframe-warm.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 cp -r "$HOME_DIR/nand" "$WORK/nand"
 mkdir -p "$WORK/shots"

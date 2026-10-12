@@ -1,11 +1,11 @@
 #!/bin/bash
-# Steam shortcut target for GalaxyQuest on the Steam Frame.  Game files,
+# Steam shortcut target for GalaxyFrame.  Game files,
 # saves, settings and the game's own log (petari_log.txt) are in
-# ~/.local/share/GalaxyQuest; this wrapper's own output goes to launch.log
+# ~/.local/share/GalaxyFrame; this wrapper's own output goes to launch.log
 # there.  An argument names the game files' folder (default: game/ in that
 # directory, or the folder picked on the setup screen).
 HERE=$(dirname "$(readlink -f "$0")")
-HOME_DIR=${GALAXYQUEST_HOME:-$HOME/.local/share/GalaxyQuest}
+HOME_DIR=${GALAXYFRAME_HOME:-${GALAXYQUEST_HOME:-$HOME/.local/share/GalaxyFrame}}  # GALAXYQUEST_HOME: the old name
 mkdir -p "$HOME_DIR"
 exec > "$HOME_DIR/launch.log" 2>&1
 
@@ -58,7 +58,7 @@ fi
 
 # Not exec: the wrapper stays to stop the logger and collect the log.  A signal
 # for the wrapper (Steam stopping the app) goes on to the game.
-"$HERE/galaxyquest" "$@" &
+"$HERE/galaxyframe" "$@" &
 GAME_PID=$!
 trap 'kill -TERM "$GAME_PID" 2> /dev/null' TERM INT HUP
 rc=0
