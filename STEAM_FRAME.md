@@ -108,16 +108,16 @@ The work went roughly like this. First, reading GalaxyQuest's platform layer to 
 
 GalaxyQuest is released into the public domain under [The Unlicense](LICENSE), and so are this fork's changes. The decompilation in `decomp/` is the Petari team's work under CC0 1.0 (`decomp/LICENSE-Petari.txt`). Third-party parts keep their own licences: see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). No Nintendo game data is included.
 
-## Pacing probes (xrprobe), results pending H1
+## Pacing probes (xrprobe), results pending H1b
 
-`tools/xrprobe/` is a small standalone OpenXR + Vulkan program (its own CMake project, not part of the game build) that answers the questions the frame.3 Vulkan backend depends on. `tools/xrprobe/run-h1.sh` runs its five cases in a row and writes every log, plus `vrtiming.py` output when that script is present, into one dated directory under `~/Games/GalaxyQuest/probe/`.
+`tools/xrprobe/` is a small standalone OpenXR + Vulkan program (its own CMake project, not part of the game build) that answers the questions the frame.3 Vulkan backend depends on. `xrprobe --sequence` runs all five cases in one OpenXR session (case number and label drawn in each eye; H1 showed that a fresh process per case spends 10 to 20 s waiting before SteamVR shows it). `tools/xrprobe/run-h1.sh` runs the cases as separate processes and writes every log, plus `vrtiming.py` output when that script is present, into one dated directory under `~/Games/GalaxyQuest/probe/`.
 
 | Case | What it tests | Result |
 |---|---|---|
-| `--pace` | 14 ms of GPU work per frame, images released right after `vkQueueSubmit`. Does SteamVR show unfinished Vulkan images, as it does for GLES? | pending H1 |
-| `--pace=fence` | The same with `vkWaitForFences` before the release (control) | pending H1 |
-| `--synth` | `XR_EXT_frame_synthesis`: motion vectors (R16G16B16A16_SFLOAT) and depth at 30 fps with `REQUEST_RELAXED_FRAME_INTERVAL` | pending H1 |
-| `--synth --no-mv` | The same frame rate without synthesis data | pending H1 |
-| `--depth-only` | `XR_KHR_composition_layer_depth` at the display rate | pending H1 |
+| `--pace` | 14 ms of GPU work per frame, images released right after `vkQueueSubmit`. Does SteamVR show unfinished Vulkan images, as it does for GLES? | H1 (partial): yes. In the panel recording every visible frame has the background in horizontal bands from several frames. `xrEndFrame` blocks about one GPU frame (13 ms) but returns with the GPU still busy. |
+| `--pace=fence` | The same with `vkWaitForFences` before the release (control) | pending H1b (visible only behind the dashboard in H1) |
+| `--synth` | `XR_EXT_frame_synthesis`: motion vectors (R16G16B16A16_SFLOAT) and depth at 30 fps with `REQUEST_RELAXED_FRAME_INTERVAL` | pending H1b (never visible in H1) |
+| `--synth --no-mv` | The same frame rate without synthesis data | pending H1b |
+| `--depth-only` | `XR_KHR_composition_layer_depth` at the display rate | pending H1b (D32_SFLOAT depth accepted, no `xrEndFrame` errors) |
 
 Seen in a 3-second smoke run with the headset asleep (no frames shown): SteamVR/OpenXR 2.18.2 accepts Vulkan 1.0 to 1.2, recommends 1728x1728 per eye, gives 3 images per swapchain and listed only 90 Hz. It offers R8G8B8A8_SRGB, B8G8R8A8_SRGB, R32G32B32A32_SFLOAT, R32G32B32_SFLOAT, R16G16B16A16_SFLOAT, A2B10G10R10_UNORM, D32_SFLOAT, D16_UNORM, D24_UNORM_S8_UINT and D32_SFLOAT_S8_UINT to Vulkan apps.
