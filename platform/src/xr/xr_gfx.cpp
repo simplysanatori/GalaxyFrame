@@ -3,8 +3,8 @@
 #include "xr_gfx.h"
 
 #include <stdlib.h>
-#include <strings.h>
 
+#include "../gx/gpu_renderer.h"
 #include "port/port.h"
 
 namespace xrgfx {
@@ -20,11 +20,10 @@ Gfx* sGfx = nullptr;
 }  // namespace
 
 Api wantedApi() {
-    const char* want = getenv("PETARI_GFX");
-    if (want && (!strcasecmp(want, "vk") || !strcasecmp(want, "vulkan"))) {
-        return Api::Vulkan;
-    }
-    return Api::Gles;
+    // The renderer decides (PETARI_GFX, else the ini file's renderer key, see
+    // gpu::selectRenderer); a Vulkan renderer that could not be created is
+    // already GLES here.
+    return gpu::renderer().api() == gpu::Api::Vulkan ? Api::Vulkan : Api::Gles;
 }
 
 void select(Api wanted) {

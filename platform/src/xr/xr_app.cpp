@@ -2013,6 +2013,9 @@ extern "C" __attribute__((visibility("default"))) void port_linux_main(const cha
         gShotDir = ext + "/vrshots";
         mkdir(gShotDir.c_str(), 0770);
     }
+    // The graphics API (PETARI_GFX, else renderer = ... in the settings file);
+    // the OpenXR session is bound to the same one.
+    gpu::selectRenderer((ext + "/petari_vr.ini").c_str());
     vr::loadSettings((ext + "/petari_vr.ini").c_str());  // before the swapchains are sized
     xrgfx::select(xrgfx::wantedApi());
     xrgfx::gfx().createContext();

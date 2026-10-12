@@ -603,6 +603,9 @@ void loadSettings(const char* path) {
             port_log("%s: game_path = %s", path, sGamePath.c_str());
             continue;
         }
+        if (sscanf(line, " renderer = %31[A-Za-z0-9_]", text) == 1) {
+            continue;  // the graphics API, read by gpu::selectRenderer
+        }
         if (sscanf(line, " language = %31[A-Za-z]", text) == 1) {
             port_language_set(text);
             port_log("%s: language = %s", path, text);
