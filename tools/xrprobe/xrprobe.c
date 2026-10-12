@@ -15,7 +15,11 @@
 //   --synth --no-mv the same frame rate and content, nothing chained
 //   --depth-only    XR_KHR_composition_layer_depth only, moving checkerboard at
 //                   the display rate
-// Options: --hz N (XR_FB_display_refresh_rate), --seconds N (default 30),
+//   --sequence      the five cases above, in that order, in ONE session; the
+//                   case number and a short label are drawn in each eye and
+//                   stdout gets a "CASE n start" line per case
+// Options: --hz N (XR_FB_display_refresh_rate), --seconds N (per case, default
+//   30, counted only while the session is VISIBLE or FOCUSED and rendering),
 //   --log FILE (default ./xrprobe.log), --fps N, --gpu-ms N (pace load target,
 //   default 14), --mv-head (motion vectors include head motion), --dry-run
 //   (parse and print the configuration only).
@@ -67,7 +71,7 @@ static const uint32_t kHeavyFrag[] =
 
 // ---------------------------------------------------------------- options
 
-enum Mode { MODE_NONE, MODE_PACE, MODE_PACE_FENCE, MODE_SYNTH, MODE_DEPTH };
+enum Mode { MODE_NONE, MODE_PACE, MODE_PACE_FENCE, MODE_SYNTH, MODE_DEPTH, MODE_SEQUENCE };
 
 static struct {
     enum Mode mode;
@@ -87,7 +91,48 @@ static const char* modeName(void) {
     case MODE_PACE_FENCE: return "pace=fence";
     case MODE_SYNTH: return g_opt.noMv ? "synth-no-mv" : "synth";
     case MODE_DEPTH: return "depth-only";
+    case MODE_SEQUENCE: return "sequence";
     default: return "none";
+    }
+}
+
+// A case is one probe configuration; --sequence runs all five in one session.
+typedef struct {
+    enum Mode mode;
+    int noMv;
+    const char* name;  // log name
+    const char* label; // drawn in each eye with seven-segment glyphs, max 8 cells
+} Case;
+
+static const Case kSequence[5] = {
+    {MODE_PACE, 0, "pace", "1 PACE"},
+    {MODE_PACE_FENCE, 0, "pace=fence", "2 FEnCE"},
+    {MODE_SYNTH, 0, "synth", "3 SYnth"},
+    {MODE_SYNTH, 1, "synth-no-mv", "4 no-SYn"},
+    {MODE_DEPTH, 0, "depth-only", "5 dEPth"},
+};
+
+// Seven-segment mask (bits a..g) for the characters the labels use.
+static uint32_t segChar(char c) {
+    switch (c) {
+    case '0': case 'O': case 'o': return c == 'o' ? 0x5C : 0x3F;
+    case '1': return 0x06;
+    case '2': return 0x5B;
+    case '3': return 0x4F;
+    case '4': return 0x66;
+    case '5': case 'S': return 0x6D;
+    case 'A': return 0x77;
+    case 'C': return 0x39;
+    case 'd': return 0x5E;
+    case 'E': return 0x79;
+    case 'F': return 0x71;
+    case 'h': return 0x74;
+    case 'n': return 0x54;
+    case 'P': return 0x73;
+    case 't': return 0x78;
+    case 'Y': return 0x6E;
+    case '-': return 0x40;
+    default: return 0;
     }
 }
 
@@ -650,11 +695,14 @@ static void usage(FILE* f, const char* argv0) {
             "  --synth           XR_EXT_frame_synthesis (MV + depth), checkerboard at --fps (30)\n"
             "  --synth --no-mv   the same frame rate, no synthesis info chained\n"
             "  --depth-only      XR_KHR_composition_layer_depth, checkerboard at display rate\n"
+            "  --sequence        all five cases above in one session, --seconds each, case number\n"
+            "                    and label drawn in each eye\n"
             "options:\n"
             "  --hz N            request display refresh rate N (XR_FB_display_refresh_rate)\n"
-            "  --seconds N       run time, default 30 (0 = until SteamVR ends the session)\n"
+            "  --seconds N       seconds per case, counted only while the session is VISIBLE or\n"
+            "                    FOCUSED and shouldRender is set; default 30\n"
             "  --log FILE        per-frame log, default ./xrprobe.log\n"
-            "  --fps N           cap the app frame rate (default 30 for --synth, display rate otherwise)\n"
+            "  --fps N           cap the app frame rate (default 30 for the synth cases, display rate otherwise)\n"
             "  --gpu-ms N        GPU load target of the pace modes, default 14\n"
             "  --mv-head         motion vectors include head motion (default: object motion only)\n"
             "  --dry-run         parse, print the configuration, exit\n",
@@ -701,6 +749,8 @@ static int parseArgs(int argc, char** argv) {
             if (setMode(MODE_SYNTH)) goto twoModes;
         } else if (!strcmp(a, "--depth-only")) {
             if (setMode(MODE_DEPTH)) goto twoModes;
+        } else if (!strcmp(a, "--sequence")) {
+            if (setMode(MODE_SEQUENCE)) goto twoModes;
         } else if (!strcmp(a, "--no-mv")) {
             g_opt.noMv = 1;
         } else if (!strcmp(a, "--mv-head")) {
@@ -711,7 +761,7 @@ static int parseArgs(int argc, char** argv) {
             if (parseNum(v, 1, 1000, &d)) goto bad;
             g_opt.hz = (float)d;
         } else if ((v = optVal(argc, argv, &i, "--seconds"))) {
-            if (parseNum(v, 0, 86400, &d)) goto bad;
+            if (parseNum(v, 1, 86400, &d)) goto bad;
             g_opt.seconds = d;
         } else if ((v = optVal(argc, argv, &i, "--fps"))) {
             if (parseNum(v, 0, 1000, &d)) goto bad;
@@ -743,11 +793,10 @@ static int parseArgs(int argc, char** argv) {
         fprintf(stderr, "xrprobe: --no-mv goes with --synth\n");
         return -1;
     }
-    if (g_opt.mvHead && (g_opt.mode != MODE_SYNTH || g_opt.noMv)) {
-        fprintf(stderr, "xrprobe: --mv-head goes with --synth (with motion vectors)\n");
+    if (g_opt.mvHead && !(g_opt.mode == MODE_SEQUENCE || (g_opt.mode == MODE_SYNTH && !g_opt.noMv))) {
+        fprintf(stderr, "xrprobe: --mv-head goes with --synth (with motion vectors) or --sequence\n");
         return -1;
     }
-    if (g_opt.fps < 0) g_opt.fps = g_opt.mode == MODE_SYNTH ? 30.0 : 0.0;
     return 0;
 }
 
@@ -889,19 +938,115 @@ static uint32_t calibrate(Gpu* g, VkFormat format, int32_t w, int32_t h, double 
     return iters;
 }
 
+// ---------------------------------------------------------------- case helpers
+
+// Creates a depth swapchain per eye: D32_SFLOAT first, then D24_UNORM_S8_UINT,
+// or the format already chosen for an earlier pair.
+static int createDepthPair(XrSession session, VkDevice dev, const char* what, const int32_t w[2], const int32_t h[2],
+                           const int64_t* formats, uint32_t nf, int64_t* depthFormat, Chain out[2]) {
+    static const int64_t depthTry[] = {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT};
+    for (size_t t = 0; t < 2; t++) {
+        if (*depthFormat != VK_FORMAT_UNDEFINED && depthTry[t] != *depthFormat) continue;
+        int listed = 0;
+        for (uint32_t i = 0; i < nf; i++) listed |= formats[i] == depthTry[t];
+        if (!listed) LOG("depth format %s not in the runtime's list; trying anyway", vkFormatName(depthTry[t]));
+        int ok = 1;
+        for (int e = 0; e < 2 && ok; e++) {
+            char name[48];
+            snprintf(name, sizeof(name), "eye%d %s", e, what);
+            if (createChain(session, dev, name, depthTry[t], w[e], h[e], &out[e])) ok = 0;
+        }
+        if (ok) {
+            *depthFormat = depthTry[t];
+            return 0;
+        }
+        for (int e = 0; e < 2; e++) destroyChain(dev, &out[e]);
+    }
+    return -1;
+}
+
+// The case label (e.g. "3 SYnth") above the content, world-locked. In the
+// motion vector pass it is drawn with zero motion (previous = current).
+static void drawLabel(VkCommandBuffer cmd, VkPipelineLayout layout, VkPipeline pipe, const Mat4* vp, const char* label,
+                      int forMv) {
+    Mat4 model = placeQuad(0.0f, 0.62f, -1.5f, 0.72f, 0.15f);
+    Push p;
+    memset(&p, 0, sizeof(p));
+    p.mvp = matMul(vp, &model);
+    if (forMv) {
+        p.aux = p.mvp;
+    } else {
+        p.aux.m[0] = 2.0f; // mode: label
+        for (int i = 0; i < 8 && label[i]; i++) p.aux.m[4 + i] = (float)segChar(label[i]);
+    }
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(p), &p);
+    vkCmdDraw(cmd, 6, 1, 0, 0);
+}
+
+static void summarize(const char* name, RecList* recs, uint64_t endFailures) {
+    size_t nr_ = 0, busyRel = 0, busyEnd = 0, longGaps = 0, ng = 0, ngap = 0;
+    double* gpu = malloc((recs->n + 1) * sizeof(double));
+    double* gap = malloc((recs->n + 1) * sizeof(double));
+    double* cpu = malloc((recs->n + 1) * sizeof(double));
+    double* endms = malloc((recs->n + 1) * sizeof(double));
+    for (size_t i = 0; i < recs->n; i++) {
+        const FrameRec* r = &recs->v[i];
+        if (r->gapMs > 0) {
+            gap[ngap++] = r->gapMs;
+            if (r->period > 0 && r->gapMs > 1.5 * r->period * 1e-6) longGaps++;
+        }
+        if (!r->rendered) continue;
+        endms[nr_] = r->endMs;
+        cpu[nr_++] = r->cpuMs;
+        if (r->gpuMs >= 0) gpu[ng++] = r->gpuMs;
+        busyRel += (size_t)r->busyAtRelease;
+        busyEnd += (size_t)r->busyAtEnd;
+    }
+    double a, b, c;
+    LOG("SUMMARY %s: %zu frames, %zu rendered, %llu xrEndFrame failures", name, recs->n, nr_,
+        (unsigned long long)endFailures);
+    percentiles(gpu, ng, &a, &b, &c);
+    LOG("SUMMARY %s gpu ms p50 %.3f p95 %.3f max %.3f (%zu samples)", name, a, b, c, ng);
+    percentiles(cpu, nr_, &a, &b, &c);
+    LOG("SUMMARY %s cpu submit ms p50 %.3f p95 %.3f max %.3f", name, a, b, c);
+    percentiles(endms, nr_, &a, &b, &c);
+    LOG("SUMMARY %s xrEndFrame ms p50 %.3f p95 %.3f max %.3f", name, a, b, c);
+    percentiles(gap, ngap, &a, &b, &c);
+    LOG("SUMMARY %s xrWaitFrame gap ms p50 %.3f p95 %.3f max %.3f; %zu gaps > 1.5 periods", name, a, b, c, longGaps);
+    LOG("SUMMARY %s GPU still busy at release: %zu of %zu rendered frames; at xrEndFrame return: %zu", name, busyRel,
+        nr_, busyEnd);
+    free(gpu);
+    free(gap);
+    free(cpu);
+    free(endms);
+    recs->n = 0;
+}
+
 // ---------------------------------------------------------------- main
 
 int main(int argc, char** argv) {
     g_t0 = nowSec();
     if (parseArgs(argc, argv)) return 2;
 
-    const int pace = g_opt.mode == MODE_PACE || g_opt.mode == MODE_PACE_FENCE;
-    const int synth = g_opt.mode == MODE_SYNTH && !g_opt.noMv;
-    const int depthOnly = g_opt.mode == MODE_DEPTH;
+    const int seq = g_opt.mode == MODE_SEQUENCE;
+    const Case single = {g_opt.mode, g_opt.noMv, modeName(), ""};
+    const Case* cases = seq ? kSequence : &single;
+    const int nCases = seq ? 5 : 1;
+    int wantPace = 0, wantSynth = 0, wantDepthEye = 0;
+    for (int c = 0; c < nCases; c++) {
+        wantPace |= cases[c].mode == MODE_PACE || cases[c].mode == MODE_PACE_FENCE;
+        wantSynth |= cases[c].mode == MODE_SYNTH && !cases[c].noMv;
+        wantDepthEye |= cases[c].mode == MODE_DEPTH;
+    }
 
+    char fpsStr[32];
+    if (g_opt.fps >= 0) snprintf(fpsStr, sizeof(fpsStr), "%.1f", g_opt.fps);
+    else snprintf(fpsStr, sizeof(fpsStr), "auto (30 synth, else display)");
     char cfg[512];
-    snprintf(cfg, sizeof(cfg), "mode %s, seconds %.1f, hz %s%.1f, fps cap %.1f, gpu target %.1f ms, mv %s, log %s",
-             modeName(), g_opt.seconds, g_opt.hz > 0 ? "" : "(unchanged) ", g_opt.hz, g_opt.fps, g_opt.gpuMs,
+    snprintf(cfg, sizeof(cfg),
+             "mode %s, %d case(s) of %.1f s, hz %s%.1f, fps cap %s, gpu target %.1f ms, mv %s, log %s",
+             modeName(), nCases, g_opt.seconds, g_opt.hz > 0 ? "" : "(unchanged) ", g_opt.hz, fpsStr, g_opt.gpuMs,
              g_opt.mvHead ? "object+head" : "object only", g_opt.log);
     if (g_opt.dryRun) {
         printf("xrprobe dry run: %s\n", cfg);
@@ -924,8 +1069,11 @@ int main(int argc, char** argv) {
     sa.sa_handler = onAlarm;
     sigaction(SIGALRM, &sa, NULL);
     // Hard stop if the clean teardown never comes (xrWaitFrame can block for
-    // good while the headset sleeps).
-    if (g_opt.seconds > 0) alarm((unsigned)g_opt.seconds + 30);
+    // good while the headset sleeps). The frame loop's own wall-clock cap is
+    // 240 s past the case time; this is 60 s later still.
+    alarm((unsigned)(nCases * g_opt.seconds) + 300);
+    if (seq)
+        for (int c = 0; c < nCases; c++) LOG("case %d: %s, label \"%s\"", c + 1, cases[c].name, cases[c].label);
 
     // ---- instance
     uint32_t n = 0;
@@ -959,16 +1107,16 @@ int main(int argc, char** argv) {
         LOG("FAIL runtime lacks XR_KHR_vulkan_enable2");
         return 1;
     }
-    if (synth) {
+    if (wantSynth) {
         if (!hasExt("XR_EXT_frame_synthesis")) {
-            LOG("FAIL --synth needs XR_EXT_frame_synthesis, which the runtime does not offer");
+            LOG("FAIL the synth case needs XR_EXT_frame_synthesis, which the runtime does not offer");
             return 1;
         }
         ext("XR_EXT_frame_synthesis")->enable = 1;
     }
-    if (depthOnly) {
+    if (wantDepthEye) {
         if (!hasExt("XR_KHR_composition_layer_depth")) {
-            LOG("FAIL --depth-only needs XR_KHR_composition_layer_depth, which the runtime does not offer");
+            LOG("FAIL the depth-only case needs XR_KHR_composition_layer_depth, which the runtime does not offer");
             return 1;
         }
         ext("XR_KHR_composition_layer_depth")->enable = 1;
@@ -1019,7 +1167,7 @@ int main(int argc, char** argv) {
     XrViewConfigurationView vcv[2] = {{XR_TYPE_VIEW_CONFIGURATION_VIEW}, {XR_TYPE_VIEW_CONFIGURATION_VIEW}};
     XrFrameSynthesisConfigViewEXT fsv[2] = {{XR_TYPE_FRAME_SYNTHESIS_CONFIG_VIEW_EXT},
                                             {XR_TYPE_FRAME_SYNTHESIS_CONFIG_VIEW_EXT}};
-    if (synth) {
+    if (wantSynth) {
         vcv[0].next = &fsv[0];
         vcv[1].next = &fsv[1];
     }
@@ -1028,7 +1176,7 @@ int main(int argc, char** argv) {
                                                vcv));
     LOG("stereo view: recommended %ux%u (max %ux%u)", vcv[0].recommendedImageRectWidth,
         vcv[0].recommendedImageRectHeight, vcv[0].maxImageRectWidth, vcv[0].maxImageRectHeight);
-    if (synth)
+    if (wantSynth)
         LOG("frame synthesis: recommended motion vector / depth rect %ux%u (left), %ux%u (right)",
             fsv[0].recommendedMotionVectorImageRectWidth, fsv[0].recommendedMotionVectorImageRectHeight,
             fsv[1].recommendedMotionVectorImageRectWidth, fsv[1].recommendedMotionVectorImageRectHeight);
@@ -1104,9 +1252,10 @@ int main(int argc, char** argv) {
             break;
         }
 
-    Chain eyes[2], mv[2], depth[2];
+    Chain eyes[2], mv[2], depthMv[2], depthEye[2];
     memset(mv, 0, sizeof(mv));
-    memset(depth, 0, sizeof(depth));
+    memset(depthMv, 0, sizeof(depthMv));
+    memset(depthEye, 0, sizeof(depthEye));
     for (int e = 0; e < 2; e++) {
         char what[32];
         snprintf(what, sizeof(what), "eye%d color", e);
@@ -1116,54 +1265,40 @@ int main(int argc, char** argv) {
             die();
         }
     }
+    // All swapchains are made up front, so a --sequence session never creates
+    // one mid-run.
     int64_t depthFormat = VK_FORMAT_UNDEFINED;
-    if (synth || depthOnly) {
+    if (wantSynth) {
         int32_t dw[2], dh[2];
         for (int e = 0; e < 2; e++) {
-            if (synth && fsv[e].recommendedMotionVectorImageRectWidth && fsv[e].recommendedMotionVectorImageRectHeight) {
+            if (fsv[e].recommendedMotionVectorImageRectWidth && fsv[e].recommendedMotionVectorImageRectHeight) {
                 dw[e] = (int32_t)fsv[e].recommendedMotionVectorImageRectWidth;
                 dh[e] = (int32_t)fsv[e].recommendedMotionVectorImageRectHeight;
-            } else if (synth) {
+            } else {
                 dw[e] = eyes[e].width / 2;
                 dh[e] = eyes[e].height / 2;
                 LOG("no recommended motion vector size from the runtime; using half the eye size %dx%d", dw[e], dh[e]);
-            } else {
-                dw[e] = eyes[e].width;
-                dh[e] = eyes[e].height;
+            }
+            char what[32];
+            snprintf(what, sizeof(what), "eye%d motion", e);
+            if (createChain(session, vk.device, what, VK_FORMAT_R16G16B16A16_SFLOAT, dw[e], dh[e], &mv[e])) {
+                LOG("FAIL motion vector swapchain (R16G16B16A16_SFLOAT) refused");
+                die();
             }
         }
-        if (synth)
-            for (int e = 0; e < 2; e++) {
-                char what[32];
-                snprintf(what, sizeof(what), "eye%d motion", e);
-                if (createChain(session, vk.device, what, VK_FORMAT_R16G16B16A16_SFLOAT, dw[e], dh[e], &mv[e])) {
-                    LOG("FAIL motion vector swapchain (R16G16B16A16_SFLOAT) refused");
-                    die();
-                }
-            }
-        static const int64_t depthTry[] = {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT};
-        for (size_t t = 0; t < 2 && depthFormat == VK_FORMAT_UNDEFINED; t++) {
-            int listed = 0;
-            for (uint32_t i = 0; i < nf; i++) listed |= formats[i] == depthTry[t];
-            if (!listed) LOG("depth format %s not in the runtime's list; trying anyway", vkFormatName(depthTry[t]));
-            int ok = 1;
-            for (int e = 0; e < 2 && ok; e++) {
-                char what[32];
-                snprintf(what, sizeof(what), "eye%d depth", e);
-                if (createChain(session, vk.device, what, depthTry[t], dw[e], dh[e], &depth[e])) ok = 0;
-            }
-            if (ok) {
-                depthFormat = depthTry[t];
-            } else {
-                for (int e = 0; e < 2; e++) destroyChain(vk.device, &depth[e]);
-            }
-        }
-        if (depthFormat == VK_FORMAT_UNDEFINED) {
+        if (createDepthPair(session, vk.device, "synth depth", dw, dh, formats, nf, &depthFormat, depthMv)) {
             LOG("FAIL no depth swapchain format accepted (tried D32_SFLOAT, D24_UNORM_S8_UINT)");
             die();
         }
-        LOG("depth format in use: %s", vkFormatName(depthFormat));
     }
+    if (wantDepthEye) {
+        int32_t dw[2] = {eyes[0].width, eyes[1].width}, dh[2] = {eyes[0].height, eyes[1].height};
+        if (createDepthPair(session, vk.device, "layer depth", dw, dh, formats, nf, &depthFormat, depthEye)) {
+            LOG("FAIL no depth swapchain format accepted (tried D32_SFLOAT, D24_UNORM_S8_UINT)");
+            die();
+        }
+    }
+    if (depthFormat != VK_FORMAT_UNDEFINED) LOG("depth format in use: %s", vkFormatName(depthFormat));
 
     // ---- pipelines, command buffers, queries
     VkPushConstantRange pcr = {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Push)};
@@ -1173,12 +1308,15 @@ int main(int argc, char** argv) {
     VkPipelineLayout layout;
     VK_CHECK(vkCreatePipelineLayout(vk.device, &lci, NULL, &layout));
     VkPipeline scenePipe = makePipeline(vk.device, layout, kQuadVert, sizeof(kQuadVert), kSceneFrag, sizeof(kSceneFrag),
-                                        (VkFormat)colorFormat, depthOnly ? (VkFormat)depthFormat : VK_FORMAT_UNDEFINED);
-    VkPipeline heavyPipe = VK_NULL_HANDLE, mvPipe = VK_NULL_HANDLE;
-    if (pace)
+                                        (VkFormat)colorFormat, VK_FORMAT_UNDEFINED);
+    VkPipeline sceneDepthPipe = VK_NULL_HANDLE, heavyPipe = VK_NULL_HANDLE, mvPipe = VK_NULL_HANDLE;
+    if (wantDepthEye)
+        sceneDepthPipe = makePipeline(vk.device, layout, kQuadVert, sizeof(kQuadVert), kSceneFrag, sizeof(kSceneFrag),
+                                      (VkFormat)colorFormat, (VkFormat)depthFormat);
+    if (wantPace)
         heavyPipe = makePipeline(vk.device, layout, kFullVert, sizeof(kFullVert), kHeavyFrag, sizeof(kHeavyFrag),
                                  (VkFormat)colorFormat, VK_FORMAT_UNDEFINED);
-    if (synth)
+    if (wantSynth)
         mvPipe = makePipeline(vk.device, layout, kQuadVert, sizeof(kQuadVert), kMvFrag, sizeof(kMvFrag),
                               VK_FORMAT_R16G16B16A16_SFLOAT, (VkFormat)depthFormat);
 
@@ -1208,7 +1346,7 @@ int main(int argc, char** argv) {
     if (!haveTimestamps) LOG("no timestamp support on the queue: GPU times will be '-'");
 
     uint32_t iterations = 0;
-    if (pace) {
+    if (wantPace) {
         Gpu g = {&vk, layout, heavyPipe, queries, pool};
         if (haveTimestamps) {
             iterations = calibrate(&g, (VkFormat)colorFormat, eyes[0].width, eyes[0].height, g_opt.gpuMs);
@@ -1223,6 +1361,7 @@ int main(int argc, char** argv) {
     int slotPending[NSLOTS] = {0};
     RecList recs = {0};
     int running = 1, sessionRunning = 0, exitRequested = 0;
+    XrSessionState sessionState = XR_SESSION_STATE_UNKNOWN;
     uint64_t frameIdx = 0, drawn = 0;
     double started = nowSec(), windowStart = started, lastWaitReturn = 0, lastPeriodSec = 1.0 / 90.0;
     uint64_t winFrames = 0, winRendered = 0, endFailures = 0;
@@ -1232,17 +1371,24 @@ int main(int argc, char** argv) {
     // adaptive load: keep the measured GPU time near the target during the run
     double adaptSum = 0;
     int adaptCount = 0;
+    // cases: time counts only while the session is VISIBLE or FOCUSED and the
+    // runtime asks for rendering; a wall-clock cap ends a session that never
+    // gets there
+    int caseIdx = 0, caseStarted = 0;
+    double caseTime = 0;
+    const double wallCap = nCases * g_opt.seconds + 240.0;
 
     while (running) {
         double t = nowSec();
-        int timeUp = g_opt.seconds > 0 && t - started > g_opt.seconds;
+        int timeUp = caseIdx >= nCases || t - started > wallCap;
         if ((g_quit || timeUp) && !exitRequested) {
+            const char* why = g_quit ? "signal" : caseIdx >= nCases ? "all cases done" : "wall-clock cap";
             if (sessionRunning) {
-                LOG("requesting exit (%s)", g_quit ? "signal" : "time up");
+                LOG("requesting exit (%s)", why);
                 xrRequestExitSession(session);
                 exitRequested = 1;
             } else {
-                LOG("stopping before the session started (%s)", g_quit ? "signal" : "time up");
+                LOG("stopping before the session started (%s)", why);
                 break;
             }
         }
@@ -1252,13 +1398,14 @@ int main(int argc, char** argv) {
             switch (ev.type) {
             case XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED: {
                 XrEventDataSessionStateChanged* s = (XrEventDataSessionStateChanged*)&ev;
+                sessionState = s->state;
                 LOG("session state %d", (int)s->state);
                 if (s->state == XR_SESSION_STATE_READY) {
                     XrSessionBeginInfo bi = {XR_TYPE_SESSION_BEGIN_INFO};
                     bi.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
                     XR_CHECK(xrBeginSession(session, &bi));
                     sessionRunning = 1;
-                    started = nowSec(); // the run time counts from the session start
+                    started = nowSec(); // the wall-clock cap counts from the session start
                     windowStart = started;
                     if (getRate) {
                         getRate(session, &rate);
@@ -1294,6 +1441,18 @@ int main(int argc, char** argv) {
             continue;
         }
 
+        const Case* cs = &cases[caseIdx < nCases ? caseIdx : nCases - 1];
+        const int pace = cs->mode == MODE_PACE || cs->mode == MODE_PACE_FENCE;
+        const int synth = cs->mode == MODE_SYNTH && !cs->noMv;
+        const int depthOnly = cs->mode == MODE_DEPTH;
+        const double fps = g_opt.fps >= 0 ? g_opt.fps : (cs->mode == MODE_SYNTH ? 30.0 : 0.0);
+        if (!caseStarted && caseIdx < nCases) {
+            caseStarted = 1;
+            caseTime = 0;
+            LOG("CASE %d start (%s, %s)", caseIdx + 1, cs->name, seq ? cs->label : "single");
+            FLOG("=== CASE %d %s", caseIdx + 1, cs->name);
+        }
+
         FrameRec rec;
         memset(&rec, 0, sizeof(rec));
         rec.gpuMs = -1;
@@ -1303,8 +1462,8 @@ int main(int argc, char** argv) {
         // --fps: start the next frame no earlier than 1/fps after the last
         // xrWaitFrame return, less half a refresh so xrWaitFrame lands on the
         // right slot.
-        if (g_opt.fps > 0 && lastWaitReturn > 0) {
-            double target = lastWaitReturn + 1.0 / g_opt.fps - 0.5 * lastPeriodSec;
+        if (fps > 0 && lastWaitReturn > 0) {
+            double target = lastWaitReturn + 1.0 / fps - 0.5 * lastPeriodSec;
             double now = nowSec();
             if (target > now) {
                 double s = target - now;
@@ -1320,6 +1479,11 @@ int main(int argc, char** argv) {
         double w1 = nowSec();
         rec.waitMs = (w1 - w0) * 1e3;
         rec.gapMs = lastWaitReturn > 0 ? (w1 - lastWaitReturn) * 1e3 : 0;
+        if (lastWaitReturn > 0 && fs.shouldRender &&
+            (sessionState == XR_SESSION_STATE_VISIBLE || sessionState == XR_SESSION_STATE_FOCUSED)) {
+            double dt = w1 - lastWaitReturn;
+            caseTime += dt < 0.1 ? dt : 0.1;
+        }
         lastWaitReturn = w1;
         rec.pdt = fs.predictedDisplayTime;
         rec.period = fs.predictedDisplayPeriod;
@@ -1354,8 +1518,11 @@ int main(int argc, char** argv) {
 
             for (int e = 0; e < 2; e++) {
                 acquireChain(&eyes[e]);
-                if (synth) acquireChain(&mv[e]);
-                if (synth || depthOnly) acquireChain(&depth[e]);
+                if (synth) {
+                    acquireChain(&mv[e]);
+                    acquireChain(&depthMv[e]);
+                }
+                if (depthOnly) acquireChain(&depthEye[e]);
             }
 
             // reuse the oldest slot: its fence also gives us its GPU time
@@ -1410,6 +1577,7 @@ int main(int argc, char** argv) {
             Mat4 modelPrev = checkerModel(tPrev);
             Mat4 panel = placeQuad(0.0f, 0.0f, -1.5f, 0.9f, 0.5f);
             float hue = (float)fmod((double)drawn / 90.0, 1.0);
+            VkPipeline colorPipe = depthOnly ? sceneDepthPipe : scenePipe;
 
             for (int e = 0; e < 2; e++) {
                 Chain* eye = &eyes[e];
@@ -1421,7 +1589,7 @@ int main(int argc, char** argv) {
                 // motion vectors + depth for frame synthesis (own pass at the MV size)
                 if (synth) {
                     Chain* m = &mv[e];
-                    Chain* d = &depth[e];
+                    Chain* d = &depthMv[e];
                     VkImage mimg = m->images[m->acquired].image, dimg = d->images[d->acquired].image;
                     imageBarrier(cmd, mimg, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
@@ -1469,6 +1637,7 @@ int main(int argc, char** argv) {
                         vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                            sizeof(p), &p);
                         vkCmdDraw(cmd, 6, 1, 0, 0);
+                        if (seq) drawLabel(cmd, layout, mvPipe, &vp_, cs->label, 1);
                     }
                     pfnEndRendering(cmd);
                 }
@@ -1491,7 +1660,7 @@ int main(int argc, char** argv) {
                 ri.colorAttachmentCount = 1;
                 ri.pColorAttachments = &att;
                 if (depthOnly) {
-                    Chain* d = &depth[e];
+                    Chain* d = &depthEye[e];
                     imageBarrier(cmd, d->images[d->acquired].image, aspectOf(depthFormat), VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0,
                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
@@ -1511,7 +1680,7 @@ int main(int argc, char** argv) {
                     VkRect2D sc = {{0, 0}, {(uint32_t)eye->width, (uint32_t)eye->height}};
                     vkCmdSetViewport(cmd, 0, 1, &vp);
                     vkCmdSetScissor(cmd, 0, 1, &sc);
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, scenePipe);
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, colorPipe);
                     Push p;
                     memset(&p, 0, sizeof(p));
                     if (pace) {
@@ -1526,6 +1695,7 @@ int main(int argc, char** argv) {
                     vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                        sizeof(p), &p);
                     vkCmdDraw(cmd, 6, 1, 0, 0);
+                    if (seq) drawLabel(cmd, layout, colorPipe, &vp_, cs->label, 0);
                 }
                 pfnEndRendering(cmd);
 
@@ -1544,9 +1714,9 @@ int main(int argc, char** argv) {
                     fsi[e].motionVectorScale = (XrVector4f){1, 1, 1, 1};
                     fsi[e].motionVectorOffset = (XrVector4f){0, 0, 0, 0};
                     fsi[e].appSpaceDeltaPose.orientation.w = 1; // LOCAL space never moves here
-                    fsi[e].depthSubImage.swapchain = depth[e].handle;
-                    fsi[e].depthSubImage.imageRect.extent.width = depth[e].width;
-                    fsi[e].depthSubImage.imageRect.extent.height = depth[e].height;
+                    fsi[e].depthSubImage.swapchain = depthMv[e].handle;
+                    fsi[e].depthSubImage.imageRect.extent.width = depthMv[e].width;
+                    fsi[e].depthSubImage.imageRect.extent.height = depthMv[e].height;
                     fsi[e].minDepth = 0.0f;
                     fsi[e].maxDepth = 1.0f;
                     fsi[e].nearZ = NEAR_Z;
@@ -1554,9 +1724,9 @@ int main(int argc, char** argv) {
                     pv[e].next = &fsi[e];
                 } else if (depthOnly) {
                     di[e] = (XrCompositionLayerDepthInfoKHR){XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR};
-                    di[e].subImage.swapchain = depth[e].handle;
-                    di[e].subImage.imageRect.extent.width = depth[e].width;
-                    di[e].subImage.imageRect.extent.height = depth[e].height;
+                    di[e].subImage.swapchain = depthEye[e].handle;
+                    di[e].subImage.imageRect.extent.width = depthEye[e].width;
+                    di[e].subImage.imageRect.extent.height = depthEye[e].height;
                     di[e].minDepth = 0.0f;
                     di[e].maxDepth = 1.0f;
                     di[e].nearZ = NEAR_Z;
@@ -1573,7 +1743,7 @@ int main(int argc, char** argv) {
             VK_CHECK(vkQueueSubmit(vk.queue, 1, &si, fences[slot]));
             rec.cpuMs = (nowSec() - c0) * 1e3;
 
-            if (g_opt.mode == MODE_PACE_FENCE) {
+            if (cs->mode == MODE_PACE_FENCE) {
                 double f0 = nowSec();
                 VK_CHECK(vkWaitForFences(vk.device, 1, &fences[slot], VK_TRUE, UINT64_MAX));
                 rec.fenceWaitMs = (nowSec() - f0) * 1e3;
@@ -1581,8 +1751,11 @@ int main(int argc, char** argv) {
             rec.busyAtRelease = vkGetFenceStatus(vk.device, fences[slot]) == VK_NOT_READY;
             for (int e = 0; e < 2; e++) {
                 releaseChain(&eyes[e]);
-                if (synth) releaseChain(&mv[e]);
-                if (synth || depthOnly) releaseChain(&depth[e]);
+                if (synth) {
+                    releaseChain(&mv[e]);
+                    releaseChain(&depthMv[e]);
+                }
+                if (depthOnly) releaseChain(&depthEye[e]);
             }
             proj.space = local;
             proj.viewCount = 2;
@@ -1625,17 +1798,46 @@ int main(int argc, char** argv) {
         t = nowSec();
         if (t - windowStart >= 5.0) {
             if (getRate) getRate(session, &rate);
-            LOG("%.0f s: %llu frames, %llu rendered (%.1f fps) in %.1f s, period %.3f ms, display %.2f Hz, "
-                "xrEndFrame failures so far %llu",
-                t - started, (unsigned long long)winFrames, (unsigned long long)winRendered,
-                winRendered / (t - windowStart), t - windowStart, lastPeriodSec * 1e3, rate,
-                (unsigned long long)endFailures);
+            LOG("case %d: %.1f of %.0f s counted; last %.1f s: %llu frames, %llu rendered (%.1f fps), period %.3f ms, "
+                "display %.2f Hz, state %d, xrEndFrame failures so far %llu",
+                caseIdx + 1, caseTime, g_opt.seconds, t - windowStart, (unsigned long long)winFrames,
+                (unsigned long long)winRendered, winRendered / (t - windowStart), lastPeriodSec * 1e3, rate,
+                (int)sessionState, (unsigned long long)endFailures);
             windowStart = t;
             winFrames = winRendered = 0;
         }
+
+        // case finished: drain its GPU work so every frame lands in its own case
+        if (caseIdx < nCases && caseTime >= g_opt.seconds) {
+            VK_CHECK(vkDeviceWaitIdle(vk.device));
+            for (int s = 0; s < NSLOTS; s++)
+                if (slotPending[s]) {
+                    if (haveTimestamps) {
+                        uint64_t ts[2];
+                        if (vkGetQueryPoolResults(vk.device, queries, (uint32_t)s * 2, 2, sizeof(ts), ts,
+                                                  sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+                            slotRec[s].gpuMs = timestampMs(&vk, ts);
+                    }
+                    logFrame(&slotRec[s]);
+                    recPush(&recs, &slotRec[s]);
+                    slotPending[s] = 0;
+                }
+            char name[48];
+            snprintf(name, sizeof(name), "case %d %s", caseIdx + 1, cs->name);
+            summarize(name, &recs, endFailures);
+            LOG("CASE %d end", caseIdx + 1);
+            endFailures = 0;
+            caseIdx++;
+            caseStarted = 0;
+            prevDisplayTime = 0;
+            havePrev = 0;
+            adaptSum = 0;
+            adaptCount = 0;
+            lastWaitReturn = 0; // no throttle carry-over into the next case
+        }
     }
 
-    // ---- drain, summarise, tear down
+    // ---- drain, summarise what is left (an unfinished case), tear down
     vkDeviceWaitIdle(vk.device);
     for (int s = 0; s < NSLOTS; s++)
         if (slotPending[s]) {
@@ -1648,53 +1850,30 @@ int main(int argc, char** argv) {
             logFrame(&slotRec[s]);
             recPush(&recs, &slotRec[s]);
         }
-
-    {
-        size_t nr_ = 0, busyRel = 0, busyEnd = 0, longGaps = 0;
-        double* gpu = malloc((recs.n + 1) * sizeof(double));
-        double* gap = malloc((recs.n + 1) * sizeof(double));
-        double* cpu = malloc((recs.n + 1) * sizeof(double));
-        size_t ng = 0, ngap = 0;
-        for (size_t i = 0; i < recs.n; i++) {
-            const FrameRec* r = &recs.v[i];
-            if (r->gapMs > 0) {
-                gap[ngap++] = r->gapMs;
-                if (r->period > 0 && r->gapMs > 1.5 * r->period * 1e-6) longGaps++;
-            }
-            if (!r->rendered) continue;
-            cpu[nr_++] = r->cpuMs;
-            if (r->gpuMs >= 0) gpu[ng++] = r->gpuMs;
-            busyRel += (size_t)r->busyAtRelease;
-            busyEnd += (size_t)r->busyAtEnd;
-        }
-        double a, b, c;
-        LOG("SUMMARY mode %s: %zu frames, %zu rendered, %llu xrEndFrame failures", modeName(), recs.n, nr_,
-            (unsigned long long)endFailures);
-        percentiles(gpu, ng, &a, &b, &c);
-        LOG("SUMMARY gpu ms p50 %.3f p95 %.3f max %.3f (%zu samples)", a, b, c, ng);
-        percentiles(cpu, nr_, &a, &b, &c);
-        LOG("SUMMARY cpu submit ms p50 %.3f p95 %.3f max %.3f", a, b, c);
-        percentiles(gap, ngap, &a, &b, &c);
-        LOG("SUMMARY xrWaitFrame gap ms p50 %.3f p95 %.3f max %.3f; %zu gaps > 1.5 periods", a, b, c, longGaps);
-        LOG("SUMMARY GPU still busy at release: %zu of %zu rendered frames; at xrEndFrame return: %zu", busyRel, nr_,
-            busyEnd);
-        free(gpu);
-        free(gap);
-        free(cpu);
-        free(recs.v);
+    if (caseIdx < nCases) {
+        char name[64];
+        snprintf(name, sizeof(name), "case %d %s (UNFINISHED, %.1f s counted)", caseIdx + 1, cases[caseIdx].name,
+                 caseTime);
+        summarize(name, &recs, endFailures);
+    } else if (recs.n) {
+        FLOG("%zu frames after the last case (exit handshake) not summarised", recs.n);
     }
+    LOG("cases completed: %d of %d", caseIdx, nCases);
+    free(recs.v);
 
     for (int i = 0; i < NSLOTS; i++) vkDestroyFence(vk.device, fences[i], NULL);
     vkDestroyQueryPool(vk.device, queries, NULL);
     vkDestroyCommandPool(vk.device, pool, NULL);
     vkDestroyPipeline(vk.device, scenePipe, NULL);
+    if (sceneDepthPipe) vkDestroyPipeline(vk.device, sceneDepthPipe, NULL);
     if (heavyPipe) vkDestroyPipeline(vk.device, heavyPipe, NULL);
     if (mvPipe) vkDestroyPipeline(vk.device, mvPipe, NULL);
     vkDestroyPipelineLayout(vk.device, layout, NULL);
     for (int e = 0; e < 2; e++) {
         destroyChain(vk.device, &eyes[e]);
         destroyChain(vk.device, &mv[e]);
-        destroyChain(vk.device, &depth[e]);
+        destroyChain(vk.device, &depthMv[e]);
+        destroyChain(vk.device, &depthEye[e]);
     }
     xrDestroySpace(local);
     xrDestroySession(session);
@@ -1703,5 +1882,5 @@ int main(int argc, char** argv) {
     vkDestroyInstance(vk.instance, NULL);
     LOG("clean exit");
     fclose(g_log);
-    return 0;
+    return caseIdx >= nCases ? 0 : 4;
 }
