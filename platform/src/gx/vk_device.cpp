@@ -139,7 +139,7 @@ bool createSubmission() {
 
 // Results of the timers of a slot whose submission finished.
 void readTimers(Slot& s) {
-    if (!sTimersOk || !s.queries) return;
+    if (!sTimersOk || !s.queries || s.timerOpen) return;
     if (s.timers && s.queriesReset) {
         uint64_t ticks[kMaxTimers * 2];
         uint32_t n = s.timers * 2;
@@ -219,6 +219,7 @@ bool fillInstanceSetup(InstanceSetup* s) {
     vkEnumerateInstanceExtensionProperties(nullptr, &n, exts.data());
     uint32_t extCount = 0, layerCount = 0;
     int level = validateLevel();
+    bool debugUtils = false;
     if (level > 0) {
         uint32_t ln = 0;
         vkEnumerateInstanceLayerProperties(&ln, nullptr);
@@ -243,14 +244,13 @@ bool fillInstanceSetup(InstanceSetup* s) {
                 s->features.pEnabledValidationFeatures = s->enables;
                 s->info.pNext = &s->features;
             }
-            if (!hasExtension(exts, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) && hasExtension(layerExts, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
-                exts.push_back(layerExts[0]);
-                strcpy(exts.back().extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+            if (hasExtension(layerExts, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
+                debugUtils = true;
             }
         } else {
             port_log("vk: PETARI_VKVALIDATE is set but VK_LAYER_KHRONOS_validation is not installed");
         }
-        if (hasExtension(exts, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
+        if (debugUtils || hasExtension(exts, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
             s->extensions[extCount++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
         }
     }
@@ -681,6 +681,9 @@ void finishAll() {
     if (sOpen >= 0) submit();
     waitValue(sNextValue - 1);
     collectFinished();
+    for (int i = 0; i < kFramesInFlight; i++) {
+        if (i != sOpen && sSlots[i].timers) readTimers(sSlots[i]);
+    }
 }
 
 void deferUntilDone(std::function<void()> fn) {
