@@ -995,23 +995,24 @@ void updateInput(App& a, XrTime time) {
     port_input_set(0, &pad);
 
     // Rumble -> haptics.  The game switches the Wii Remote's motor on and off
-    // (WPADControlMotor); the remote is the right controller here (it
-    // points), so that hand buzzes: short pulses renewed while the motor is
-    // on, stopped at once when it goes off, so that a runtime that ignores a
-    // pulse's duration can never leave a controller running.  haptics = 0 in
-    // petari_vr.ini turns this and the pointer ticks off.
+    // (WPADControlMotor); both controllers buzz: short pulses renewed while
+    // the motor is on, stopped at once when it goes off, so that a runtime
+    // that ignores a pulse's duration can never leave a controller running.
+    // haptics = 0 in petari_vr.ini turns this and the pointer ticks off.
     int rumble = vr::haptics() ? port_input_rumble(0) : 0;
     int64_t now = (int64_t)port_host_time_ns();
     if (rumble) {
         if (now >= a.nextRumblePulse) {
-            applyHaptic(a, a.handPath[1], 0.5f, 120000000);  // 120 ms
+            for (int h = 0; h < 2; h++) applyHaptic(a, a.handPath[h], 0.5f, 120000000);  // 120 ms
             a.nextRumblePulse = now + 80000000;
         }
     } else if (a.lastRumble) {
-        XrHapticActionInfo hi{XR_TYPE_HAPTIC_ACTION_INFO};
-        hi.action = a.hapticAction;
-        hi.subactionPath = a.handPath[1];
-        xrStopHapticFeedback(a.session, &hi);
+        for (int h = 0; h < 2; h++) {
+            XrHapticActionInfo hi{XR_TYPE_HAPTIC_ACTION_INFO};
+            hi.action = a.hapticAction;
+            hi.subactionPath = a.handPath[h];
+            xrStopHapticFeedback(a.session, &hi);
+        }
         a.nextRumblePulse = 0;
     }
     a.lastRumble = rumble;
