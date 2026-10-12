@@ -35,6 +35,7 @@ int sWipeKind = 0;
 float sWipeClosed = 0.0f;
 unsigned int sWipeRgb = 0;
 uint64_t sWipeFrame = 0;  // game frame that drew the wipe
+int64_t sWipeAt = 0;      // host time of that draw
 std::atomic<int> sDioramaShown{0};
 float sWipeDim = 0.0f;  // how far the current eye's wipe has closed (panel, laser)
 
@@ -44,8 +45,13 @@ void currentWipe(int* kind, float* closed, unsigned int* rgb) {
     uint64_t shown = gpu::renderer().frameNumber();
     std::lock_guard<std::mutex> lock(sWipeLock);
     bool fresh = shown <= sWipeFrame;
+    // A wipe that closed all the way stays closed through the frames the
+    // game draws blank without it (a scene loading behind the wipe: the
+    // picture is black there, and the view around it must stay black too),
+    // until the game draws a wipe again, or for at most four seconds.
+    bool held = !fresh && sWipeClosed >= 0.99f && port_host_time_ns() - sWipeAt < 4000000000ll;
     *kind = sWipeKind;
-    *closed = fresh ? sWipeClosed : 0.0f;
+    *closed = fresh ? sWipeClosed : held ? 1.0f : 0.0f;
     *rgb = sWipeRgb;
 }
 
@@ -493,6 +499,7 @@ extern "C" void port_vr_wipe(int kind, float closed, unsigned int rgb) {
     sWipeClosed = closed;
     sWipeRgb = rgb;
     sWipeFrame = frame;
+    sWipeAt = port_host_time_ns();
 }
 
 extern "C" int port_vr_diorama(void) { return sDioramaShown.load(); }
@@ -1548,13 +1555,28 @@ Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int
         // The dark around the screen; with the passthrough setting the image
         // is see-through there instead (premultiplied alpha), and the
         // compositor shows the room behind it.
+        // The game's screen wipe is drawn into the picture, which is only
+        // the screen's square: the view around it follows the wipe too
+        // (towards its colour, and opaque over the see-through room), and
+        // what is drawn over the view dims with it.
+        int wipeKind;
+        float wipeClosed;
+        unsigned int wipeRgb;
+        currentWipe(&wipeKind, &wipeClosed, &wipeRgb);
         float dark = 1.0f - sPassAmount;
-        draw.clear(0.004f * dark, 0.004f * dark, 0.012f * dark, dark);
+        auto lin = [](unsigned int c) { float f = c / 255.0f; return f * f; };
+        float wr = wipeKind == 0 ? lin((wipeRgb >> 16) & 255) : 0.0f;
+        float wg = wipeKind == 0 ? lin((wipeRgb >> 8) & 255) : 0.0f;
+        float wb = wipeKind == 0 ? lin(wipeRgb & 255) : 0.0f;
+        float keep = 1.0f - wipeClosed;
+        draw.clear(0.004f * dark * keep + wr * wipeClosed, 0.004f * dark * keep + wg * wipeClosed, 0.012f * dark * keep + wb * wipeClosed,
+                   dark * keep + wipeClosed);
         if (r.hasFrame() && !sUiLayers) {
             drawPanel(sStereoFrame ? sFlatPair[eye] : sScaledShown ? sFlatPair[0] : sFlat,
                       viewProj * panelModel(screenCenter(), screenWidth(), (float)sFlat.width / sFlat.height),
                       true);
         }
+        sWipeDim = wipeClosed;  // after the screen: its picture has the wipe in it already
     }
     if (!sUiLayers) {
         settingsDraw(viewProj);
@@ -1904,12 +1926,17 @@ void drawUiLayer(int which, const gpu::EfbTarget& dst) {
     if (which == kHudLayer) {
         drawQuad(sHud.color, xm::scale(2.0f), false, 1.0f);  // the unit quad over the whole image
         sHudFresh = false;
-    } else if (which == kScreenLayer) {
-        drawQuad(sStereoShown || sScaledShown ? sFlatPair[0].color : sFlat.color, xm::scale(2.0f), true, 1.0f);
-        sFlatFresh = false;
-    } else if (which == kScreenRightLayer) {
-        drawQuad(sFlatPair[1].color, xm::scale(2.0f), true, 1.0f);
-        sFlatRightFresh = false;
+    } else if (which == kScreenLayer || which == kScreenRightLayer) {
+        float wipe = sWipeDim;
+        sWipeDim = 0.0f;  // the picture has the game's wipe in it already
+        if (which == kScreenLayer) {
+            drawQuad(sStereoShown || sScaledShown ? sFlatPair[0].color : sFlat.color, xm::scale(2.0f), true, 1.0f);
+            sFlatFresh = false;
+        } else {
+            drawQuad(sFlatPair[1].color, xm::scale(2.0f), true, 1.0f);
+            sFlatRightFresh = false;
+        }
+        sWipeDim = wipe;
     } else if (which == kSetupLayer) {
         setupDrawLayer();
     } else if (which == kBeamLayer || which == kReticleLayer || which == kSkipLayer) {
