@@ -7,8 +7,11 @@
 // Texture memory stays big-endian and is decoded here.
 #include <math.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <thread>
 #include <unordered_map>
 
@@ -492,10 +495,152 @@ struct DlDraw {
     u32 prim, word, count, flags;  // vertices: words from `word` in DlEntry::words
 };
 
+// Memory for the display list cache's vertex words (game thread only), in
+// chunks a helper thread maps ahead of need (MADV_POPULATE_WRITE).  The
+// first frame of a new scene records a few thousand lists, 8-12 MB of
+// words: in fresh memory, each 4 KB page cost the game thread a page fault
+// (about 2,000 in that frame).  Blocks are kept in size classes (256 bytes
+// to 4 MB, powers of two) and reused; larger ones come from malloc.
+class DlWordPool {
+public:
+    static const u32 kClasses = 15, kBig = ~0u;
+    static size_t classBytes(u32 c) { return (size_t)256 << c; }
+
+    u32* alloc(size_t bytes, u32& cls) {
+        u32 c = 0;
+        while (c < kClasses && classBytes(c) < bytes) c++;
+        if (c == kClasses) {
+            cls = kBig;
+            return (u32*)port_host_alloc(bytes, 16);
+        }
+        cls = c;
+        std::vector<u8*>& fl = freeList[c];
+        if (!fl.empty()) {
+            u8* p = fl.back();
+            fl.pop_back();
+            return (u32*)p;
+        }
+        size_t need = classBytes(c);
+        if (need > bumpLeft) {
+            bump = takeChunk();
+            bumpLeft = kChunk;
+        }
+        u8* p = bump;
+        bump += need;
+        bumpLeft -= need;
+        return (u32*)p;
+    }
+    void free(u32* p, u32 cls) {
+        if (!p) return;
+        if (cls == kBig) {
+            port_host_free(p);
+        } else {
+            freeList[cls].push_back((u8*)p);
+        }
+    }
+
+    DlWordPool() {
+        PortHostAllocScope hostAlloc;
+        std::thread([this] { refillMain(); }).detach();
+    }
+
+private:
+    static const size_t kChunk = 4u << 20;  // = the largest class
+    static const size_t kReady = 4;         // chunks mapped ahead: 16 MB
+    std::vector<u8*> freeList[kClasses];
+    u8* bump = nullptr;
+    size_t bumpLeft = 0;
+    std::mutex readyLock;
+    std::condition_variable readyCv;
+    std::vector<u8*> ready;
+
+    static u8* mapChunk(bool populate) {
+        void* p = mmap(nullptr, kChunk, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED) port_fatal("display list cache: out of memory");
+#ifdef MADV_POPULATE_WRITE
+        if (populate) madvise(p, kChunk, MADV_POPULATE_WRITE);
+#endif
+        (void)populate;
+        return (u8*)p;
+    }
+    u8* takeChunk() {
+        {
+            std::lock_guard<std::mutex> lock(readyLock);
+            if (!ready.empty()) {
+                u8* c = ready.back();
+                ready.pop_back();
+                readyCv.notify_one();
+                return c;
+            }
+        }
+        return mapChunk(false);  // the helper is behind: faults as before
+    }
+    void refillMain() {
+        PortHostAllocScope hostAlloc;
+        for (;;) {
+            {
+                std::unique_lock<std::mutex> lock(readyLock);
+                readyCv.wait(lock, [this] { return ready.size() < kReady; });
+            }
+            u8* c = mapChunk(true);
+            std::lock_guard<std::mutex> lock(readyLock);
+            ready.push_back(c);
+        }
+    }
+};
+
+DlWordPool& dlWordPool() {
+    static DlWordPool* pool = new DlWordPool();
+    return *pool;
+}
+
+// A display list's vertex words, in dlWordPool() memory.
+struct DlWords {
+    u32* ptr = nullptr;
+    size_t count = 0, cap = 0;
+    u32 cls = 0;
+
+    DlWords() = default;
+    DlWords(const DlWords&) = delete;
+    DlWords& operator=(const DlWords&) = delete;
+    DlWords(DlWords&& o) noexcept : ptr(o.ptr), count(o.count), cap(o.cap), cls(o.cls) { o.ptr = nullptr; o.count = o.cap = 0; }
+    DlWords& operator=(DlWords&& o) noexcept {
+        if (this != &o) {
+            release();
+            ptr = o.ptr;
+            count = o.count;
+            cap = o.cap;
+            cls = o.cls;
+            o.ptr = nullptr;
+            o.count = o.cap = 0;
+        }
+        return *this;
+    }
+    ~DlWords() { release(); }
+    void release() {
+        dlWordPool().free(ptr, cls);
+        ptr = nullptr;
+        count = cap = 0;
+    }
+    void assign(const u32* src, size_t n) {
+        if (n > cap) {
+            release();
+            ptr = dlWordPool().alloc(n * 4, cls);
+            cap = cls == DlWordPool::kBig ? n : DlWordPool::classBytes(cls) / 4;
+        }
+        if (n) memcpy(ptr, src, n * 4);
+        count = n;
+    }
+    void clear() { count = 0; }
+    size_t size() const { return count; }
+    size_t capacity() const { return cap; }
+    const u32* data() const { return ptr; }
+};
+
 struct DlEntry {
     std::vector<u8> bytes;  // the list's contents when it was decoded
     VtxState state;
-    WordBuffer words;
+    DlWords words;
     std::vector<DlDraw> draws;
     std::vector<ArrayDep> deps;
     u64 lastUsed = 0;  // frame number
@@ -573,6 +718,7 @@ struct Recorder final : Backend {
     bool dlReplay = false;
     u32 dlDrawIndex = 0;
     ArrayUse dlUse;
+    size_t dlVertsStart = 0;  // the recorded list's first vertex word in the frame
     // Array ranges hashed during the current FIFO flush (address << 32 | bytes).
     std::unordered_map<u64, u64> flushHashes;
     u64 flushHashesStream = ~0ull;
@@ -688,6 +834,7 @@ struct Recorder final : Backend {
         dlEntry = &e;
         dlReplay = false;
         dlUse.reset();
+        dlVertsStart = frame->verts.size();
         dlStats.recorded++;
         return false;
     }
@@ -747,6 +894,14 @@ struct Recorder final : Backend {
                     e.deps.push_back({addr, bytes, arrayHash(addr, bytes)});
                 }
                 e.valid = ok;
+                if (ok) {
+                    // The list's draws decoded one after another into the
+                    // frame: kept in one go (grown draw by draw, the copies
+                    // cost the first frame of a scene thousands of page
+                    // faults).
+                    const WordBuffer& verts = frame->verts;
+                    e.words.assign(verts.data() + dlVertsStart, verts.size() - dlVertsStart);
+                }
             }
         }
         dlSlot = nullptr;
@@ -788,8 +943,7 @@ struct Recorder final : Backend {
             dlEntry = nullptr;
         } else if (dlEntry) {
             u32 flags = loadVerticesT<true>(verts, data, count, vat, vertexStride, &dlUse);
-            DlDraw d{(u32)prim, (u32)dlEntry->words.size(), count, flags};
-            dlEntry->words.insert(dlEntry->words.end(), verts.begin() + first, verts.end());
+            DlDraw d{(u32)prim, (u32)(first - dlVertsStart), count, flags};  // words copied at displayListEnd
             dlEntry->draws.push_back(d);
             dlStats.decodedWords += verts.size() - first;
             return flags;
@@ -1003,6 +1157,7 @@ struct Recorder final : Backend {
             total += texLevelSize(fmt, w, h);
         }
         if (e.checkedFrame != frameNumber) {
+            int64_t t0 = port_host_time_ns();
             e.checkedFrame = frameNumber;
             const u8* src = memPtr(addr);
             u64 h = hashBytes(src, total);
@@ -1014,8 +1169,14 @@ struct Recorder final : Backend {
                 // Images are immutable once handed to a frame: build a new one.
                 e.dataHash = h;
                 e.image = std::make_shared< TexImage >();
-                decode(*e.image, src, key);
+                capture(*e.image, src, total, key);
+                if (decodeOnGameThread()) {
+                    ensureDecoded(*e.image);
+                } else {
+                    queueDecode(e.image);
+                }
             }
+            port_perf_tex_check(port_host_time_ns() - t0);
         }
 
         auto it = frameTexIndex.find(e.image.get());
@@ -1028,24 +1189,48 @@ struct Recorder final : Backend {
         return index;
     }
 
-    void decode(TexImage& img, const u8* src, const TexKey& key) {
-        size_t texels = 0;
-        for (u32 l = 0, w = key.width, h = key.height; l < key.levels; l++, w = w > 1 ? w / 2 : 1, h = h > 1 ? h / 2 : 1) {
-            texels += (size_t)w * h;
-        }
-        img.rgba.resize(texels);
+    // A copy of the texture memory (and palette) for decoding later
+    // (tex_decode.h): the game may overwrite it before then.
+    void capture(TexImage& img, const u8* src, size_t bytes, const TexKey& key) {
         img.width = key.width;
         img.height = key.height;
         img.levels = key.levels;
-        const u16* tlut = (const u16*)(tlutMem + (key.tlutAddr & (sizeof(tlutMem) - 1)));
-        u32* dst = img.rgba.data();
-        const u8* p = src;
-        for (u32 l = 0, w = key.width, h = key.height; l < key.levels; l++, w = w > 1 ? w / 2 : 1, h = h > 1 ? h / 2 : 1) {
-            decodeTexture((u8*)dst, p, key.fmt, w, h, tlut, key.tlutFmt);
-            dst += (size_t)w * h;
-            p += texLevelSize(key.fmt, w, h);
+        takeRawBuffer(img.raw, bytes);
+        img.raw.assign(src, src + bytes);
+        bool ci = key.fmt == TF_CI4 || key.fmt == TF_CI8 || key.fmt == TF_CI14X2;
+        if (ci) {
+            u32 entries = key.fmt == TF_CI4 ? 16 : key.fmt == TF_CI8 ? 256 : 16384;
+            const u8* tlut = tlutMem + (key.tlutAddr & (sizeof(tlutMem) - 1));
+            img.rawTlut.assign(tlut, tlut + entries * 2);  // the range the hash covered
         }
+        img.rawFmt = key.fmt;
+        img.rawTlutFmt = key.tlutFmt;
         img.version++;
+        img.decodeState.store(1, std::memory_order_release);
+    }
+
+    // The frame buffers (a few frames rotate through the frame queue) are
+    // given room for half as much again as the largest frame so far, mapped
+    // at once (MADV_POPULATE_WRITE).  Grown while recording instead, a frame
+    // twice the size of the last ones (the first frame of a new scene) cost
+    // the game thread thousands of page faults and copies, several ms.
+    static const size_t kMinVertWords = 4u << 20, kMinCmdWords = 1u << 20;  // 16 MB, 4 MB: a large galaxy frame is 12 MB and 2 MB
+    size_t hwVerts = 0, hwCmds = 0, loggedHw = 0;
+    void reserveAhead(WordBuffer& b, size_t highWater, size_t minWords) {
+        size_t want = highWater + highWater / 2;
+        want = want < minWords ? minWords : want;
+        if (b.capacity() >= want) {
+            return;
+        }
+        b.reserve(want);
+#ifdef MADV_POPULATE_WRITE
+        const uintptr_t page = 4096;
+        uintptr_t start = ((uintptr_t)b.data() + page - 1) & ~(page - 1);
+        uintptr_t end = ((uintptr_t)(b.data() + b.capacity())) & ~(page - 1);
+        if (end > start) {
+            madvise((void*)start, end - start, MADV_POPULATE_WRITE);
+        }
+#endif
     }
 
     // Called when the game presents a frame (VI flip).  A frame is complete
@@ -1092,7 +1277,15 @@ struct Recorder final : Backend {
                 }
             }
         }
+        hwVerts = frame->verts.size() > hwVerts ? frame->verts.size() : hwVerts;
+        hwCmds = frame->cmds.size() > hwCmds ? frame->cmds.size() : hwCmds;
         frame = frameQueue().publish(std::move(frame));
+        reserveAhead(frame->verts, hwVerts, kMinVertWords);
+        reserveAhead(frame->cmds, hwCmds, kMinCmdWords);
+        if (hwVerts + hwCmds > loggedHw + loggedHw / 4) {
+            loggedHw = hwVerts + hwCmds;
+            port_log("gx: largest frame so far %zu KB of vertices, %zu KB of commands", hwVerts / 256, hwCmds / 256);
+        }
         resetBindings();
         snapshot();
         // Drop EFB copy associations that were not refreshed recently.
