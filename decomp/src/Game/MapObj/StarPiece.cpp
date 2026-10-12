@@ -54,6 +54,7 @@ StarPiece::StarPiece(const char* pName)
       mReceiverInfo(0), mNumGift(1) {
 #ifdef TARGET_PC
     mThrownFromVr = false;
+    mThrowRate = 1.0f;
 #endif
     MR::incNumStarPieceNewed();
 
@@ -677,7 +678,12 @@ void StarPiece::exeThrow() {
 
     TVec3f vec1(mPosition);
     TVec3f vec2(0, 0, 0);
+#ifdef TARGET_PC
+    // A faster shot covers the same line in 30 / mThrowRate steps.
+    f32 flt = getNerveStep() * mThrowRate / 30.0f;
+#else
     f32 flt = getNerveStep() / 30.0f;
+#endif
     TVec3f vec3;
 
     vec3.set(_B4);
@@ -687,7 +693,11 @@ void StarPiece::exeThrow() {
     vec2 = _A8 + vec3 * flt + (-mGravity) * flt2;
 
     if (mTargetSensor != nullptr) {
+#ifdef TARGET_PC
+        f32 flt3 = flt < 1.0f ? flt : 1.0f;
+#else
         f32 flt3 = MR::calcNerveRate(this, 30);
+#endif
         vec2 = mTargetSensor->mPosition * flt3 + vec2 * (1.0f - flt3);
     }
 
@@ -713,7 +723,7 @@ void StarPiece::exeThrow() {
 
     if (MR::isNoBind(this)) {
 #ifdef TARGET_PC
-        if (1500.0f < camPos.distance(mPosition) || camZDir.dot(playerCenterPos) < camZDir.dot(vec10) || MR::isGreaterStep(this, 28)) {
+        if (1500.0f < camPos.distance(mPosition) || camZDir.dot(playerCenterPos) < camZDir.dot(vec10) || getNerveStep() * mThrowRate > 28.0f) {
 #else
         if (1500.0f < MR::getCamPos().distance(mPosition) || camZDir.dot(playerCenterPos) < camZDir.dot(vec10) || MR::isGreaterStep(this, 28)) {
 #endif
@@ -735,7 +745,11 @@ void StarPiece::exeThrow() {
         return;
     }
 
+#ifdef TARGET_PC
+    if (getNerveStep() * mThrowRate > 30.0f) {
+#else
     if (MR::isGreaterStep(this, 30)) {
+#endif
         setNerve(GET_NERVE(StarPiece, HostTypeNrvThrowFall));
     }
 }
@@ -756,8 +770,15 @@ void StarPiece::exeThrowFall() {
     }
 
     tryCalcGravity();
+#ifdef TARGET_PC
+    // A faster shot is the same arc in less time: the drag and the fall are
+    // scaled so that it reaches as far as at the original speed.
+    mVelocity *= powf(0.97f, mThrowRate);
+    mVelocity += mGravity * (mThrowRate * mThrowRate);
+#else
     mVelocity *= 0.97f;
     mVelocity += mGravity * 1.0f;
+#endif
 
     mRotation.y += 15.0f;
     MR::repeatDegree(&mRotation.y);
@@ -776,7 +797,11 @@ void StarPiece::exeThrowFall() {
         return;
     }
 
+#ifdef TARGET_PC
+    if (getNerveStep() * mThrowRate > 60.0f) {
+#else
     if (MR::isGreaterStep(this, 60)) {
+#endif
         kill();
     }
 }
@@ -853,6 +878,7 @@ bool StarPiece::throwToTarget(HitSensor* pSensor, const TVec3f& rVec1, const TVe
 bool StarPiece::throwToTargetCore(const TVec3f& rVec1, const TVec3f& rVec2, const TVec3f& rVec3, f32 f1, bool a1) {
 #ifdef TARGET_PC
     mThrownFromVr = false;  // StarPieceShooter::shoot sets it afterwards
+    mThrowRate = 1.0f;
 #endif
     mGravity.set(rVec3);
     _B4.set(rVec1);

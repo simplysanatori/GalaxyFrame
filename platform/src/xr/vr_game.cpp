@@ -137,6 +137,7 @@ bool sComfortVignette = true;  // a gentle vignette for every smooth movement of
 // mario, other, event camera).
 bool sCutsceneDiorama[8] = {true, true, true, true, true, true, true, true};
 bool sDioramaTransitions = true;  // launch stars, pipes and arrivals stay in the diorama (diorama_transitions)
+float sStarBitSpeed = 2.0f;   // how fast shot Star Bits fly, 1 = as in the game (star_bit_speed)
 bool sSmoothTurn = true;      // the right stick turns the diorama smoothly, not in steps (smooth_turn)
 // The stick's smooth turn (rad/s) and when it was set (host ns): input comes
 // from the frame loop's thread, the rig is updated on the game's.
@@ -527,6 +528,8 @@ extern "C" void port_vr_transit_end(const void* host) {
 extern "C" const void* port_vr_transit_host(void) { return sTransitHost.load(); }
 
 extern "C" int port_vr_diorama_transitions(void) { return sDioramaTransitions ? 1 : 0; }
+// Speed factor of a Star Bit the player shoots (StarPieceDirector.cpp).
+extern "C" float port_vr_star_bit_speed(void) { return sStarBitSpeed; }
 // 1 when that kind of cutscene (GameScene.cpp's list) stays in the diorama.
 extern "C" int port_vr_cutscene_diorama(int type) { return type >= 0 && type < 8 ? (sCutsceneDiorama[type] ? 1 : 0) : 1; }
 
@@ -614,6 +617,7 @@ vr::Setting sSettings[] = {
     {"cutscene_mario", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[5])},
     {"cutscene_other", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[6])},
     {"cutscene_camera", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[7])},
+    {"star_bit_speed", 1.0f, 3.0f, 0.0f, NUMBER(sStarBitSpeed)},
     {"smooth_turn", 0.0f, 1.0f, 0.0f, FLAG(sSmoothTurn)},
     {"turn_speed", 20.0f, 360.0f, 0.0f, NUMBER(sTurnSpeed)},
     {"tilt_speed", 10.0f, 180.0f, 0.0f, NUMBER(sTiltSpeed)},
