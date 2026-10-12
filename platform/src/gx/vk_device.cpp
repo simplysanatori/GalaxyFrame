@@ -316,7 +316,7 @@ bool fillInstanceSetup(InstanceSetup* s) {
         return false;
     }
     s->app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    s->app.pApplicationName = "GalaxyQuest";
+    s->app.pApplicationName = "GalaxyFrame";
     s->app.applicationVersion = 1;
     s->app.pEngineName = "petari";
     s->app.engineVersion = 1;

@@ -7,11 +7,11 @@
 // base and the dynamic loader asks the kernel for it: the slot is left out of
 // the reservation and the library is checked to have landed there.
 //
-//   galaxyquest [game folder]
+//   galaxyframe [game folder]
 //
 // Everything the app keeps (game/, nand/, settings, log, shader cache) is in
-// $GALAXYQUEST_HOME, else $XDG_DATA_HOME/GalaxyQuest, else
-// ~/.local/share/GalaxyQuest.
+// $GALAXYFRAME_HOME (the old name $GALAXYQUEST_HOME still works), else
+// $XDG_DATA_HOME/GalaxyFrame, else ~/.local/share/GalaxyFrame.
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
@@ -42,7 +42,7 @@ typedef void (*PortLinuxMain)(const char* home, const char* gameDir, uintptr_t w
 static void reserve(uintptr_t base, size_t size) {
     void* p = mmap((void*)base, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
     if (p != (void*)base) {
-        fprintf(stderr, "galaxyquest: cannot reserve the game address window at %p (+0x%zx): %s\n", (void*)base, size,
+        fprintf(stderr, "galaxyframe: cannot reserve the game address window at %p (+0x%zx): %s\n", (void*)base, size,
                 p == MAP_FAILED ? strerror(errno) : "placed elsewhere");
         exit(1);
     }
@@ -55,13 +55,14 @@ int main(int argc, char** argv) {
     reserve(kLibBase + kLibSize, kWindowBase + kWindowSize - (kLibBase + kLibSize));
 
     char path[PATH_MAX];
-    const char* override = getenv("GALAXYQUEST_LIB");
+    const char* override = getenv("GALAXYFRAME_LIB");
+    if (!override) override = getenv("GALAXYQUEST_LIB");  // the old name
     if (override) {
         snprintf(path, sizeof(path), "%s", override);
     } else {
         ssize_t n = readlink("/proc/self/exe", path, sizeof(path) - 1);
         if (n <= 0) {
-            fprintf(stderr, "galaxyquest: cannot find the launcher's own path\n");
+            fprintf(stderr, "galaxyframe: cannot find the launcher's own path\n");
             return 1;
         }
         path[n] = 0;
@@ -71,31 +72,32 @@ int main(int argc, char** argv) {
 
     void* lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (!lib) {
-        fprintf(stderr, "galaxyquest: dlopen(%s) failed: %s\n", path, dlerror());
+        fprintf(stderr, "galaxyframe: dlopen(%s) failed: %s\n", path, dlerror());
         return 1;
     }
     PortLinuxMain entry = (PortLinuxMain)dlsym(lib, "port_linux_main");
     Dl_info info;
     if (!entry || !dladdr((void*)entry, &info)) {
-        fprintf(stderr, "galaxyquest: port_linux_main not found: %s\n", dlerror());
+        fprintf(stderr, "galaxyframe: port_linux_main not found: %s\n", dlerror());
         return 1;
     }
     if ((uintptr_t)info.dli_fbase != kLibBase) {
-        fprintf(stderr, "galaxyquest: libgame.so landed at %p, not %p (address in use)\n", info.dli_fbase, (void*)kLibBase);
+        fprintf(stderr, "galaxyframe: libgame.so landed at %p, not %p (address in use)\n", info.dli_fbase, (void*)kLibBase);
         return 1;
     }
 
     char home[PATH_MAX];
-    const char* env = getenv("GALAXYQUEST_HOME");
+    const char* env = getenv("GALAXYFRAME_HOME");
+    if (!env || !*env) env = getenv("GALAXYQUEST_HOME");  // the old name, honoured for one release
     const char* xdg = getenv("XDG_DATA_HOME");
     if (env && *env) {
         snprintf(home, sizeof(home), "%s", env);
     } else if (xdg && *xdg) {
-        snprintf(home, sizeof(home), "%s/GalaxyQuest", xdg);
+        snprintf(home, sizeof(home), "%s/GalaxyFrame", xdg);
     } else {
-        snprintf(home, sizeof(home), "%s/.local/share/GalaxyQuest", getenv("HOME") ? getenv("HOME") : ".");
+        snprintf(home, sizeof(home), "%s/.local/share/GalaxyFrame", getenv("HOME") ? getenv("HOME") : ".");
     }
-    fprintf(stderr, "galaxyquest: libgame.so at %p, home %s\n", info.dli_fbase, home);
+    fprintf(stderr, "galaxyframe: libgame.so at %p, home %s\n", info.dli_fbase, home);
     entry(home, argc > 1 ? argv[1] : NULL, kWindowBase, kWindowSize);
     return 0;
 }

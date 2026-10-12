@@ -207,12 +207,17 @@ void drawPanel() {
     c.init(kTexW, kTexH);
     c.roundRect(0, 0, kTexW, kTexH, 36.0f, rgb(78, 86, 106, 0.97f));
     c.roundRect(3, 3, kTexW - 3, kTexH - 3, 33.0f, rgb(22, 25, 33));
-    c.text(56, 86, kFontLarge, "GalaxyQuest", rgb(255, 255, 255));
+    c.text(56, 86, kFontLarge, "GalaxyFrame", rgb(255, 255, 255));
     c.text(56, 136, kFontSmall, "The game's files are needed", rgb(140, 180, 255));
     float y = c.textWrapped(56, 196, kTexW - 112, 38, kFontSmall,
+#ifdef __ANDROID__
                             "This app plays Super Mario Galaxy from the files of your own disc, converted on a computer with "
                             "tools/cook/cook.py (see the project's README). Copy the converted folder, the one holding sys and "
                             "files, to the headset, then choose it below.",
+#else
+                            "This app plays Super Mario Galaxy from the files of your own disc. Convert it once with "
+                            "steam-frame/prepare-game.sh (see the project's README), then start the game again.",
+#endif
                             rgb(196, 202, 216));
     (void)y;
     c.roundRect(56, 336, kTexW - 56, 338, 1.0f, rgb(58, 63, 78));
