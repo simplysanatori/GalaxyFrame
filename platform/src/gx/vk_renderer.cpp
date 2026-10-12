@@ -10,6 +10,7 @@
 #include "vk_device.h"  // first: Vulkan without prototypes
 #include "vk_mem.h"
 #include "vk_pipeline.h"
+#include "tex_decode.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -745,6 +746,7 @@ void VkImpl::uploadTextures(const Frame& f) {
             queueTextureDelete(img->gpuTex);  // new pixels: a new image (the old one may be in use)
             img->gpuTex = 0;
         }
+        ensureDecoded(*img);  // normally done while the frame was prepared
         size_t texels = 0;
         for (u32 l = 0, w = img->width, h = img->height; l < img->levels; l++, w = w > 1 ? w / 2 : 1, h = h > 1 ? h / 2 : 1) texels += (size_t)w * h;
         if (img->rgba.size() < texels) {
