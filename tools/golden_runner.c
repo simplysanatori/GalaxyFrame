@@ -9,10 +9,10 @@
 //   - a snapshot at retrace K pauses the game's retraces the moment the counter reaches K,
 //     lets the frame in flight finish, renders the latest frame, then resumes.
 //
-//   golden_runner <game root> <save root> <out dir> <last retrace> <name>:<retrace>[,...]
+//   golden_runner <game root> <save root> <out dir> <last retrace> <name>:<retrace>[:x][,...]
 //
-// Writes <out dir>/<name>.png (flat picture) and, with PETARI_XRSIM=1, <name>_xr.png (both
-// simulated eyes).  Environment as for petari_headless (PETARI_INPUT, PETARI_STAGE,
+// Writes <out dir>/<name>.png (flat picture) and, for shots marked :x, <name>_xr.png (both
+// simulated eyes, the headset presentation; also <name>_xr_mv.png with PETARI_XRSIM_MV=1).  Environment as for petari_headless (PETARI_INPUT, PETARI_STAGE,
 // PETARI_VRINI, PETARI_SHADER_CACHE, PETARI_XRSIM_*, ...).  Logs to stderr.
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -59,6 +59,7 @@ static void padAt(const PortInputEvent* ev, int count, int ms, PortPadState* pad
 typedef struct {
     char name[64];
     unsigned retrace;
+    int xr;
 } Shot;
 
 static int cmpShot(const void* a, const void* b) {
@@ -68,7 +69,7 @@ static int cmpShot(const void* a, const void* b) {
 
 int main(int argc, char** argv) {
     if (argc < 6) {
-        fprintf(stderr, "usage: %s <game root> <save root> <out dir> <last retrace> <name>:<retrace>[,...]\n", argv[0]);
+        fprintf(stderr, "usage: %s <game root> <save root> <out dir> <last retrace> <name>:<retrace>[:x][,...]\n", argv[0]);
         return 2;
     }
     const char* outDir = argv[3];
@@ -84,6 +85,7 @@ int main(int argc, char** argv) {
             *colon = 0;
             snprintf(shots[shotCount].name, sizeof(shots[0].name), "%s", tok);
             shots[shotCount].retrace = (unsigned)atoi(colon + 1);
+            shots[shotCount].xr = strstr(colon + 1, ":x") != NULL;
             shotCount++;
         }
         qsort(shots, shotCount, sizeof(Shot), cmpShot);
@@ -166,7 +168,7 @@ int main(int argc, char** argv) {
             fprintf(stderr, "golden: shot %s at retrace %u (wanted %u)\n", shots[next].name, at, shots[next].retrace);
             unsigned long long frame = render(file, 2);
             fprintf(stderr, "golden: shot %s is game frame %llu\n", shots[next].name, frame);
-            if (envSet("PETARI_XRSIM") && xrsim) {
+            if (shots[next].xr && xrsim) {
                 snprintf(file, sizeof(file), "%s/%s_xr.png", outDir, shots[next].name);
                 xrsim(file, steps > 0 ? steps : 1, yaw, pitch);
             }
