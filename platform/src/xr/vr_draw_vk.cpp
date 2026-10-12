@@ -18,6 +18,7 @@
 #include "../gx/vk_device.h"  // first: Vulkan without prototypes
 #include "../gx/vk_mem.h"
 #include "../gx/vk_spirv.h"
+#include "../gx/gl_shadergen.h"  // gpu::vkLegacy
 
 #include <math.h>
 #include <stdio.h>
@@ -133,6 +134,32 @@ vec3 sourceColor() {
     vec3 g = casLoad(sp + ivec2(-1, 1));
     vec3 h = casLoad(sp + ivec2(0, 1));
     vec3 i = casLoad(sp + ivec2(1, 1));
+    float mn = min(min(min(d.g, e.g), min(f.g, b.g)), h.g);
+    float mx = max(max(max(d.g, e.g), max(f.g, b.g)), h.g);
+    mn += min(min(min(mn, a.g), min(c.g, g.g)), i.g);
+    mx += max(max(max(mx, a.g), max(c.g, g.g)), i.g);
+    float amp = sqrt(clamp(min(mn, 2.0 - mx) / max(mx, 1e-4), 0.0, 1.0));
+    float w = amp * uCasPeak;
+    return clamp((b * w + d * w + f * w + h * w + e) / (1.0 + 4.0 * w), 0.0, 1.0);
+}
+)";
+
+// The same with the texture unit's addressing: the 3x3 texels by offset from
+// the pixel's own texel centre through a nearest, clamp-to-edge sampler
+// (VulkanDraw::mNearest): the texels casLoad's clamp picks, without its 36
+// integer operations a pixel.
+const char* kBlitCas1Hw = R"(
+vec3 sourceColor() {
+    vec2 uv = (vec2(ivec2(FRAG_GL)) + 0.5) / vec2(textureSize(uTex, 0));
+    vec3 a = textureLodOffset(uTex, uv, 0.0, ivec2(-1, -1)).rgb;
+    vec3 b = textureLodOffset(uTex, uv, 0.0, ivec2(0, -1)).rgb;
+    vec3 c = textureLodOffset(uTex, uv, 0.0, ivec2(1, -1)).rgb;
+    vec3 d = textureLodOffset(uTex, uv, 0.0, ivec2(-1, 0)).rgb;
+    vec3 e = textureLod(uTex, uv, 0.0).rgb;
+    vec3 f = textureLodOffset(uTex, uv, 0.0, ivec2(1, 0)).rgb;
+    vec3 g = textureLodOffset(uTex, uv, 0.0, ivec2(-1, 1)).rgb;
+    vec3 h = textureLodOffset(uTex, uv, 0.0, ivec2(0, 1)).rgb;
+    vec3 i = textureLodOffset(uTex, uv, 0.0, ivec2(1, 1)).rgb;
     float mn = min(min(min(d.g, e.g), min(f.g, b.g)), h.g);
     float mx = max(max(max(d.g, e.g), max(f.g, b.g)), h.g);
     mn += min(min(min(mn, a.g), min(c.g, g.g)), i.g);
@@ -340,6 +367,10 @@ public:
         si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         si.maxLod = VK_LOD_CLAMP_NONE;
         if (vkCreateSampler(dev, &si, nullptr, &mSampler) != VK_SUCCESS) return false;
+        si.magFilter = si.minFilter = VK_FILTER_NEAREST;
+        si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.maxLod = 0.0f;
+        if (vkCreateSampler(dev, &si, nullptr, &mNearest) != VK_SUCCESS) return false;
         VkDescriptorSetLayoutBinding b{};
         b.binding = 0;
         b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -361,7 +392,7 @@ public:
         std::string blitFs = std::string(kBlitFsHead) + kCommon;
         mVs[kCompPlain] = mVs[kCompCas1] = mVs[kCompCasScaled] = module(gpu::SpirvStage::Vertex, kBlitVs, "blit vs");
         mFs[kCompPlain] = module(gpu::SpirvStage::Fragment, blitFs + kBlitPlain + kBlitFsMain, "composite fs");
-        mFs[kCompCas1] = module(gpu::SpirvStage::Fragment, blitFs + kBlitCas1 + kBlitFsMain, "composite CAS fs");
+        mFs[kCompCas1] = module(gpu::SpirvStage::Fragment, blitFs + (gpu::vkLegacy() ? kBlitCas1 : kBlitCas1Hw) + kBlitFsMain, "composite CAS fs");
         mFs[kCompCasScaled] = module(gpu::SpirvStage::Fragment, blitFs + kBlitCasScaled + kBlitFsMain, "composite scaling CAS fs");
         mVs[kQuadOpaque] = mVs[kQuadBlend] = mVs[kLayer] = module(gpu::SpirvStage::Vertex, kQuadVs, "quad vs");
         mFs[kQuadOpaque] = mFs[kQuadBlend] = module(gpu::SpirvStage::Fragment, withCommon(kQuadFs), "quad fs");
@@ -744,7 +775,7 @@ private:
         if (!p || !imageInfo(tex, &info)) return;
         VkCommandBuffer cmd = commandBuffer();
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
-        VkDescriptorImageInfo ii{mSampler, info.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkDescriptorImageInfo ii{prog == kCompCas1 && !gpu::vkLegacy() ? mNearest : mSampler, info.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         w.dstBinding = 0;
         w.descriptorCount = 1;
@@ -829,6 +860,7 @@ private:
 
     bool mReady = false;
     VkSampler mSampler = VK_NULL_HANDLE;
+    VkSampler mNearest = VK_NULL_HANDLE;  // the CAS composite's (kBlitCas1Hw)
     VkDescriptorSetLayout mSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout mLayout = VK_NULL_HANDLE;
     VkShaderModule mVs[kPrograms] = {}, mFs[kPrograms] = {};
