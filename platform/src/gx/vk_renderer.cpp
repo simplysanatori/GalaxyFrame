@@ -1136,6 +1136,18 @@ void VkImpl::dumpCopy(const CopyOp& op, u32 handle, int dw, int dh) {
 void VkImpl::doCopy(const Item& it, Target& src, VulkanRenderer& r, bool vr, size_t index) {
     CopyOp op;
     decodeCopy(it, src.width, src.height, cur->nativeW, cur->nativeH, copySlot, op);
+    // Tests of paths the recorded scenes rarely take: PETARI_VKFORCECLEAR=1
+    // clears after every copy (color, alpha and depth), PETARI_VKFORCEZCOPY=1
+    // makes every texture copy a Z copy.
+    static const bool sForceClear = debugEnv("PETARI_VKFORCECLEAR") != nullptr;
+    static const bool sForceZ = debugEnv("PETARI_VKFORCEZCOPY") != nullptr;
+    if (sForceClear) {
+        op.clear = true;
+        op.colorUpd = op.alphaUpd = op.zUpd = true;
+    }
+    if (sForceZ && !op.toXfb) {
+        op.mode = 11;
+    }
     int sx0 = op.sx0, sy0 = op.sy0, sx1 = op.sx1, sy1 = op.sy1;
     bool copies = !op.toXfb || !vr;
     if (copies) {
