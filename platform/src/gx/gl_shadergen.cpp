@@ -163,7 +163,9 @@ std::string genVertexShader(const ShaderUid& u, Dialect dialect) {
     // Vulkan: gl_VertexIndex is the index read from the index buffer (the
     // draw's vertexOffset is 0 and the batch's vertex buffer is bound at its
     // first word), as gl_VertexID is for glDrawElements.
-    const bool pixPush = vk && vkPixelStatePushed();
+    // Vulkan: the pixel state at the draw's push constant, except in the
+    // variant for batches drawn whole (ShaderUid::cutaway bit 1).
+    const bool pixPush = vk && vkPixelStatePushed() && !(u.cutaway & 2);
     if (vk) {
         o.w("layout(std430, set = 0, binding = 3) readonly buffer VtxRecBuf { uint vtxRec[]; };\n");
         o.s += kPushBlockVk;
@@ -171,7 +173,7 @@ std::string genVertexShader(const ShaderUid& u, Dialect dialect) {
         o.w("layout(location = %d) out vec4 v_clr0;\nlayout(location = %d) out vec4 v_clr1;\n", (int)kLocClr0, (int)kLocClr1);
         for (uint32_t i = 0; i < u.numTexGens; i++) o.w("layout(location = %u) out vec3 v_tex%u;\n", (unsigned)kLocTex + i, i);
         o.w("layout(location = %d) out float v_viewz;\nlayout(location = %d) out float v_gxz;\n", (int)kLocViewZ, (int)kLocGxZ);
-        if (u.cutaway) o.w("layout(location = %d) out vec3 v_eye;\n", (int)kLocEye);
+        if (u.cutaway & 1) o.w("layout(location = %d) out vec3 v_eye;\n", (int)kLocEye);
     } else {
         o.w("layout(std430, binding = 3) readonly buffer VtxRecBuf { uint vtxRec[]; };\n");
         o.w("uniform uint u_firstOrdinal;\n");
@@ -179,7 +181,7 @@ std::string genVertexShader(const ShaderUid& u, Dialect dialect) {
         o.w("out vec4 v_clr0;\nout vec4 v_clr1;\n");
         for (uint32_t i = 0; i < u.numTexGens; i++) o.w("out vec3 v_tex%u;\n", i);
         o.w("out float v_viewz;\nout float v_gxz;\n");
-        if (u.cutaway) o.w("out vec3 v_eye;\n");
+        if (u.cutaway & 1) o.w("out vec3 v_eye;\n");
     }
 
     // Matrix rows: slot bases come from the draw record (3 rows per slot).
@@ -230,11 +232,11 @@ std::string genVertexShader(const ShaderUid& u, Dialect dialect) {
     o.w("    vec4 e = vec4(dot(vrView[0].xyz, pos), dot(vrView[1].xyz, pos), dot(vrView[2].xyz, pos), 0.0);\n");
     o.w("    clipPos = vec4(dot(vrProj[0], e), dot(vrProj[1], e), 0.0, dot(vrProj[3], e));\n");
     o.w("    clipPos.z = clipPos.w * 0.99999;\n");
-    if (u.cutaway) o.w("    v_eye = vec3(0.0, 0.0, 1.0e6);  // never cut\n");
+    if (u.cutaway & 1) o.w("    v_eye = vec3(0.0, 0.0, 1.0e6);  // never cut\n");
     o.w("  } else if (vrDraw) {\n");
     o.w("    vec4 e = vec4(dot(vrView[0], v4), dot(vrView[1], v4), dot(vrView[2], v4), 1.0);\n");
     o.w("    clipPos = vec4(dot(vrProj[0], e), dot(vrProj[1], e), dot(vrProj[2], e), dot(vrProj[3], e));\n");
-    if (u.cutaway) o.w("    v_eye = e.xyz;\n");
+    if (u.cutaway & 1) o.w("    v_eye = e.xyz;\n");
     o.w("  } else {\n");
     // One picture of the flat screen's stereo pair: the game's own camera a
     // little to the side, its frustum sheared so what is vrStereo.y away
@@ -255,7 +257,7 @@ std::string genVertexShader(const ShaderUid& u, Dialect dialect) {
         o.w("    }\n");
     }
     o.w("    clipPos = vec4(c.x, c.y, depth * 2.0 * 1.0 - c.w, c.w);\n");
-    if (u.cutaway) o.w("    v_eye = vec3(0.0, 0.0, 1.0e6);  // never cut\n");
+    if (u.cutaway & 1) o.w("    v_eye = vec3(0.0, 0.0, 1.0e6);  // never cut\n");
     o.w("  }\n");
     o.w("  gl_Position = clipPos;\n");
     if (vk) o.w("  gl_PointSize = 1.0;\n");
@@ -510,7 +512,7 @@ std::string genFragmentShader(const ShaderUid& u, Dialect dialect) {
         // The pixel state comes from the draw's push constant: one value
         // for the whole draw, which the compiler can load once for it (a
         // flat varying is a per-fragment load from varying addresses).
-        if (vkPixelStatePushed()) {
+        if (vkPixelStatePushed() && !(u.cutaway & 2)) {
             o.s += kPushBlockVk;
         } else {
             o.w("layout(location = %d) flat in uint v_pix;\n", (int)kLocPix);
@@ -531,7 +533,7 @@ std::string genFragmentShader(const ShaderUid& u, Dialect dialect) {
     }
     o.w("vec2 projUv(vec3 t) { return (t.z != 0.0) ? t.xy / t.z : t.xy; }\n");
     o.w("int idot(ivec3 a, ivec3 b) { ivec3 t = a * b; return t.x + t.y + t.z; }\n");
-    if (u.cutaway) {
+    if (u.cutaway & 1) {
         if (vk) {
             o.w("layout(location = %d) in vec3 v_eye;\n", (int)kLocEye);
         } else {
@@ -544,7 +546,7 @@ std::string genFragmentShader(const ShaderUid& u, Dialect dialect) {
     // VR cutaway (see gpu::EyeView): dither out 3D geometry between the eye
     // and the player, and geometry right in front of the eye.  Only in the
     // cutaway variant: a discard costs Adreno its early depth rejection.
-    if (u.cutaway) {
+    if (u.cutaway & 1) {
     o.w("  if (vrFocus.w > 0.0) {\n");
     o.w("    float len = length(vrFocus.xyz);\n");
     o.w("    float along = clamp(dot(v_eye, vrFocus.xyz) / len, 0.0, len);\n");
@@ -556,7 +558,7 @@ std::string genFragmentShader(const ShaderUid& u, Dialect dialect) {
     o.w("    if (cut > (kBayer[q.y * 4 + q.x] + 0.5) / 16.0) discard;\n");
     o.w("  }\n");
     }
-    const char* pix = vk && vkPixelStatePushed() ? "u_pixBase" : "v_pix";
+    const char* pix = vk && vkPixelStatePushed() && !(u.cutaway & 2) ? "u_pixBase" : "v_pix";
     o.w("  vec4 tevReg[4] = vec4[4](st[%s], st[%s + 1u], st[%s + 2u], st[%s + 3u]);\n", pix, pix, pix, pix);
     o.w("  ivec4 konst[4];\n  for (int i = 0; i < 4; i++) konst[i] = ivec4(round(st[%s + 4u + uint(i)] * 255.0));\n", pix);
     o.w("  vec4 alphaRef = st[%s + 8u];\n  vec4 fogColor = st[%s + 9u];\n  vec4 fogParams = st[%s + 10u];\n", pix, pix, pix);

@@ -392,6 +392,7 @@ struct FrameData {
 
 struct VkPrepared : Prepared {
     FrameData* data = nullptr;
+    std::vector<u32> wholeProgs;  // per uid: the program of its variant for batches drawn whole (0 until requested)
 };
 
 struct CopyTex {
@@ -1078,6 +1079,7 @@ void VkImpl::prepareGpu(VkPrepared& p, bool syncPrograms, bool renderThread) {
         }
     }
     p.cutProgs.assign(p.uids.size(), 0);
+    p.wholeProgs.assign(p.uids.size(), 0);
 }
 
 // Worker thread: builds the newest requested frame and uploads it.
@@ -1779,10 +1781,31 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         if (cutActive && it.useVr && it.uid < cutProgs.size() && cutProgs[it.uid]) {
             pipe = pipes.get(cutProgs[it.uid]);
         }
+        bool cutPipe = pipe != VK_NULL_HANDLE;
         if (!pipe) pipe = pipes.get(progId);
         if (!pipe) {
             skipped++;  // still compiling (GLES: program 0)
             continue;
+        }
+        // A batch of many small runs of pixel states (sprites, glyphs,
+        // particles with their own colours) is drawn whole with the
+        // program's variant that reads each vertex record's pixel state
+        // (requested on first use; split into its runs until it is ready):
+        // the draws would cost more than the per-fragment loads.
+        static const bool sPixRuns = vkPixelStatePushed();
+        static const int sWholeRuns = debugEnv("PETARI_VKWHOLERUNS") ? atoi(debugEnv("PETARI_VKWHOLERUNS")) : 8;
+        bool whole = false;
+        if (sPixRuns && !cutPipe && it.pixRunCount > (u32)sWholeRuns && it.idxCount < 64 * it.pixRunCount && it.uid < P.wholeProgs.size()) {
+            u32& wp = P.wholeProgs[it.uid];
+            if (!wp) {
+                ShaderUid u = P.uids[it.uid];
+                u.cutaway |= 2;
+                wp = pipes.request(u, !async.load(), 5);
+            }
+            if (VkPipeline wpipe = pipes.get(wp)) {
+                pipe = wpipe;
+                whole = true;
+            }
         }
         Target& t = *curT;
         DrawRect rect;
@@ -1998,15 +2021,15 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         // One draw per run of the batch's draws with one pixel state, its
         // base in a push constant (gl_shadergen.cpp: the fragment shader
         // reads the pixel state there).
-        static const bool sPixRuns = vkPixelStatePushed();
-        PixRun whole{it.idxOffset, 0};
-        const PixRun* runs = sPixRuns ? P.pixRuns.data() + it.pixRunFirst : &whole;
-        u32 runCount = sPixRuns ? it.pixRunCount : 1;
+        PixRun one{it.idxOffset, 0};
+        bool split = sPixRuns && !whole;
+        const PixRun* runs = split ? P.pixRuns.data() + it.pixRunFirst : &one;
+        u32 runCount = split ? it.pixRunCount : 1;
         u32 batchEnd = it.idxOffset + it.idxCount;
         for (u32 k = 0; k < runCount; k++) {
             u32 start = runs[k].idxStart, end = k + 1 < runCount ? runs[k + 1].idxStart : batchEnd;
             if (end <= start) continue;
-            if (sPixRuns && ds.pixBase != runs[k].pixBase) {
+            if (split && ds.pixBase != runs[k].pixBase) {
                 vkCmdPushConstants(cmd, pipes.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, kVkPushPixBase, 4, &runs[k].pixBase);
                 ds.pixBase = runs[k].pixBase;
                 pc.pushes++;
