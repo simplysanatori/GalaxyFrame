@@ -23,6 +23,7 @@
 #include "gpu_prepare.h"
 #include "port/heap_routing.h"
 #include "port/port.h"
+#include "tex_decode.h"
 
 extern "C" void port_headless_write_png(const char* path, const unsigned char* rgba, int w, int h);
 
@@ -463,6 +464,7 @@ GLuint GlImpl::buildProgram(const ShaderUid& uid) {
     }
     if (vs) glDeleteShader(vs);
     if (fs) glDeleteShader(fs);
+    port_perf_programs(0, 1);
     static std::atomic<int> built{0};
     if ((++built % 50) == 0) {
         port_log("gl: %d shader programs built", built.load());
@@ -637,6 +639,9 @@ void GlImpl::upload(Prepared& p, bool syncPrograms) {
     stateBuf = fb.buf[5];
 
     // New textures.
+    int64_t upStart = port_host_time_ns();
+    unsigned upCount = 0;
+    u64 upBytes = 0;
     for (auto& img : f.textures) {
         if (img->gpuTex && img->gpuVersion == img->version) {
             continue;
@@ -645,6 +650,7 @@ void GlImpl::upload(Prepared& p, bool syncPrograms) {
             glGenTextures(1, &img->gpuTex);
         }
         glBindTexture(GL_TEXTURE_2D, img->gpuTex);
+        ensureDecoded(*img);  // normally done while the frame was prepared
         const u32* px = img->rgba.data();
         u32 w = img->width, h = img->height;
         for (u32 l = 0; l < img->levels; l++) {
@@ -655,6 +661,8 @@ void GlImpl::upload(Prepared& p, bool syncPrograms) {
         }
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, (GLint)img->levels - 1);
         img->gpuVersion = img->version;
+        upCount++;
+        upBytes += img->rgba.size() * 4;
         // Images never change once recorded, so the pixels are not needed
         // again (except by the PETARI_DUMP texture dump and PETARI_FRAMESAVE).
         static const bool keepPixels = debugEnv("PETARI_DUMP") != nullptr || debugEnv("PETARI_FRAMESAVE") != nullptr;
@@ -663,9 +671,18 @@ void GlImpl::upload(Prepared& p, bool syncPrograms) {
         }
     }
 
+    if (upCount) {
+        port_perf_tex_upload(port_host_time_ns() - upStart, upCount, upBytes);
+    }
+
     std::vector<GLuint> progs(p.uids.size());
+    unsigned missed = 0;
     for (size_t i = 0; i < p.uids.size(); i++) {
         progs[i] = program(p.uids[i], syncPrograms);
+        missed += progs[i] == 0;
+    }
+    if (missed) {
+        port_perf_programs(missed, 0);
     }
     for (Item& it : p.items) {
         if (it.type == IT_DRAW) {
@@ -677,6 +694,7 @@ void GlImpl::upload(Prepared& p, bool syncPrograms) {
 
 // Worker thread: builds the newest requested frame.
 void GlImpl::workerMain() {
+    port_boost_thread();  // the frame shown next waits for it
     for (;;) {
         std::shared_ptr<const Frame> frame;
         std::unique_ptr<Prepared> out;
