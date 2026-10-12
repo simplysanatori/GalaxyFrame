@@ -14,6 +14,7 @@ Modes
                    under 1/255 (of full scale), and under 0.5% of the pixels differing by more
                    than 8/255 in any colour channel.  Alpha is ignored (the captures force it
                    to 255 in some paths and not in others).
+  --ignore a,b     (directories) skip these names (without .png, and their _xr variants), and say so
   --mean T --frac F --pix N   override the tolerant limits (T in 1/255 units, F in percent,
                    N in 1/255 units).
 
@@ -179,6 +180,7 @@ def main(argv):
     paths = []
     diff = None
     diff_dir = None
+    ignore = set()
     i = 0
     while i < len(argv):
         t = argv[i]
@@ -196,6 +198,9 @@ def main(argv):
         elif t == "--diff":
             i += 1
             diff = argv[i]
+        elif t == "--ignore":
+            i += 1
+            ignore = set(argv[i].split(","))
         elif t == "--diff-dir":
             i += 1
             diff_dir = argv[i]
@@ -215,6 +220,10 @@ def main(argv):
             os.makedirs(diff_dir, exist_ok=True)
         bad = 0
         for nme in names:
+            base = nme[:-4]
+            if base in ignore or (base.endswith("_xr") and base[:-3] in ignore) or (base.endswith("_xr_mv") and base[:-6] in ignore):
+                print("%-28s skip" % nme)
+                continue
             pa, pb = os.path.join(a, nme), os.path.join(b, nme)
             if not os.path.exists(pa) or not os.path.exists(pb):
                 print("%-28s FAIL  missing in %s" % (nme, "A" if not os.path.exists(pa) else "B"))

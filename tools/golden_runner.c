@@ -1,19 +1,25 @@
 // Frame-locked headless runner for the golden captures (tools/golden.sh).
 //
-// platform/android/headless.c snapshots on wall-clock timers, so a capture lands on
-// game frame N or N+1 from run to run, and animated pixels (water, sparkles) differ.
-// This runner boots libgame.so the same way, but keys everything to the game's own
-// retrace counter, which is the game's frame clock:
-//   - the scripted controller (PETARI_INPUT, "seconds") is read as retraces * 1001/60000 s,
-//     and the state for retrace n+1 is set mid-frame, after retrace n was handled;
-//   - a snapshot at retrace K pauses the game's retraces the moment the counter reaches K,
-//     lets the frame in flight finish, renders the latest frame, then resumes.
+// platform/android/headless.c snapshots on wall-clock timers, so a capture lands on game
+// frame N or N+1 from run to run, and the game's own retrace clock (59.94 Hz, wall time) lets
+// its loading threads get a different number of frames done under different machine load.
+// This runner makes the game's frame clock its own:
+//   - the game is paused from before boot (no wall-clock retraces, no audio DMA), so nothing
+//     but this runner raises a retrace;
+//   - it raises one retrace (port_irq_raise(PORT_IRQ_VI), as the VI clock would) only when the
+//     process has been idle for a few milliseconds, i.e. every emulated thread has finished the
+//     work the previous retrace started (the game, its loading threads, the renderer);
+//   - the scripted controller (PETARI_INPUT, seconds) is read as retraces * 1001/60000 s and set
+//     before each retrace;
+//   - a shot at retrace K renders the latest frame once the process is idle after retrace K.
+// So the game sees the same retraces, inputs and idle gaps whatever else the machine is doing.
 //
 //   golden_runner <game root> <save root> <out dir> <last retrace> <name>:<retrace>[:x][,...]
 //
 // Writes <out dir>/<name>.png (flat picture) and, for shots marked :x, <name>_xr.png (both
-// simulated eyes, the headset presentation; also <name>_xr_mv.png with PETARI_XRSIM_MV=1).  Environment as for petari_headless (PETARI_INPUT, PETARI_STAGE,
-// PETARI_VRINI, PETARI_SHADER_CACHE, PETARI_XRSIM_*, ...).  Logs to stderr.
+// simulated eyes, the headset presentation; also <name>_xr_mv.png with PETARI_XRSIM_MV=1).
+// Environment as for petari_headless (PETARI_INPUT, PETARI_STAGE, PETARI_VRINI,
+// PETARI_SHADER_CACHE, PETARI_XRSIM_*, ...).  GALAXYQUEST_LIB: folder of libgame.so.  Logs to stderr.
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
@@ -44,16 +50,31 @@ static const char* envSet(const char* name) {
     return v && *v ? v : NULL;
 }
 
-static void sleepMs(int ms) {
-    struct timespec ts = {ms / 1000, (long)(ms % 1000) * 1000000L};
-    nanosleep(&ts, NULL);
-}
-
 static void padAt(const PortInputEvent* ev, int count, int ms, PortPadState* pad) {
     memset(pad, 0, sizeof(*pad));
     pad->connected = 1;
     pad->pointerDist = 2.0f;
     portApplyInputScript(ev, count, ms, pad);
+}
+
+static void (*irqRaise)(int);
+enum { PORT_IRQ_VI_N = 1 };  // PORT_IRQ_VI in platform/include/port/port.h
+
+static long long cpuNs(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+// Returns when the process has used (almost) no CPU for a few milliseconds in a row: every
+// thread is blocked until the next retrace.  Gives up after 20 s.
+static void waitIdle(void) {
+    int quiet = 0;
+    for (int i = 0; i < 20000 && quiet < 4; i++) {
+        long long before = cpuNs();
+        usleep(1500);
+        quiet = (cpuNs() - before) < 120000 ? quiet + 1 : 0;
+    }
 }
 
 typedef struct {
@@ -125,11 +146,12 @@ int main(int argc, char** argv) {
     void (*setWindow)(uintptr_t, size_t) = (void (*)(uintptr_t, size_t))dlsym(lib, "port_mem_set_reserved_window");
     void (*boot)(const char*, const char*) = (void (*)(const char*, const char*))dlsym(lib, "port_boot");
     void (*inputSet)(int, const PortPadState*) = (void (*)(int, const PortPadState*))dlsym(lib, "port_input_set");
+    irqRaise = (void (*)(int))dlsym(lib, "port_irq_raise");
     void (*setPaused)(int) = (void (*)(int))dlsym(lib, "port_set_paused");
     unsigned (*retraceCount)(void) = (unsigned (*)(void))dlsym(lib, "VIGetRetraceCount");
     unsigned long long (*render)(const char*, int) = (unsigned long long (*)(const char*, int))dlsym(lib, "port_headless_render");
     void (*xrsim)(const char*, int, float, float) = (void (*)(const char*, int, float, float))dlsym(lib, "port_headless_xrsim");
-    if (!setWindow || !boot || !inputSet || !setPaused || !retraceCount || !render) {
+    if (!setWindow || !boot || !inputSet || !setPaused || !retraceCount || !render || !irqRaise) {
         fprintf(stderr, "missing entry points: %s\n", dlerror());
         return 1;
     }
@@ -142,39 +164,30 @@ int main(int argc, char** argv) {
     inputSet(0, &pad);
 
     // PETARI_WARP and friends compare wall time with PETARI_T0_MS; not used in lockstep.
+    setPaused(1);  // no retraces of its own: this runner raises them
     fprintf(stderr, "golden: libgame.so at %p; booting\n", (void*)kLibBase);
     boot(argv[1], argv[2]);
 
     int steps = envSet("PETARI_XRSIM_STEPS") ? atoi(envSet("PETARI_XRSIM_STEPS")) : 40;
     float yaw = 0, pitch = -20;
     if (envSet("PETARI_XRHEAD")) sscanf(envSet("PETARI_XRHEAD"), "%f,%f", &yaw, &pitch);
-    unsigned last = retraceCount();
     int next = 0;
     unsigned lastButtonsLog = 0;
     for (;;) {
         unsigned c = retraceCount();
-        if (c == last) {
-            usleep(500);
-            continue;
-        }
-        last = c;
+        waitIdle();
         if (next < shotCount && c >= shots[next].retrace) {
-            // Stop further retraces, let the frame in flight finish, then render the latest.
-            setPaused(1);
-            unsigned at = retraceCount();
-            sleepMs(300);
             char file[640];
             snprintf(file, sizeof(file), "%s/%s.png", outDir, shots[next].name);
-            fprintf(stderr, "golden: shot %s at retrace %u (wanted %u)\n", shots[next].name, at, shots[next].retrace);
             unsigned long long frame = render(file, 2);
-            fprintf(stderr, "golden: shot %s is game frame %llu\n", shots[next].name, frame);
+            fprintf(stderr, "golden: shot %s at retrace %u is game frame %llu\n", shots[next].name, c, frame);
+            waitIdle();
             if (shots[next].xr && xrsim) {
                 snprintf(file, sizeof(file), "%s/%s_xr.png", outDir, shots[next].name);
                 xrsim(file, steps > 0 ? steps : 1, yaw, pitch);
+                waitIdle();
             }
             next++;
-            setPaused(0);
-            last = retraceCount();
             if (next >= shotCount) break;
             continue;
         }
@@ -182,14 +195,15 @@ int main(int argc, char** argv) {
             fprintf(stderr, "golden: reached retrace %u before all shots were taken\n", c);
             return 3;
         }
-        // The controller state the game reads after the next retrace, set mid-frame.
-        sleepMs(8);
         padAt(events, eventCount, (int)((c + 1) * kRetraceMs), &pad);
         inputSet(0, &pad);
         if (pad.buttons != lastButtonsLog) {
             fprintf(stderr, "golden: retrace %u buttons %04x\n", c + 1, pad.buttons);
             lastButtonsLog = pad.buttons;
         }
+        irqRaise(PORT_IRQ_VI_N);
+        // The game handles it on its next interrupt poll.
+        for (int i = 0; i < 20000 && retraceCount() == c; i++) usleep(100);
     }
     fprintf(stderr, "golden: done at retrace %u\n", retraceCount());
     _exit(0);
