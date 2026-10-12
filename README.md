@@ -213,9 +213,9 @@ See [STEAM_FRAME.md](STEAM_FRAME.md). The build runs on the Frame itself with th
 
 ## Support
 
-GalaxyQuest and Petari are other people's work. If you want to support someone, support them first.
+GalaxyFrame exists because of bigmak94's [GalaxyQuest](https://github.com/bigmak94/GalaxyQuest) and the Petari decompilation. If you want to support someone, support them first: star and follow GalaxyQuest, report what you find there, and send improvements to the game upstream.
 
-If you would like more Steam Frame ports, you can [buy me a coffee](https://ko-fi.com/sana748653). It pays for the Claude API credits these ports are built with, spent as carefully as I can.
+If you would like more Steam Frame ports, you can also [buy me a coffee](https://ko-fi.com/sana748653). It pays for the Claude API credits these ports are built with, spent as carefully as I can.
 
 ## Credits
 
