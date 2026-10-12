@@ -253,6 +253,9 @@ const int kUiLayerOrder[kUiLayerCount] = {kScreenLayer, kScreenRightLayer, kHudL
 void setUiLayers(bool on);
 // The foveation setting is on (it takes effect only with an eye-tracked gaze).
 bool foveationWanted();
+// The average GPU time of an eye (render, composite, overlays) over the eyes
+// timed since the last call, and how many (`count`).
+float recentEyeGpuMs(int* count);
 // The laser's origin and direction (stage space) from the controller's pose
 // at this refresh's display time, between the game's input updates (the
 // pointer and its length stay from the last pointerFromRay).

@@ -97,6 +97,9 @@ public:
     virtual void destroyFence(Fence fence) = 0;
     // Submits and waits until the GPU has finished everything (glFinish).
     virtual void finish() = 0;
+    // Time the CPU spent waiting for the GPU inside recording since the last
+    // call (Vulkan: for a free command buffer), ns.
+    virtual int64_t takeRecordingStallNs() { return 0; }
 
     // --- Without OpenXR (xr_sim.cpp): an image like a swapchain's, of a
     // kind's format; Ui images sample with linear filtering.
