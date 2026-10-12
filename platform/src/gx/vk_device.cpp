@@ -695,6 +695,47 @@ bool adoptDevice(VkPhysicalDevice phys, VkDevice device, uint32_t queueFamily, u
     return true;
 }
 
+// GPU counters (perfBegin).
+bool sPerfWanted = false;
+VkQueryPool sPerfPool = VK_NULL_HANDLE;
+std::vector<VkPerformanceCounterDescriptionKHR> sPerfDesc;
+std::vector<VkPerformanceCounterKHR> sPerfCounters;
+bool sPerfOpen = false, sPerfDone = false;
+
+void perfSetup() {
+    auto enumerate = (PFN_vkEnumeratePhysicalDeviceQueueFamilyPerformanceQueryCountersKHR)vkGetInstanceProcAddr(
+        sDev.instance, "vkEnumeratePhysicalDeviceQueueFamilyPerformanceQueryCountersKHR");
+    auto lock = (PFN_vkAcquireProfilingLockKHR)vkGetDeviceProcAddr(sDev.device, "vkAcquireProfilingLockKHR");
+    if (!enumerate || !lock) {
+        port_log("vk: GPU counters unavailable (run with TU_DEBUG=perfc)");
+        return;
+    }
+    uint32_t n = 0;
+    enumerate(sDev.phys, sDev.queueFamily, &n, nullptr, nullptr);
+    sPerfCounters.assign(n, VkPerformanceCounterKHR{VK_STRUCTURE_TYPE_PERFORMANCE_COUNTER_KHR});
+    sPerfDesc.assign(n, VkPerformanceCounterDescriptionKHR{VK_STRUCTURE_TYPE_PERFORMANCE_COUNTER_DESCRIPTION_KHR});
+    enumerate(sDev.phys, sDev.queueFamily, &n, sPerfCounters.data(), sPerfDesc.data());
+    std::vector<uint32_t> idx(n);
+    for (uint32_t i = 0; i < n; i++) idx[i] = i;
+    VkQueryPoolPerformanceCreateInfoKHR pci{VK_STRUCTURE_TYPE_QUERY_POOL_PERFORMANCE_CREATE_INFO_KHR};
+    pci.queueFamilyIndex = sDev.queueFamily;
+    pci.counterIndexCount = n;
+    pci.pCounterIndices = idx.data();
+    VkQueryPoolCreateInfo qci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    qci.pNext = &pci;
+    qci.queryType = VK_QUERY_TYPE_PERFORMANCE_QUERY_KHR;
+    qci.queryCount = 1;
+    VkAcquireProfilingLockInfoKHR li{VK_STRUCTURE_TYPE_ACQUIRE_PROFILING_LOCK_INFO_KHR};
+    li.timeout = 1000000000ull;
+    if (!n || lock(sDev.device, &li) != VK_SUCCESS || vkCreateQueryPool(sDev.device, &qci, nullptr, &sPerfPool) != VK_SUCCESS) {
+        port_log("vk: GPU counters could not be set up");
+        sPerfPool = VK_NULL_HANDLE;
+        return;
+    }
+    vkResetQueryPool(sDev.device, sPerfPool, 0, 1);
+    port_log("vk: %u GPU counters", n);
+}
+
 bool createStandalone() {
     PortHostAllocScope hostAlloc;
     if (sDeviceReady) return true;
@@ -714,6 +755,14 @@ bool createStandalone() {
     for (VkPhysicalDevice phys : devs) {
         DeviceSetup ds;
         if (!fillDeviceSetup(phys, &ds)) continue;
+        VkPhysicalDevicePerformanceQueryFeaturesKHR pq{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PERFORMANCE_QUERY_FEATURES_KHR};
+        sPerfWanted = debugEnv("PETARI_VKPERFC") != nullptr;
+        if (sPerfWanted) {
+            pq.performanceCounterQueryPools = VK_TRUE;
+            pq.pNext = ds.f2.pNext;
+            ds.f2.pNext = &pq;
+            ds.extensions[ds.info.enabledExtensionCount++] = VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME;
+        }
         VkDevice device = VK_NULL_HANDLE;
         r = vkCreateDevice(phys, &ds.info, nullptr, &device);
         if (r != VK_SUCCESS) {
@@ -722,6 +771,7 @@ bool createStandalone() {
         }
         sAdoptSetup = &ds;
         bool ok = adoptDevice(phys, device, ds.queueFamily, 0, true, &ds.info);
+        if (ok && sPerfWanted) perfSetup();
         sAdoptSetup = nullptr;
         if (ok) return true;
     }
@@ -828,6 +878,7 @@ uint64_t submit(const SubmitExtra* extra) {
         endTimer(s.tags[s.timers]);
     }
     if (sProfOn > 0 && sProf[sOpen].n) profMark(nullptr);  // closes the last mark's span
+    if (sPerfOpen) perfEnd();  // a query ends in the command buffer it began in
     vkEndCommandBuffer(s.cmd);
     uint64_t value = sNextValue;
     uint32_t waitCount = extra ? extra->waitCount : 0;
@@ -845,6 +896,11 @@ uint64_t submit(const SubmitExtra* extra) {
     ti.pSignalSemaphoreValues = signalValues.data();
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.pNext = &ti;
+    VkPerformanceQuerySubmitInfoKHR pqs{VK_STRUCTURE_TYPE_PERFORMANCE_QUERY_SUBMIT_INFO_KHR};
+    if (sPerfPool) {
+        pqs.counterPassIndex = 0;
+        ti.pNext = &pqs;
+    }
     si.waitSemaphoreCount = waitCount;
     si.pWaitSemaphores = waitCount ? extra->waits : nullptr;
     si.pWaitDstStageMask = waitCount ? extra->waitStages : nullptr;
@@ -1010,6 +1066,50 @@ void profReport(const char* why, int per) {
     }
     port_log("vkprof: %s: %.3f ms per %d:%s", why, total / (per > 0 ? per : 1), per, line.c_str());
     sProfAcc.clear();
+}
+
+void perfBegin() {
+    if (!sPerfPool || sPerfOpen) return;
+    if (sPerfDone) {
+        vkResetQueryPool(sDev.device, sPerfPool, 0, 1);
+        sPerfDone = false;
+    }
+    vkCmdBeginQuery(commandBuffer(), sPerfPool, 0, 0);
+    sPerfOpen = true;
+}
+
+void perfEnd() {
+    if (!sPerfPool || !sPerfOpen || sOpen < 0) return;
+    vkCmdEndQuery(commandBuffer(), sPerfPool, 0);
+    sPerfOpen = false;
+    sPerfDone = true;
+}
+
+void perfReport(const char* why) {
+    if (!sPerfPool || !sPerfDone) return;
+    std::vector<VkPerformanceCounterResultKHR> res(sPerfDesc.size());
+    VkResult r = vkGetQueryPoolResults(sDev.device, sPerfPool, 0, 1, res.size() * sizeof(res[0]), res.data(), sizeof(res[0]) * res.size(),
+                                       VK_QUERY_RESULT_WAIT_BIT);
+    if (r != VK_SUCCESS) {
+        port_log("vk: GPU counters not read (%d)", (int)r);
+        return;
+    }
+    std::string line;
+    char b[160];
+    for (size_t i = 0; i < res.size(); i++) {
+        double v = 0.0;
+        switch (sPerfCounters[i].storage) {
+        case VK_PERFORMANCE_COUNTER_STORAGE_INT32_KHR: v = res[i].int32; break;
+        case VK_PERFORMANCE_COUNTER_STORAGE_INT64_KHR: v = (double)res[i].int64; break;
+        case VK_PERFORMANCE_COUNTER_STORAGE_UINT32_KHR: v = res[i].uint32; break;
+        case VK_PERFORMANCE_COUNTER_STORAGE_UINT64_KHR: v = (double)res[i].uint64; break;
+        case VK_PERFORMANCE_COUNTER_STORAGE_FLOAT32_KHR: v = res[i].float32; break;
+        default: v = res[i].float64; break;
+        }
+        snprintf(b, sizeof(b), "%s%s=%.4g", i ? "; " : "", sPerfDesc[i].name, v);
+        line += b;
+    }
+    port_log("vkperf: %s: %s", why, line.c_str());
 }
 
 void setName(VkObjectType type, uint64_t handle, const char* name) {

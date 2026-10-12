@@ -1493,6 +1493,7 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
     rendersInCmd++;
     int serial = (int)(++renderSerial & 0x7FFFFFFF);
     sLastSerial = serial;
+    perfBegin();  // GPU counters (PETARI_VKPERFC), from the first render after a finish
     beginTimer(serial);
     ds.forget();
     curPasses = curCopies = 0;
@@ -1505,7 +1506,8 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
     // scissors every batch to one pixel (the vertex work and the per-draw
     // cost stay), "tri1" draws only each batch's first primitive (the
     // per-draw cost stays).
-    static const int sExp = !debugEnv("PETARI_VKEXP") ? 0 : !strcmp(debugEnv("PETARI_VKEXP"), "noraster") ? 1 : !strcmp(debugEnv("PETARI_VKEXP"), "tri1") ? 2 : 0;
+    static const int sExp = !debugEnv("PETARI_VKEXP") ? 0 : !strcmp(debugEnv("PETARI_VKEXP"), "noraster") ? 1 : !strcmp(debugEnv("PETARI_VKEXP"), "tri1") ? 2
+                            : !strcmp(debugEnv("PETARI_VKEXP"), "nofs") ? 3 : 0;
 
     // Start of frame: the EFB is cleared (the previous frame's display copy
     // cleared it on the console); the HUD target becomes transparent.
@@ -1812,6 +1814,18 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
             ds.firstOrdinal = it.firstOrdinal;
             pc.pushes++;
         }
+        // PETARI_VKPROF: full-screen draws without the eye's view timed apart
+        // (PETARI_VKEXP=nofs: skipped).
+        if (sExp == 3 && !eyeDraw && rect.vp[0] <= 0 && rect.vp[1] <= 0 && rect.vp[2] >= t.width && rect.vp[3] >= t.height) continue;
+        bool fsMark = false;
+        if (profEnabled() && !eyeDraw && rect.vp[0] <= 0 && rect.vp[1] <= 0 && rect.vp[2] >= t.width && rect.vp[3] >= t.height) {
+            static const char* kFs[8] = {"fs2d.0", "fs2d.1", "fs2d.2", "fs2d.3", "fs2d.4", "fs2d.5", "fs2d.6", "fs2d.7+"};
+            static int sFsN = 0;
+            if (pc.draws == 1) sFsN = 0;
+            profMark(kFs[sFsN < 7 ? sFsN : 7]);
+            sFsN++;
+            fsMark = true;
+        }
         // One draw per run of the batch's draws with one pixel state, its
         // base in a push constant (gl_shadergen.cpp: the fragment shader
         // reads the pixel state there).
@@ -1836,6 +1850,7 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
             vkCmdDrawIndexed(cmd, count, 1, start, 0, 0);
             pc.pixRuns++;
         }
+        if (fsMark) profMark(vrSeen || passVrDraws ? "scene.after" : "scene.after.pre");
     }
     endPass();
     profMark("post");
@@ -1870,6 +1885,37 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         port_log("vk: render %d of frame %llu (%s): %d rendering instances (%d breaks), %d copy passes, %d batches skipped, CPU %.2f ms", serial,
                  (unsigned long long)P.number, !eye ? "flat" : eye->flatStereo ? "stereo" : eye->index ? "right eye" : "left eye", curPasses, breaks,
                  curCopies, skipped, cpuMs);
+    }
+    static u64 sCopyUseFrame = ~0ull;
+    if (profEnabled() && sCopyUseFrame != P.number) {
+        // Which draws sample each texture copy: after it in this frame, or
+        // before it (the copy of the frame before).
+        sCopyUseFrame = P.number;
+        std::string line;
+        for (size_t i = 0; i < items.size(); i++) {
+            const Item& c = items[i];
+            if (c.type != IT_COPY || ((c.copy[9] >> 14) & 1)) continue;
+            u32 addr = (c.copy[3] & 0xFFFFFF) << 5;
+            u32 ref = 0x80000000u | (addr >> 5);
+            int before = 0, after = 0, afterVr = 0, nextCopy = -1;
+            for (size_t j = 0; j < items.size(); j++) {
+                const Item& d = items[j];
+                if (d.type == IT_COPY && j > i && nextCopy < 0 && !((d.copy[9] >> 14) & 1) && (((d.copy[3] & 0xFFFFFF) << 5) == addr)) nextCopy = (int)j;
+                if (d.type != IT_DRAW) continue;
+                bool uses = false;
+                for (int u = 0; u < 8; u++) uses |= (d.texMask & (1u << u)) && d.tex[u] == ref;
+                if (!uses) continue;
+                if (j < i) before++;
+                else if (nextCopy < 0 || (int)j < nextCopy) after++, afterVr += d.useVr;
+            }
+            CopyOp op;
+            decodeCopy(c, nativeW, nativeH, nativeW, nativeH, 0, op);
+            char b[160];
+            snprintf(b, sizeof(b), " [item %zu %06x %dx%d fmt %x mode %d%s: %d draws before, %d after (%d eye)%s]", i, addr, op.dw, op.dh, op.fmt, op.mode,
+                     op.clear ? " clear" : "", before, after, afterVr, nextCopy >= 0 ? ", copied again" : "");
+            line += b;
+        }
+        port_log("vkprof: copies of frame %llu:%s", (unsigned long long)P.number, line.c_str());
     }
     if (profEnabled()) {
         port_log("vkprof: render %d of frame %llu (%s %dx%d): %d draws (%d eye, %d pixel state runs), %ld indices, %d pipeline binds, %d texture pushes, %d vertex binds, "
@@ -2170,6 +2216,7 @@ void VulkanRenderer::finish() {
                  c.zCopies, c.maskedClears, c.attachmentClears, c.xfbBlits, c.snapshots, c.hudSwitches, c.lineBatches, c.pointBatches, c.emptyViewports);
     }
     profReport("finish", sImpl->finishGpuCount);
+    perfReport("finish");
     static const bool gpuTime = debugEnv("PETARI_GPUTIME") != nullptr;
     if (gpuTime && sImpl->finishGpuCount) {
         port_log("headless: replay GPU %.2f ms a render (Vulkan timestamps, %d renders)", sImpl->finishGpuMs / sImpl->finishGpuCount,
