@@ -52,7 +52,8 @@ static int64_t formatOf(MockFormatKind kind) {
     return GL_RGBA8;
 }
 
-static void* createImages(int64_t format, int width, int height, int mips, int count) {
+static void* createImages(int64_t format, uint64_t usage, int width, int height, int mips, int count) {
+    (void)usage;
     GLuint* tex = (GLuint*)calloc((size_t)count, sizeof(GLuint));
     glGenTextures(count, tex);
     for (int i = 0; i < count; i++) {
@@ -73,4 +74,4 @@ static XrResult fillImages(void* images, int count, XrSwapchainImageBaseHeader* 
     return XR_SUCCESS;
 }
 
-const MockGfx kMockGfxGles = {"gles", ownsBinding, describeBinding, getProc, formats, formatOf, createImages, fillImages};
+const MockGfx kMockGfxGles = {"gles", ownsBinding, describeBinding, getProc, formats, formatOf, createImages, fillImages, NULL};

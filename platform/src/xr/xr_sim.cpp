@@ -150,7 +150,20 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
             sTurnsDone = index + 1;
         }
     }
+    // PETARI_XRSIM_TIMING=1: each frame's eyes and UI layers timed apart,
+    // the GPU finished before and after each (wall time with the GPU's work;
+    // the CPU time to record them), averaged into one log line per call.
+    static const bool sTiming = getenv("PETARI_XRSIM_TIMING") != nullptr;
+    xrgfx::Gfx& gfx = xrgfx::gfx();
+    const bool vk = gfx.api() == xrgfx::Api::Vulkan;
+    double eyesMs = 0.0, eyesCpuMs = 0.0, layersMs = 0.0, layersCpuMs = 0.0;
+    int layerFrames = 0;
     for (int i = 0; i < frames; i++) {
+        int64_t t0 = 0, t1 = 0;
+        if (sTiming) {
+            gfx.finish();
+            t0 = port_host_time_ns();
+        }
         sTime += 1.0 / 72.0;
         fi.time = sTime;
         float px, py;
@@ -164,16 +177,36 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
         for (int e = 0; e < 2; e++) {
             sUsed = vr::renderEye(e, fi, sEyeImage[e], kW, kH);
         }
+        if (sTiming) {
+            eyesCpuMs += (port_host_time_ns() - t0) / 1e6;
+            gfx.finish();
+            t1 = port_host_time_ns();
+            eyesMs += (t1 - t0) / 1e6;
+        }
+        bool drewLayer = false;
         if (sLayers) {
             for (int k : vr::kUiLayerOrder) {
                 vr::UiLayer l = vr::uiLayer(k);
                 if (!l.visible) continue;
-                if (l.changed) vr::drawUiLayer(k, sLayerImage[k]);
+                if (l.changed) {
+                    vr::drawUiLayer(k, sLayerImage[k]);
+                    drewLayer = true;
+                }
                 for (int e = 0; e < 2; e++) {
                     if (l.eye != vr::kBothEyes && l.eye != (e == 0 ? vr::kLeftEye : vr::kRightEye)) continue;
                     vr::compositeUiLayer(k, sLayerImage[k].color, fi.eyes[e].proj * fi.eyes[e].view, sEyeImage[e], sUsed.width, sUsed.height);
                 }
             }
+        }
+        if (sTiming && drewLayer) {
+            layersCpuMs += (port_host_time_ns() - t1) / 1e6;
+            gfx.finish();
+            layersMs += (port_host_time_ns() - t1) / 1e6;
+            layerFrames++;
+        }
+        if (vk) {
+            // One submission per frame, as the headset's frame loop makes.
+            gfx.submit();
         }
         if (sMotion) {
             for (int e = 0; e < 2; e++) {
@@ -188,6 +221,11 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
                          2.0f * acosf(fminf(1.0f, fabsf(dq.w))));
             }
         }
+    }
+    if (sTiming && frames > 0) {
+        port_log("xrsim timing (%s): eyes %.2f ms a frame with the GPU's work, %.2f ms CPU to record; UI layers drawn in %d frames: %.2f ms, %.2f ms CPU",
+                 vk ? "Vulkan" : "GLES", eyesMs / frames, eyesCpuMs / frames, layerFrames, layerFrames ? layersMs / layerFrames : 0.0,
+                 layerFrames ? layersCpuMs / layerFrames : 0.0);
     }
     if (!path) {
         int64_t t0 = port_host_time_ns();
