@@ -15,7 +15,6 @@
 // The panel is drawn on the CPU into a texture whenever something on it
 // changes: rounded shapes with anti-aliased edges and text from the baked
 // glyph atlas (ui_canvas.h).
-#include <GLES3/gl32.h>
 #include <ctype.h>
 #include <math.h>
 #include <stdio.h>
@@ -32,6 +31,7 @@
 #include "port/heap_routing.h"
 #include "port/port.h"
 #include "ui_canvas.h"
+#include "vr_draw.h"
 #include "vr_renderer.h"
 
 namespace {
@@ -260,9 +260,8 @@ std::atomic<int64_t> sMenuReportedAt{0};
 
 std::string sIniPath;
 bool sReady = false;
-GLuint sTex = 0;
+gpu::TexHandle sTex = 0;
 Canvas sStatic, sCanvas;
-std::vector<uint32_t> sUpload;
 xm::Vec3 sRight, sUp, sNormal;
 xm::Mat4 sModel;
 
@@ -419,16 +418,7 @@ void drawPanel() {
     sShownState = shownState();
 }
 
-void upload() {
-    // Rows bottom up for GL.
-    sUpload.resize((size_t)kTexW * kTexH);
-    for (int y = 0; y < kTexH; y++) {
-        memcpy(&sUpload[(size_t)y * kTexW], &sCanvas.px[(size_t)(kTexH - 1 - y) * kTexW], kTexW * 4);
-    }
-    glBindTexture(GL_TEXTURE_2D, sTex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kTexW, kTexH, GL_RGBA, GL_UNSIGNED_BYTE, sUpload.data());
-    glGenerateMipmap(GL_TEXTURE_2D);
-}
+void upload() { vrdraw::draw().uploadCanvas(sTex, sCanvas, true); }
 
 // Writes `key = value` lines into the settings file, each replacing the
 // key's line or appended; the other lines (comments included) stay as they
@@ -676,14 +666,7 @@ void settingsInit(const char* iniPath) {
     setupPose();
     drawStatic();
     sCanvas.init(kTexW, kTexH);
-    glGenTextures(1, &sTex);
-    glBindTexture(GL_TEXTURE_2D, sTex);
-    int levels = 1 + (int)floorf(log2f((float)kTexW));
-    glTexStorage2D(GL_TEXTURE_2D, levels, GL_RGBA8, kTexW, kTexH);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // The texture is made with its first upload (vrdraw::Draw::uploadCanvas).
     // The panel opens on the tab of the way the game is shown.
     sTab = giantOn() ? 0 : 1;
     if (getenv("PETARI_PANELLOG")) {

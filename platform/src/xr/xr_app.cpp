@@ -1,12 +1,11 @@
-// OpenXR application: EGL/GLES context, session lifecycle, swapchains, Touch
-// controller actions, and the headset frame loop.
+// OpenXR application: session lifecycle, swapchains, Touch controller
+// actions, and the headset frame loop.  What depends on the graphics API (the
+// context, the swapchain images, the GPU fences) is behind xr_gfx.h, and the
+// drawing is vr_draw.h.
 //
 // Quest requirements verified against Meta's docs (2026-09-28): Khronos loader
 // initialised through xrInitializeLoaderKHR + XrLoaderInitInfoAndroidKHR,
 // XR_KHR_android_create_instance, Touch Plus via XR_META_touch_controller_plus.
-#include <EGL/egl.h>
-#include <EGL/eglext.h>
-#include <GLES3/gl32.h>
 #ifdef __ANDROID__
 #include <android/log.h>
 #include <android_native_app_glue.h>
@@ -29,14 +28,11 @@
 
 #ifdef __ANDROID__
 #define XR_USE_PLATFORM_ANDROID
-#else
-// Linux (the Steam Frame's own SteamVR runtime): the GLES context is handed
-// to the runtime through XR_MNDX_egl_enable.
-#define XR_USE_PLATFORM_EGL
 #endif
-#define XR_USE_GRAPHICS_API_OPENGL_ES
 #include <openxr/openxr.h>
+#ifdef __ANDROID__
 #include <openxr/openxr_platform.h>
+#endif
 
 #ifndef XR_VALVE_FRAME_CONTROLLER_INTERACTION_EXTENSION_NAME
 // SteamVR's Steam Frame controller profile (not in the Khronos headers yet).
@@ -48,8 +44,10 @@
 #include "port/input_script.h"
 #include "port/port.h"
 #include "../gx/gl_renderer.h"
+#include "vr_draw.h"
 #include "vr_renderer.h"
 #include "xmath.h"
+#include "xr_gfx.h"
 
 extern "C" void port_boot(const char* dataRoot, const char* saveRoot);
 extern "C" void port_boost_thread(void);  // os_thread.cpp: scheduling priority for this thread
@@ -67,24 +65,12 @@ namespace {
         }                                                                                                                                            \
     } while (0)
 
-struct Swapchain {
-    XrSwapchain handle = XR_NULL_HANDLE;
-    int32_t width = 0, height = 0;
-    uint32_t mips = 1;
-    std::vector<XrSwapchainImageOpenGLESKHR> images;
-    std::vector<GLuint> fbos;
-};
+using Swapchain = xrgfx::Chain;
 
 struct App {
 #ifdef __ANDROID__
     android_app* android = nullptr;
 #endif
-
-    // EGL
-    EGLDisplay display = EGL_NO_DISPLAY;
-    EGLConfig config = nullptr;
-    EGLContext context = EGL_NO_CONTEXT;
-    EGLSurface surface = EGL_NO_SURFACE;
 
     // OpenXR
     XrInstance instance = XR_NULL_HANDLE;
@@ -153,7 +139,7 @@ struct App {
     int renderSet = 0;       // set the next game frame is rendered into
     int shownSet = -1;       // set submitted
     int renderedSet = -1;    // paired refreshes: set finished, its images still acquired; released and submitted from the next refresh on
-    GLsync renderedFence = nullptr;  // signalled when the GPU has finished that set
+    xrgfx::Fence renderedFence = 0;  // signalled when the GPU has finished that set
     int64_t renderedFenceAt = 0;     // host time the fence was placed
     int fenceWaits = 0, fenceChecks = 0;  // times the set was not finished by then (logged), checks
     int64_t fenceWaitNs = 0, fenceWaitMaxNs = 0, fenceGapNs = 0;  // waited, and the time the GPU had
@@ -251,48 +237,6 @@ void loadDebugEnv(const std::string& path) {
 }
 
 // ---------------------------------------------------------------------------
-// EGL
-// ---------------------------------------------------------------------------
-void initEgl(App& a) {
-#ifdef __ANDROID__
-    a.display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-#else
-    // No window of our own: Mesa's surfaceless platform renders on the GPU's
-    // render node whatever the desktop (gamescope, X, Wayland or none).
-    a.display = EGL_NO_DISPLAY;
-    auto getPlatformDisplay = (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
-    if (getPlatformDisplay) {
-        a.display = getPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, nullptr);
-    }
-    if (a.display == EGL_NO_DISPLAY) {
-        port_log("EGL: no surfaceless platform, using the default display");
-        a.display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    }
-    eglBindAPI(EGL_OPENGL_ES_API);
-#endif
-    if (!eglInitialize(a.display, nullptr, nullptr)) {
-        port_fatal("eglInitialize failed: 0x%x", eglGetError());
-    }
-    const EGLint cfgAttr[] = {EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_DEPTH_SIZE, 0, EGL_STENCIL_SIZE, 0,
-                              EGL_SAMPLES, 0, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_NONE};
-    EGLint num = 0;
-    if (!eglChooseConfig(a.display, cfgAttr, &a.config, 1, &num) || num == 0) {
-        port_fatal("eglChooseConfig failed");
-    }
-    const EGLint ctxAttr[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 2, EGL_NONE};
-    a.context = eglCreateContext(a.display, a.config, EGL_NO_CONTEXT, ctxAttr);
-    if (a.context == EGL_NO_CONTEXT) {
-        port_fatal("eglCreateContext failed: 0x%x", eglGetError());
-    }
-    const EGLint pbAttr[] = {EGL_WIDTH, 16, EGL_HEIGHT, 16, EGL_NONE};
-    a.surface = eglCreatePbufferSurface(a.display, a.config, pbAttr);
-    if (!eglMakeCurrent(a.display, a.surface, a.surface, a.context)) {
-        port_fatal("eglMakeCurrent failed: 0x%x", eglGetError());
-    }
-    port_log("GL: %s / %s / %s", glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION));
-}
-
-// ---------------------------------------------------------------------------
 // OpenXR instance / session
 // ---------------------------------------------------------------------------
 bool hasExtension(const std::vector<XrExtensionProperties>& exts, const char* name) {
@@ -319,13 +263,11 @@ void initInstance(App& a) {
     std::vector<XrExtensionProperties> exts(count, {XR_TYPE_EXTENSION_PROPERTIES});
     XR_CHECK(xrEnumerateInstanceExtensionProperties(nullptr, count, &count, exts.data()));
 
+    std::vector<const char*> enable;
+    xrgfx::gfx().instanceExtensions(exts, &enable);
 #ifdef __ANDROID__
-    std::vector<const char*> enable = {XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME, XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME};
+    enable.push_back(XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME);
 #else
-    if (!hasExtension(exts, XR_MNDX_EGL_ENABLE_EXTENSION_NAME) || !hasExtension(exts, XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME)) {
-        port_fatal("the OpenXR runtime has no OpenGL ES through EGL (XR_MNDX_egl_enable + XR_KHR_opengl_es_enable)");
-    }
-    std::vector<const char*> enable = {XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME, XR_MNDX_EGL_ENABLE_EXTENSION_NAME};
     a.hasFrameController = hasExtension(exts, XR_VALVE_FRAME_CONTROLLER_INTERACTION_EXTENSION_NAME);
     if (a.hasFrameController) {
         enable.push_back(XR_VALVE_FRAME_CONTROLLER_INTERACTION_EXTENSION_NAME);
@@ -428,10 +370,7 @@ void initInstance(App& a) {
         port_log("XR SpaceWarp: not available");
     }
 
-    PFN_xrGetOpenGLESGraphicsRequirementsKHR getReq = nullptr;
-    XR_CHECK(xrGetInstanceProcAddr(a.instance, "xrGetOpenGLESGraphicsRequirementsKHR", (PFN_xrVoidFunction*)&getReq));
-    XrGraphicsRequirementsOpenGLESKHR req{XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR};
-    XR_CHECK(getReq(a.instance, a.system, &req));
+    xrgfx::gfx().attach(a.instance, a.system);
 
     if (a.hasRefreshRate) {
         xrGetInstanceProcAddr(a.instance, "xrRequestDisplayRefreshRateFB", (PFN_xrVoidFunction*)&a.xrRequestDisplayRefreshRateFB);
@@ -687,17 +626,9 @@ void initActions(App& a) {
 }
 
 void initSession(App& a) {
-#ifdef __ANDROID__
-    XrGraphicsBindingOpenGLESAndroidKHR binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR};
-#else
-    XrGraphicsBindingEGLMNDX binding{XR_TYPE_GRAPHICS_BINDING_EGL_MNDX};
-    binding.getProcAddress = (PFN_xrEglGetProcAddressMNDX)eglGetProcAddress;
-#endif
-    binding.display = a.display;
-    binding.config = a.config;
-    binding.context = a.context;
+    xrgfx::Gfx& gfx = xrgfx::gfx();
     XrSessionCreateInfo sci{XR_TYPE_SESSION_CREATE_INFO};
-    sci.next = &binding;
+    sci.next = gfx.sessionBinding();
     sci.systemId = a.system;
     XR_CHECK(xrCreateSession(a.instance, &sci, &a.session));
 
@@ -729,16 +660,7 @@ void initSession(App& a) {
     }
     XR_CHECK(xrEnumerateViewConfigurationViews(a.instance, a.system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, viewCount, &viewCount, a.viewConfig));
 
-    uint32_t fmtCount = 0;
-    XR_CHECK(xrEnumerateSwapchainFormats(a.session, 0, &fmtCount, nullptr));
-    std::vector<int64_t> fmts(fmtCount);
-    XR_CHECK(xrEnumerateSwapchainFormats(a.session, fmtCount, &fmtCount, fmts.data()));
-    int64_t format = fmts[0];
-    for (int64_t f : fmts) {
-        if (f == GL_SRGB8_ALPHA8) {
-            format = f;
-        }
-    }
+    gfx.sessionCreated(a.session);  // the swapchain formats the runtime offers
 
     // Eye images: the headset's recommended size times the swapchain scale
     // (the game renders at its dynamic resolution and the composite
@@ -751,45 +673,18 @@ void initSession(App& a) {
         w = w < (int32_t)vc.maxImageRectWidth ? w : (int32_t)vc.maxImageRectWidth;
         h = h < (int32_t)vc.maxImageRectHeight ? h : (int32_t)vc.maxImageRectHeight;
         for (int s = 0; s < App::kEyeSets; s++) {
-            Swapchain& sc = a.eyes[s][e];
-            sc.width = w;
-            sc.height = h;
-            XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-            ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-            ci.format = format;
-            ci.sampleCount = 1;
-            ci.width = (uint32_t)sc.width;
-            ci.height = (uint32_t)sc.height;
-            ci.faceCount = 1;
-            ci.arraySize = 1;
-            ci.mipCount = 1;
-            XR_CHECK(xrCreateSwapchain(a.session, &ci, &sc.handle));
-            uint32_t n = 0;
-            XR_CHECK(xrEnumerateSwapchainImages(sc.handle, 0, &n, nullptr));
-            sc.images.assign(n, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
-            XR_CHECK(xrEnumerateSwapchainImages(sc.handle, n, &n, (XrSwapchainImageBaseHeader*)sc.images.data()));
             // Color only: the composite into the swapchain (vr::renderEye)
             // draws without depth.
-            sc.fbos.resize(n);
-            glGenFramebuffers((GLsizei)n, sc.fbos.data());
-            for (uint32_t i = 0; i < n; i++) {
-                glBindFramebuffer(GL_FRAMEBUFFER, sc.fbos[i]);
-                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sc.images[i].image, 0);
-            }
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            gfx.createChain(a.session, xrgfx::ImageKind::Eye, w, h, 1, &a.eyes[s][e]);
         }
         port_log("eye %d swapchains %dx%d (recommended %ux%u, max %ux%u), format 0x%llx", e, w, h, vc.recommendedImageRectWidth,
-                 vc.recommendedImageRectHeight, vc.maxImageRectWidth, vc.maxImageRectHeight, (long long)format);
+                 vc.recommendedImageRectHeight, vc.maxImageRectWidth, vc.maxImageRectHeight, (long long)a.eyes[0][e].format);
     }
 
     // SpaceWarp: per eye, motion vectors (16-bit float, as Meta recommends)
     // and depth with stencil, at the recommended size.
     if (a.hasSpaceWarp) {
-        bool haveMotion = false, haveDepth = false;
-        for (int64_t f : fmts) {
-            haveMotion |= f == GL_RGBA16F;
-            haveDepth |= f == GL_DEPTH24_STENCIL8;
-        }
+        bool haveMotion = gfx.hasFormat(xrgfx::ImageKind::Motion), haveDepth = gfx.hasFormat(xrgfx::ImageKind::Depth);
         if (!haveMotion || !haveDepth) {
             port_log("XR SpaceWarp: swapchain formats missing (RGBA16F %d, DEPTH24_STENCIL8 %d): off", haveMotion, haveDepth);
             a.hasSpaceWarp = false;
@@ -799,23 +694,7 @@ void initSession(App& a) {
         for (int e = 0; e < 2; e++) {
             for (int k = 0; k < 2; k++) {
                 Swapchain& sc = k == 0 ? a.motion[e] : a.depth[e];
-                sc.width = (int32_t)a.motionW;
-                sc.height = (int32_t)a.motionH;
-                XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-                ci.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
-                                (k == 0 ? XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT : XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
-                ci.format = k == 0 ? GL_RGBA16F : GL_DEPTH24_STENCIL8;
-                ci.sampleCount = 1;
-                ci.width = a.motionW;
-                ci.height = a.motionH;
-                ci.faceCount = 1;
-                ci.arraySize = 1;
-                ci.mipCount = 1;
-                XR_CHECK(xrCreateSwapchain(a.session, &ci, &sc.handle));
-                uint32_t n = 0;
-                XR_CHECK(xrEnumerateSwapchainImages(sc.handle, 0, &n, nullptr));
-                sc.images.assign(n, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
-                XR_CHECK(xrEnumerateSwapchainImages(sc.handle, n, &n, (XrSwapchainImageBaseHeader*)sc.images.data()));
+                gfx.createChain(a.session, k == 0 ? xrgfx::ImageKind::Motion : xrgfx::ImageKind::Depth, (int)a.motionW, (int)a.motionH, 1, &sc);
             }
         }
         vr::setMotionSize((int)a.motionW, (int)a.motionH);
@@ -827,48 +706,24 @@ void initSession(App& a) {
 // over the eye layer: one swapchain each at the panel's own size (after
 // vr::init, which sizes them).
 void initUiLayers(App& a) {
-    uint32_t fmtCount = 0;
-    XR_CHECK(xrEnumerateSwapchainFormats(a.session, 0, &fmtCount, nullptr));
-    std::vector<int64_t> fmts(fmtCount);
-    XR_CHECK(xrEnumerateSwapchainFormats(a.session, fmtCount, &fmtCount, fmts.data()));
-    bool srgb = false;
-    for (int64_t f : fmts) srgb |= f == GL_SRGB8_ALPHA8;
-    if (!srgb) {
+    xrgfx::Gfx& gfx = xrgfx::gfx();
+    if (!gfx.hasFormat(xrgfx::ImageKind::Ui)) {
         port_log("XR UI layers: no sRGB swapchain format; the panels stay in the eye images");
         return;
     }
     for (int k = 0; k < vr::kUiLayerCount; k++) {
         Swapchain& sc = a.ui[k];
-        vr::uiLayerSize(k, &sc.width, &sc.height);
-        XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-        ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-        ci.format = GL_SRGB8_ALPHA8;
-        ci.sampleCount = 1;
-        ci.width = (uint32_t)sc.width;
-        ci.height = (uint32_t)sc.height;
-        ci.faceCount = 1;
-        ci.arraySize = 1;
+        int w = 0, h = 0;
+        vr::uiLayerSize(k, &w, &h);
         // The virtual screen is often seen smaller than its picture (a
         // distant giant screen): with mipmaps the compositor filters it down
         // instead of skipping texels, which shimmered on fine detail.
-        sc.mips = 1;
+        uint32_t mips = 1;
         if (k == vr::kScreenLayer || k == vr::kScreenRightLayer) {
-            while ((std::max(sc.width, sc.height) >> sc.mips) > 0) sc.mips++;
+            while ((std::max(w, h) >> mips) > 0) mips++;
         }
-        ci.mipCount = sc.mips;
-        XR_CHECK(xrCreateSwapchain(a.session, &ci, &sc.handle));
-        uint32_t n = 0;
-        XR_CHECK(xrEnumerateSwapchainImages(sc.handle, 0, &n, nullptr));
-        sc.images.assign(n, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
-        XR_CHECK(xrEnumerateSwapchainImages(sc.handle, n, &n, (XrSwapchainImageBaseHeader*)sc.images.data()));
-        sc.fbos.resize(n);
-        glGenFramebuffers((GLsizei)n, sc.fbos.data());
-        for (uint32_t i = 0; i < n; i++) {
-            glBindFramebuffer(GL_FRAMEBUFFER, sc.fbos[i]);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sc.images[i].image, 0);
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        port_log("XR UI layer %d: swapchain %dx%d, %u mip levels, %u images", k, sc.width, sc.height, sc.mips, n);
+        gfx.createChain(a.session, xrgfx::ImageKind::Ui, w, h, mips, &sc);
+        port_log("XR UI layer %d: swapchain %dx%d, %u mip levels, %u images", k, sc.width, sc.height, sc.mips, (unsigned)sc.images.size());
     }
     vr::setUiLayers(true);
 }
@@ -1391,9 +1246,8 @@ int gShotIndex = 0;
 std::string gShotScreenBase;  // the last shot's file name without ".png"
 bool gShotScreenDue[2] = {false, false};  // the screen's layers still to save for it: left / both eyes, right
 
-// Saves the screen layer picture just drawn into the bound framebuffer, if
-// one is due.
-void maybeSaveScreenShot(int k, const vr::UiLayer& l, int w, int h) {
+// Saves the screen layer picture just drawn into `image`, if one is due.
+void maybeSaveScreenShot(int k, const vr::UiLayer& l, const gpu::EfbTarget& image, int w, int h) {
     int side = k == vr::kScreenRightLayer ? 1 : 0;
     if (!gShotScreenDue[side]) {
         return;
@@ -1401,7 +1255,7 @@ void maybeSaveScreenShot(int k, const vr::UiLayer& l, int w, int h) {
     gShotScreenDue[side] = false;
     if (l.eye == vr::kBothEyes) gShotScreenDue[1] = false;
     std::shared_ptr<std::vector<unsigned char>> px(new std::vector<unsigned char>((size_t)w * h * 4));
-    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px->data());
+    vrdraw::draw().readPixels(image, w, h, px->data());
     std::string file = gShotScreenBase + (l.eye == vr::kBothEyes ? "_screen.png" : side ? "_screenR.png" : "_screenL.png");
     PortHostAllocScope hostAlloc;
     std::thread([px, w, h, file] {
@@ -1411,7 +1265,7 @@ void maybeSaveScreenShot(int k, const vr::UiLayer& l, int w, int h) {
     }).detach();
 }
 
-void maybeSaveShot(App& a, int s, const uint32_t idx[2], GLuint motionTex = 0) {
+void maybeSaveShot(App& a, int s, const uint32_t idx[2], gpu::TexHandle motionTex = 0) {
     if (gShotIntervalNs <= 0 || port_host_time_ns() < gShotNextAt) {
         return;
     }
@@ -1419,10 +1273,8 @@ void maybeSaveShot(App& a, int s, const uint32_t idx[2], GLuint motionTex = 0) {
     int w = a.setRect[s][0].width, h = a.setRect[s][0].height;  // the part rendered
     std::shared_ptr<std::vector<unsigned char>> px(new std::vector<unsigned char>((size_t)w * h * 8));
     for (int e = 0; e < 2; e++) {
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, a.eyes[s][e].fbos[idx[e]]);
-        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px->data() + (size_t)e * w * h * 4);
+        vrdraw::draw().readPixels(a.eyes[s][e].images[idx[e]], w, h, px->data() + (size_t)e * w * h * 4);
     }
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     char path[512];
     snprintf(path, sizeof(path), "%s/shot_%03d_f%llu.png", gShotDir.c_str(), gShotIndex++, (unsigned long long)gpu::renderer().frameNumber());
     std::string file = path;
@@ -1466,12 +1318,9 @@ void maybeSaveShot(App& a, int s, const uint32_t idx[2], GLuint motionTex = 0) {
 }
 
 uint32_t acquireImage(Swapchain& sc) {
-    uint32_t idx = 0;
-    XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    XR_CHECK(xrAcquireSwapchainImage(sc.handle, &ai, &idx));
-    XrSwapchainImageWaitInfo swi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-    swi.timeout = XR_INFINITE_DURATION;
-    XR_CHECK(xrWaitSwapchainImage(sc.handle, &swi));
+    xrgfx::Gfx& gfx = xrgfx::gfx();
+    uint32_t idx = gfx.acquire(sc);
+    gfx.wait(sc);
     return idx;
 }
 
@@ -1487,14 +1336,11 @@ uint32_t acquireImage(Swapchain& sc) {
 void finishGpu() {
 #ifndef __ANDROID__
     static const bool off = getenv("PETARI_NO_GPU_WAIT") != nullptr;
-    if (!off) glFinish();
+    if (!off) xrgfx::gfx().finish();
 #endif
 }
 
-void releaseImage(Swapchain& sc) {
-    XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    XR_CHECK(xrReleaseSwapchainImage(sc.handle, &ri));
-}
+void releaseImage(Swapchain& sc) { xrgfx::gfx().release(sc); }
 
 // Gives up a half-rendered game frame (the display left 120 Hz, or the
 // session stopped rendering): its set is never submitted.
@@ -1524,16 +1370,16 @@ void showRendered(App& a) {
         // Normally long signalled; a wait here is a GPU running a refresh behind.
         int64_t t0 = port_host_time_ns();
         a.fenceGapNs += t0 - a.renderedFenceAt;
-        if (glClientWaitSync(a.renderedFence, GL_SYNC_FLUSH_COMMANDS_BIT, 0) == GL_TIMEOUT_EXPIRED) {
+        if (!xrgfx::gfx().waitFence(a.renderedFence, 0)) {
             a.fenceWaits++;
-            glClientWaitSync(a.renderedFence, GL_SYNC_FLUSH_COMMANDS_BIT, 50000000);
+            xrgfx::gfx().waitFence(a.renderedFence, 50000000);
             int64_t waited = port_host_time_ns() - t0;
             a.fenceWaitNs += waited;
             if (waited > a.fenceWaitMaxNs) a.fenceWaitMaxNs = waited;
         }
         a.fenceChecks++;
-        glDeleteSync(a.renderedFence);
-        a.renderedFence = nullptr;
+        xrgfx::gfx().destroyFence(a.renderedFence);
+        a.renderedFence = 0;
     }
     releaseImage(a.eyes[a.renderedSet][0]);
     releaseImage(a.eyes[a.renderedSet][1]);
@@ -1546,8 +1392,8 @@ void showRendered(App& a) {
 void discardRendered(App& a) {
     if (a.renderedSet < 0) return;
     if (a.renderedFence) {
-        glDeleteSync(a.renderedFence);
-        a.renderedFence = nullptr;
+        xrgfx::gfx().destroyFence(a.renderedFence);
+        a.renderedFence = 0;
     }
     releaseImage(a.eyes[a.renderedSet][0]);
     releaseImage(a.eyes[a.renderedSet][1]);
@@ -1560,16 +1406,11 @@ void discardRendered(App& a) {
 void renderPair(App& a, int s, const vr::FrameInfo& frame, const XrView views[2]) {
     uint32_t idx[2] = {0, 0};
     for (int e = 0; e < 2; e++) {
-        Swapchain& sc = a.eyes[s][e];
-        XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-        XR_CHECK(xrAcquireSwapchainImage(sc.handle, &ai, &idx[e]));
-        XrSwapchainImageWaitInfo swi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-        swi.timeout = XR_INFINITE_DURATION;
-        XR_CHECK(xrWaitSwapchainImage(sc.handle, &swi));
+        idx[e] = acquireImage(a.eyes[s][e]);
     }
     for (int e = 0; e < 2; e++) {
         Swapchain& sc = a.eyes[s][e];
-        vr::Extent used = vr::renderEye(e, frame, sc.fbos[idx[e]], sc.width, sc.height);
+        vr::Extent used = vr::renderEye(e, frame, sc.images[idx[e]], sc.width, sc.height);
         a.setRect[s][e] = {used.width, used.height};
         a.setPose[s][e] = views[e].pose;
         a.setFov[s][e] = views[e].fov;
@@ -1577,8 +1418,7 @@ void renderPair(App& a, int s, const vr::FrameInfo& frame, const XrView views[2]
     maybeSaveShot(a, s, idx);
     finishGpu();
     for (int e = 0; e < 2; e++) {
-        XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-        XR_CHECK(xrReleaseSwapchainImage(a.eyes[s][e].handle, &ri));
+        releaseImage(a.eyes[s][e]);
     }
 }
 
@@ -1752,7 +1592,7 @@ void renderFrame(App& a) {
         }
         for (int e = 0; e < 2; e++) {
             Swapchain& sc = a.eyes[s][e];
-            vr::Extent used = vr::renderEye(e, frame, sc.fbos[idx[e]], sc.width, sc.height);
+            vr::Extent used = vr::renderEye(e, frame, sc.images[idx[e]], sc.width, sc.height);
             a.setRect[s][e] = {used.width, used.height};
             a.setPose[s][e] = views[e].pose;
             a.setFov[s][e] = views[e].fov;
@@ -1761,14 +1601,14 @@ void renderFrame(App& a) {
         for (int e = 0; e < 2; e++) {
             motionIdx[e] = acquireImage(a.motion[e]);
             uint32_t depthIdx = acquireImage(a.depth[e]);
-            vr::renderMotion(e, frame, a.motion[e].images[motionIdx[e]].image, a.depth[e].images[depthIdx].image);
+            vr::renderMotion(e, frame, a.motion[e].images[motionIdx[e]].color, a.depth[e].images[depthIdx].depth);
         }
         xm::Quat dq;
         xm::Vec3 dp;
         a.warpSkip = vr::finishMotion(&dq, &dp);
         a.warpDelta.orientation = {dq.x, dq.y, dq.z, dq.w};
         a.warpDelta.position = {dp.x, dp.y, dp.z};
-        maybeSaveShot(a, s, idx, a.motion[0].images[motionIdx[0]].image);
+        maybeSaveShot(a, s, idx, a.motion[0].images[motionIdx[0]].color);
         for (int e = 0; e < 2; e++) {
             releaseImage(a.eyes[s][e]);
             releaseImage(a.motion[e]);
@@ -1799,7 +1639,7 @@ void renderFrame(App& a) {
         Swapchain& sc = a.eyes[a.renderSet][0];
         a.heldIdx = acquireImage(sc);
         int64_t t2 = port_host_time_ns();
-        vr::Extent used = vr::renderEye(0, a.setFrame, sc.fbos[a.heldIdx], sc.width, sc.height);
+        vr::Extent used = vr::renderEye(0, a.setFrame, sc.images[a.heldIdx], sc.width, sc.height);
         int64_t t3 = port_host_time_ns();
         // A late first step, broken down (a few per 10 s): picking up the
         // game frame (texture uploads, new shaders), acquiring the image,
@@ -1839,15 +1679,14 @@ void renderFrame(App& a) {
         int s = a.heldSet;
         Swapchain& sc = a.eyes[s][1];
         uint32_t idx[2] = {a.heldIdx, acquireImage(sc)};
-        vr::Extent used = vr::renderEye(1, frame, sc.fbos[idx[1]], sc.width, sc.height);
+        vr::Extent used = vr::renderEye(1, frame, sc.images[idx[1]], sc.width, sc.height);
         a.setRect[s][1] = {used.width, used.height};
         a.setPose[s][1] = views[1].pose;
         a.setFov[s][1] = views[1].fov;
         maybeSaveShot(a, s, idx);
         // Both images stay acquired until the next refresh (showRendered):
         // the compositor would read them before the GPU is done.
-        a.renderedFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-        glFlush();
+        a.renderedFence = xrgfx::gfx().submit();
         a.renderedFenceAt = port_host_time_ns();
         a.heldSet = -1;
         a.renderedSet = s;
@@ -1927,16 +1766,12 @@ void renderFrame(App& a) {
             Swapchain& sc = a.ui[k];
             if (l.changed || !a.uiHasImage[k]) {
                 uint32_t idx = acquireImage(sc);
-                vr::drawUiLayer(k, sc.fbos[idx]);
+                vr::drawUiLayer(k, sc.images[idx]);
                 if (k == vr::kScreenLayer || k == vr::kScreenRightLayer) {
-                    glBindFramebuffer(GL_FRAMEBUFFER, sc.fbos[idx]);
-                    maybeSaveScreenShot(k, l, l.imageWidth ? l.imageWidth : sc.width, l.imageHeight ? l.imageHeight : sc.height);
-                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    maybeSaveScreenShot(k, l, sc.images[idx], l.imageWidth ? l.imageWidth : sc.width, l.imageHeight ? l.imageHeight : sc.height);
                 }
                 if (sc.mips > 1) {
-                    glBindTexture(GL_TEXTURE_2D, sc.images[idx].image);
-                    glGenerateMipmap(GL_TEXTURE_2D);
-                    glBindTexture(GL_TEXTURE_2D, 0);
+                    vrdraw::draw().generateMips(sc.images[idx].color);
                 }
                 releaseImage(sc);
                 a.uiHasImage[k] = true;
@@ -2179,7 +2014,8 @@ extern "C" __attribute__((visibility("default"))) void port_linux_main(const cha
         mkdir(gShotDir.c_str(), 0770);
     }
     vr::loadSettings((ext + "/petari_vr.ini").c_str());  // before the swapchains are sized
-    initEgl(a);
+    xrgfx::select(xrgfx::wantedApi());
+    xrgfx::gfx().createContext();
     initInstance(a);
     initActions(a);
     initSession(a);

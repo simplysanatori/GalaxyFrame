@@ -10,7 +10,6 @@
 // converted by tools/cook/cook.py show as such: the port cannot read them.
 // Files converted by an older converter, without the data it now also takes
 // from main.dol, show as to convert again.
-#include <GLES3/gl32.h>
 #include <dirent.h>
 #include <math.h>
 #include <stdio.h>
@@ -27,6 +26,7 @@
 #include "port/heap_routing.h"
 #include "port/port.h"
 #include "ui_canvas.h"
+#include "vr_draw.h"
 #include "vr_renderer.h"
 
 namespace {
@@ -73,9 +73,8 @@ bool sChosen = false, sAccessAsked = false;
 
 // Panel.
 bool sReady = false;
-GLuint sTex = 0;
+gpu::TexHandle sTex = 0;
 Canvas sCanvas;
-std::vector<uint32_t> sUpload;
 xm::Vec3 sRight, sUp, sNormal;
 xm::Mat4 sModel;
 bool sDirty = true, sTick = false;
@@ -260,15 +259,7 @@ void drawPanel() {
     sShownAccess = sAccess.load();
 }
 
-void upload() {
-    sUpload.resize((size_t)kTexW * kTexH);
-    for (int y = 0; y < kTexH; y++) {
-        memcpy(&sUpload[(size_t)y * kTexW], &sCanvas.px[(size_t)(kTexH - 1 - y) * kTexW], kTexW * 4);
-    }
-    glBindTexture(GL_TEXTURE_2D, sTex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kTexW, kTexH, GL_RGBA, GL_UNSIGNED_BYTE, sUpload.data());
-    glGenerateMipmap(GL_TEXTURE_2D);
-}
+void upload() { vrdraw::draw().uploadCanvas(sTex, sCanvas, true); }
 
 void refresh() {
     if (sDirty || sShownSearch != sSearchCount.load() || sShownSearching != sSearching.load() || sShownAccess != sAccess.load()) {
@@ -322,14 +313,7 @@ void setupStart(const std::string& appDir, const std::string& tried) {
     if (!sReady) {
         ui::initFonts();
         setupPose();
-        glGenTextures(1, &sTex);
-        glBindTexture(GL_TEXTURE_2D, sTex);
-        int levels = 1 + (int)floorf(log2f((float)kTexW));
-        glTexStorage2D(GL_TEXTURE_2D, levels, GL_RGBA8, kTexW, kTexH);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        // The texture is made with its first upload (vrdraw::Draw::uploadCanvas).
         sReady = true;
     }
     port_log("setup: no game files in %s; the setup screen is shown", tried.c_str());
