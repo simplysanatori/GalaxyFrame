@@ -300,15 +300,21 @@ it (`GameScene.cpp`), so a scene the words miss counts as *Other scenes*.
   and size, the world following Mario's gravity, and the game camera in a
   transit. Off, only turns faster than about 20 degrees a second darken the
   edges, up to full at about 85 degrees a second, as before.
-- **Vignette at slow movement** and **Vignette at fast movement** (45 % and
-  100 % by default): how dark the edges get at the slowest smooth movement
-  and at full speed (a turn of 1 radian, about 57 degrees, a second); in
-  between it follows the speed. They apply to the stick's turn and tilt, the
-  height and size adjust, the world turning with Mario's gravity and the game
-  camera in a transit or cutscene. With *Comfort vignette* off only the fast
-  value is used, for turns faster than about 20 degrees a second; 0 on both
-  turns every vignette off. The old `vignette` line of the file is read as
-  the fast value.
+- **Vignette at slow movement** and **Vignette at fast movement** (60 % and
+  100 % by default): how strong the vignette is at the slowest smooth
+  movement and at full speed (a turn of 1 radian, about 57 degrees, a
+  second); in between it follows the speed. The vignette is a clear circle
+  round the middle of your view with the edges darkening outside it, by the
+  angle from where you look, so it does not depend on the headset's field of
+  view: at 0 % the circle is 55 degrees across its radius, at 100 % it
+  closes in to 34 degrees (Mario, 25 to 30 degrees below your line of sight,
+  stays clear) and the edges go to black about 30 degrees further out; the
+  percentage is how dark they get. They apply to the stick's turn and tilt,
+  the height and size adjust, the world turning with Mario's gravity and the
+  game camera in a transit or cutscene. With *Comfort vignette* off only the
+  fast value is used, for turns faster than about 20 degrees a second; 0 on
+  both turns every vignette off. The old `vignette` line of the file is read
+  as the fast value.
 
 **Display**
 
@@ -370,7 +376,7 @@ turn_smoothing = 0.35
 # speed (1 radian a second) with comfort_vignette on; with it off, only the
 # fast value, for turns above about 20 degrees a second.  An old `vignette`
 # line is read as vignette_fast.
-vignette_slow = 0.45
+vignette_slow = 0.6
 vignette_fast = 1
 # Fade out scenery that hides Mario (0 = off)
 cutaway = 1
