@@ -1714,7 +1714,7 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
     }
 
     // Draws of an eye render whose writes nothing reads (deadDraws).
-    static const bool sDeadDraws = !vkLegacy();
+    static const bool sDeadDraws = !vkLegacy() && !(debugEnv("PETARI_VKDEADDRAWS") && !strcmp(debugEnv("PETARI_VKDEADDRAWS"), "0"));
     bool skipDead = sDeadDraws && vrEye && deadDraws(P, hudMode, tagPlayer, noCopies) > 0;
 
     struct UnitMemo {
@@ -2395,7 +2395,7 @@ void VulkanRenderer::render(Target& efb, const EyeView* eye, Target* hud, HudMod
     // holds this frame's HUD already (the second refresh of a game frame) is
     // left as it is.  Not with copies in the HUD section (their textures),
     // nor while debugging partial renders.
-    static const bool sReuse = !vkLegacy();
+    static const bool sReuse = !vkLegacy() && !(debugEnv("PETARI_VKHUDREUSE") && !strcmp(debugEnv("PETARI_VKHUDREUSE"), "0"));
     const VkPrepared* P = im.cur.get();
     if (efb.color == im.hudCache.color) im.hudCache = VkImpl::HudCache();  // drawn into as an EFB
     bool cacheable = false, reuse = false;
