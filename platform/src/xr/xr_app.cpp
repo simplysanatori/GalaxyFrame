@@ -397,7 +397,7 @@ void initInstance(App& a) {
     androidInfo.applicationActivity = a.android->activity->clazz;
     ci.next = &androidInfo;
 #endif
-    strcpy(ci.applicationInfo.applicationName, "GalaxyQuest");
+    strcpy(ci.applicationInfo.applicationName, "GalaxyFrame");
     ci.applicationInfo.applicationVersion = 1;
     strcpy(ci.applicationInfo.engineName, "Petari");
     ci.applicationInfo.engineVersion = 1;
@@ -1632,9 +1632,9 @@ void renderPair(App& a, int s, const vr::FrameInfo& frame, const XrView views[2]
 
 // ---------------------------------------------------------------------------
 // The frame loop on Vulkan.  SteamVR on the Frame shows a released image at
-// once, finished or not (H1b), so an image is released only after the GPU
+// once, finished or not, so an image is released only after the GPU
 // has finished it.  SteamVR's xrWaitFrame returns about one refresh before
-// the display time (H1b: one vsync from poses to photons for a fast app), too
+// the display time (measured: one vsync from poses to photons for a fast app), too
 // little to render both eyes and wait for them within the refresh they are
 // shown in.  So every set is rendered on one refresh for the next one's
 // display time and released on that next refresh:
@@ -1644,12 +1644,12 @@ void renderPair(App& a, int s, const vr::FrameInfo& frame, const XrView views[2]
 //     for the next refresh's display time, the newest game frame, both eyes
 //     recorded into one command buffer from those views and submitted.
 // No image is held longer than that one refresh and the right eye is never
-// rendered apart from the left (frame.2's paired steps did both, and the
+// rendered apart from the left (an earlier paired scheme did both, and the
 // right eye landed at a random offset).
 // At 120 Hz the game runs at 60 frames a second (its retrace every second
 // refresh) and the eyes are rendered on every refresh, from that refresh's
 // head pose and the newest game frame ("every refresh"), while the GPU keeps
-// up: a pair costs 4.5 to 8 ms on the headset (H2) beside the compositor's
+// up: a pair costs 4.5 to 8 ms on the headset beside the compositor's
 // 1 ms, against 8.3 ms.  When more than 5 % of the sets of the last 2 s
 // missed their display (went out with a later display time than they were
 // rendered for), or both eyes took over 85 % of a refresh on the GPU, only

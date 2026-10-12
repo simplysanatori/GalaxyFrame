@@ -84,6 +84,8 @@ Known:
 
 To update, download the new tarball and run `install.sh` again. Your game files, saves and settings stay where they are.
 
+If you ran this port under its old name GalaxyQuest, `install.sh` moves `~/.local/share/GalaxyQuest` to `~/.local/share/GalaxyFrame` and `~/Games/GalaxyQuest/app` to `~/Games/GalaxyFrame/app` once, removes the old `galaxyquest` program files and points the Steam entry at the new ones. It tells you what it moved.
+
 The installer changes nothing outside the folders listed under [Files](#files), the Steam shortcut and SteamVR's settings for that shortcut.
 
 ## First run
@@ -162,6 +164,7 @@ What did not help, so you know: SteamVR on the Frame accepts both frame synthesi
 | Program | `~/Games/GalaxyFrame/app` |
 | Game files, saves, settings, shader caches | `~/.local/share/GalaxyFrame` (`game/`, `nand/`, `petari_vr.ini`, `spirv.bin`, `pipelines.bin`) |
 | Logs | `~/.local/share/GalaxyFrame/petari_log.txt` (the game), `launch.log` (the launch wrapper), `vrtiming.log` (SteamVR's compositor timing) |
+| Downloaded tools | `~/.cache/galaxyframe` (nodtool, from `prepare-game.sh`) |
 | Optional test settings | `~/.local/share/GalaxyFrame/petari_debug.env`, `NAME=value` lines read at start |
 
 ## Troubleshooting

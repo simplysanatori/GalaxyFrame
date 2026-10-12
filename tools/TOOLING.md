@@ -1,4 +1,6 @@
-# Tooling for the frame.3 work (Steam Frame, native arm64)
+# Development tooling (Steam Frame, native arm64)
+
+`~/Games/GalaxyQuest` below is the development folder of the author (the checkout, `wt/` worktrees, `gqbuild.sh`, the build lock). It is not part of an install; `GQROOT` names another one.
 
 | Tool | Use |
 |---|---|
@@ -6,8 +8,8 @@
 | `build_linux.sh` | Same configure and ninja as before, now with ccache, the machine build lock `~/Games/GalaxyQuest/.build.lock` (one build at a time) and `-j5` (`JOBS=n`). `GQ_NO_LOCK=1` skips the lock when already inside `gqbuild.sh`. |
 | `tools/build-vvl.sh [tag]` | Builds the Khronos validation layer (Vulkan-ValidationLayers, default `vulkan-sdk-1.4.309.0`, dependencies at the commits of its `known_good.json`) and installs it in `~/.local/share/vulkan/explicit_layer.d`. Takes the build lock, `nice`, `-j4`. Use: `VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation <app>`. |
 | `tools/golden.sh`, `tools/golden_runner.c`, `tools/imgdiff.py` | Frame-locked headless golden pictures and the PNG comparison (standard library only). `golden.sh` documents itself in its header. |
-| `tools/vrtiming.py` | SteamVR compositor frame timing, a line a second. Started by `steam-frame/galaxyquest.sh` into `~/.local/share/GalaxyQuest/vrtiming.log` (`GQ_VRTIMING=0` turns it off). |
+| `tools/vrtiming.py` | SteamVR compositor frame timing, a line a second. Started by `steam-frame/galaxyframe.sh` into `~/.local/share/GalaxyFrame/vrtiming.log` (`GQ_VRTIMING=0` turns it off). |
 | `tools/session-report.py` | One table from `petari_log.txt` and `vrtiming.log` (current and previous session, or named logs). |
 
-`steam-frame/build.sh` and `install.sh` must ship `vrtiming.py` next to `galaxyquest.sh` for an installed
+`steam-frame/build.sh` and `install.sh` must ship `vrtiming.py` next to `galaxyframe.sh` for an installed
 copy to log the compositor (the wrapper also looks in `../src/tools/` and `../tools/`).

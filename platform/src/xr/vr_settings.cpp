@@ -547,7 +547,7 @@ void writeSettings(const std::string& path, const Lines& lines) {
         }
         fclose(f);
     } else {
-        out = "# GalaxyQuest VR settings (see docs/CONTROLS.md)\n";
+        out = "# GalaxyFrame VR settings (see docs/CONTROLS.md)\n";
     }
     for (size_t i = 0; i < lines.size(); i++) {
         if (!replaced[i]) {

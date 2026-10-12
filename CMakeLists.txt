@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(GalaxyQuest C CXX)
+project(GalaxyFrame C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -173,9 +173,9 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(game PRIVATE -fuse-ld=lld -Wl,--image-base=0x98000000 -Wl,-Bsymbolic -Wl,--gc-sections
     "-Wl,-rpath,\$ORIGIN:${OPENXR_LOADER_DIR}")
 
-  add_executable(galaxyquest platform/linux/launcher.c)
-  target_link_libraries(galaxyquest PRIVATE dl)
-  add_dependencies(galaxyquest game)
+  add_executable(galaxyframe platform/linux/launcher.c)
+  target_link_libraries(galaxyframe PRIVATE dl)
+  add_dependencies(galaxyframe game)
 
   # The headless test runner (tools/run_headless.sh on Android), run directly.
   add_executable(petari_headless platform/android/headless.c)
