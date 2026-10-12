@@ -99,6 +99,9 @@ void init();
 //                     view to the right (the camera goes round Mario to the
 //                     left); 0 moves the camera the way the stick is pushed,
 //                     as the Wii's D-pad did
+//   haptics           1 (default) buzzes the right controller when the game
+//                     rumbles the Wii Remote and ticks it over panel
+//                     controls; 0 for none
 //   passthrough       1 to see the room around the giant screen (the
 //                     headset's passthrough) instead of the dark; 0 (default)
 //   language          the game's language by name (english, french, german,
@@ -128,6 +131,8 @@ float refreshRate();
 void setRefreshRates(const float* rates, int count);
 int refreshRates(float* rates, int max);
 bool highClocks();
+// Controller haptics (haptics).
+bool haptics();
 // The right stick's camera turns swapped (invert_camera).
 bool invertCamera();
 // The room around the giant screen (the passthrough setting).  Wanted: the
