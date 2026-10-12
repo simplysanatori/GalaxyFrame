@@ -19,7 +19,7 @@
 // Writes <out dir>/<name>.png (flat picture) and, for shots marked :x, <name>_xr.png (both
 // simulated eyes, the headset presentation; also <name>_xr_mv.png with PETARI_XRSIM_MV=1).
 // Environment as for petari_headless (PETARI_INPUT, PETARI_STAGE, PETARI_VRINI,
-// PETARI_SHADER_CACHE, PETARI_XRSIM_*, ...).  GALAXYQUEST_LIB: folder of libgame.so.  Logs to stderr.
+// PETARI_SHADER_CACHE, PETARI_XRSIM_*, ...).  GALAXYFRAME_LIB (or the old GALAXYQUEST_LIB): folder of libgame.so.  Logs to stderr.
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
@@ -125,7 +125,8 @@ int main(int argc, char** argv) {
     char path[512];
     snprintf(path, sizeof(path), "%s", argv[0]);
     char* slash = strrchr(path, '/');
-    const char* libDir = getenv("GALAXYQUEST_LIB");  // directory holding libgame.so (default: next to this program)
+    const char* libDir = getenv("GALAXYFRAME_LIB");
+    if (!libDir || !*libDir) libDir = getenv("GALAXYQUEST_LIB");  // directory holding libgame.so (default: next to this program)
     if (libDir && *libDir) {
         snprintf(path, sizeof(path), "%s/libgame.so", libDir);
     } else {

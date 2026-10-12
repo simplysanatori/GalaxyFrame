@@ -24,7 +24,7 @@
 //   MOCK_XR_BUSY_MS=<ms>      Vulkan: a release that waits longer than this
 //                             for the app's queue to go idle is an error
 //                             (off unless set: the app submits its next set
-//                             before releasing the last since frame.3 round 3)
+//                             before releasing the last)
 // The graphics API is chosen by the app's binding (xrmock_gfx.h).
 //
 // Checks (ERROR lines in the trace, and a summary on stderr when the session
@@ -243,7 +243,7 @@ static XrResult XRAPI_CALL mCreateSwapchain(XrSession s, const XrSwapchainCreate
           (unsigned long long)ci->usageFlags);
     if (gGfx == &kMockGfxVk && ci->mipCount > 1) {
         // SteamVR on the Frame allocates a Vulkan swapchain image's memory for
-        // level 0 only (H2): levels below it are written past the image.
+        // level 0 only: levels below it are written past the image.
         trace("ERROR createSwapchain sc%d with %u mip levels: SteamVR allocates one", gChainCount, ci->mipCount);
         gErrors++;
     }

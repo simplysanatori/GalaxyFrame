@@ -1,11 +1,11 @@
 #!/bin/bash
-# Runs the real galaxyquest launcher of two builds against the mock OpenXR
+# Runs the real galaxyframe launcher of two builds against the mock OpenXR
 # runtime and compares the call traces (what the app does with swapchains and
 # frames, see xrmock.c).
 #
 #   tools/xrmock/trace-compare.sh <build dir A> <build dir B> [modes...]
 #
-# A build dir holds galaxyquest and libgame.so (build-linux).  Modes (default
+# A build dir holds galaxyframe (galaxyquest in builds from before the rename) and libgame.so (build-linux).  Modes (default
 # all three): paired (120 Hz, a game frame over two refreshes), unpaired
 # (72 Hz, both eyes each refresh), warp (120 Hz with SpaceWarp: motion vector
 # and depth swapchains).  Exit status 0 when every mode's traces match.
@@ -13,11 +13,11 @@
 # Environment:
 #   XRMOCK_SECONDS  length of each run (15)
 #   XRMOCK_SCRATCH  scratch folder (~/.cache/gq-xrmock): the mock, a scratch
-#                   GALAXYQUEST_HOME (game files linked, saves and shader cache
-#                   copied, nothing in ~/.local/share/GalaxyQuest is written),
+#                   GALAXYFRAME_HOME (game files linked, saves and shader cache
+#                   copied, nothing in ~/.local/share/GalaxyFrame is written),
 #                   and the traces
 #   XRMOCK_GAME / XRMOCK_NAND / XRMOCK_SHADERS / XRMOCK_INI   sources for the
-#                   scratch home (default: ~/.local/share/GalaxyQuest/...)
+#                   scratch home (default: ~/.local/share/GalaxyFrame/...)
 #   IGNORE_EXT      extension names (comma separated) that may be in the
 #                   instance extension list of one build only
 #   GFX             PETARI_GFX for both runs (gles; the game's own default is Vulkan)
@@ -31,14 +31,14 @@ A=$(cd "${1:?build dir A}" && pwd); B=$(cd "${2:?build dir B}" && pwd); shift 2
 MODES=("$@"); [ ${#MODES[@]} -eq 0 ] && MODES=(paired unpaired warp)
 SECS=${XRMOCK_SECONDS:-15}
 S=${XRMOCK_SCRATCH:-$HOME/.cache/gq-xrmock}
-DATA=$HOME/.local/share/GalaxyQuest
+DATA=${GALAXYFRAME_HOME:-$HOME/.local/share/GalaxyFrame}
 HOME_DIR=$S/home
-pgrep -x galaxyquest > /dev/null && { echo "the game is running; quit it first" >&2; exit 1; }
+pgrep -x "galaxyframe|galaxyquest" > /dev/null && { echo "the game is running; quit it first" >&2; exit 1; }
 RT=$("$HERE/build.sh" "$S/mock")
 mkdir -p "$S"
 # The launcher under another name: scripts of other agents refuse to run
-# while a process called galaxyquest exists.
-cp "$A/galaxyquest" "$S/gqmock"
+# while a process called galaxyframe exists.
+cp "$A/galaxyframe" "$S/gqmock" 2> /dev/null || cp "$A/galaxyquest" "$S/gqmock"
 
 run() { # build tag mode
   local build=$1 tag=$2 mode=$3 out=$S/trace_${2}_$3
@@ -55,7 +55,7 @@ run() { # build tag mode
     *) echo "unknown mode $mode" >&2; return 1 ;;
   esac
   env "${env[@]}" EGL_PLATFORM=surfaceless SDL_AUDIODRIVER=dummy XR_RUNTIME_JSON="$RT" MOCK_XR_TRACE="$out/trace.txt" MOCK_XR_SECONDS=$SECS \
-    GALAXYQUEST_HOME="$HOME_DIR" PETARI_SAVE_DIR="$HOME_DIR/nand" PETARI_GFX=${GFX:-gles} GALAXYQUEST_LIB="$build/libgame.so" \
+    GALAXYFRAME_HOME="$HOME_DIR" PETARI_SAVE_DIR="$HOME_DIR/nand" PETARI_GFX=${GFX:-gles} GALAXYFRAME_LIB="$build/libgame.so" \
     timeout $((SECS + 40)) nice -n 5 "$S/gqmock" > "$out/stdout.txt" 2>&1 || echo "  run $tag $mode exited with status $?"
   cp "$HOME_DIR/petari_log.txt" "$out/petari_log.txt" 2> /dev/null || true
   # Normalized: no frame numbers, no events, no swapchain image indices (their

@@ -31,19 +31,20 @@
 # those works with no change here.  Other environment for the game goes in GOLDEN_ENV, e.g.
 # GOLDEN_ENV="PETARI_NOCOPY=1 FOO=bar".
 #
-# Inputs and where they come from (nothing in ~/.local/share/GalaxyQuest is written):
+# Inputs and where they come from (nothing in ~/.local/share/GalaxyFrame is written):
 #   GOLDEN_HOME   scratch folder, default ~/.cache/gq-golden-home (game files linked, saves, shader
 #                 cache and VR settings copied per run)
-#   GOLDEN_GAME   the converted game files, default ~/.local/share/GalaxyQuest/game
-#   GOLDEN_NAND   the saves, default ~/.local/share/GalaxyQuest/nand (the file select shows them)
-#   GOLDEN_SHADERS  shader cache to start from, default ~/.local/share/GalaxyQuest/shaders.bin
+#   GOLDEN_GAME   the converted game files, default ~/.local/share/GalaxyFrame/game
+#   GOLDEN_NAND   the saves, default ~/.local/share/GalaxyFrame/nand (the file select shows them)
+#   GOLDEN_SHADERS  shader cache to start from, default ~/.local/share/GalaxyFrame/shaders.bin
 #
-# Captures take the machine-wide lock ~/Games/GalaxyQuest/.build.lock (the one gqbuild.sh uses), so
+# Captures take the machine-wide lock $GQROOT/.build.lock (the one gqbuild.sh uses; GQROOT defaults to ~/Games/GalaxyQuest, the development folder), so
 # they never overlap a build or another capture; GOLDEN_NO_LOCK=1 when the caller already holds it.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
-DATA=${GALAXYQUEST_HOME:-$HOME/.local/share/GalaxyQuest}
+GQROOT=${GQROOT:-$HOME/Games/GalaxyQuest}
+DATA=${GALAXYFRAME_HOME:-${GALAXYQUEST_HOME:-$HOME/.local/share/GalaxyFrame}}  # GALAXYQUEST_HOME: the old name
 GOLDEN_HOME=${GOLDEN_HOME:-$HOME/.cache/gq-golden-home}
 GOLDEN_GAME=${GOLDEN_GAME:-$DATA/game}
 GOLDEN_NAND=${GOLDEN_NAND:-$DATA/nand}
@@ -82,7 +83,7 @@ capture_once() { # build-dir out-dir only xronly
   rm -rf "$OUT"; mkdir -p "$OUT" "$GOLDEN_HOME"
   [ -f "$BUILD/libgame.so" ] || { echo "no libgame.so in $BUILD" >&2; return 1; }
   [ -d "$GOLDEN_GAME/files" ] || { echo "no game files at $GOLDEN_GAME" >&2; return 1; }
-  pgrep -x galaxyquest > /dev/null && { echo "the game is running; quit it first" >&2; return 1; }
+  pgrep -x "galaxyframe|galaxyquest" > /dev/null && { echo "the game is running; quit it first" >&2; return 1; }
   local RUNNER=$GOLDEN_HOME/golden_runner
   if [ ! -x "$RUNNER" ] || [ "$HERE/golden_runner.c" -nt "$RUNNER" ]; then
     clang -O1 -Wall -I"$REPO/platform/include" "$HERE/golden_runner.c" -o "$RUNNER" -ldl -lm
@@ -141,7 +142,7 @@ INI
     cp -r "$GOLDEN_HOME/nand.pristine" "$GOLDEN_HOME/run/nand"
     ln -sfn "$GOLDEN_GAME" "$GOLDEN_HOME/game"
     printf '%-8s %-24s ' "$boot" "$galaxy"
-    local envs=(EGL_PLATFORM=surfaceless SDL_AUDIODRIVER=dummy GALAXYQUEST_LIB="$BUILD"
+    local envs=(EGL_PLATFORM=surfaceless SDL_AUDIODRIVER=dummy GALAXYFRAME_LIB="$BUILD"
                 PETARI_SHADER_CACHE="$GOLDEN_HOME/shaders.bin" PETARI_VRINI="$GOLDEN_HOME/petari_vr.ini"
                 PETARI_STAGE="$galaxy" PETARI_INPUT="$script" PETARI_LANGUAGE=english
                 PETARI_XRSIM_LAYERS=1 PETARI_XRSIM_MV=1 PETARI_XRSIM_STEPS=40)
@@ -168,7 +169,7 @@ case "$cmd" in
   capture)
     [ $# -ge 3 ] || usage
     if [ -z "$GOLDEN_NO_LOCK" ]; then
-      exec 9> "$HOME/Games/GalaxyQuest/.build.lock"
+      exec 9> "$GQROOT/.build.lock"
       echo "golden: waiting for the build lock"; flock 9
     fi
     BUILD=$(cd "$2" && pwd); OUT=$3; shift 3
