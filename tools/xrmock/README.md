@@ -16,14 +16,26 @@ headset, and a script that compares what two builds do against it.
 - `xrmock_gfx.h` is the seam to the graphics API; `xrmock_gles.c` is the GLES
   side (swapchain images are textures of the app's EGL context).
 
-## For the Vulkan side (Lane D2)
+## Vulkan
 
-Add `xrmock_vk.c` with a second `MockGfx` and list it in `kGfxTables`
-(`xrmock.c`); `build.sh` gets the new file and `-lvulkan`. It must provide
-the `XR_KHR_vulkan_enable2` functions (`xrGetVulkanGraphicsRequirements2KHR`,
-`xrCreateVulkanInstanceKHR`, `xrGetVulkanGraphicsDevice2KHR`,
-`xrCreateVulkanDeviceKHR`), recognise `XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR`,
-list VkFormat numbers, and create VkImages on the app's device for the
-swapchains (`XrSwapchainImageVulkan2KHR`). The extension is already offered.
-`trace-compare.sh` then runs with `GFX=vk` against a GLES build for the same
-trace (a Vulkan session creates the same swapchains in the same order).
+`xrmock_vk.c` is the Vulkan side (`XR_KHR_vulkan_enable2`): the app's instance
+and device are made through the mock with the app's own loader, swapchain
+images are VkImages on the app's device, handed out in
+`COLOR_ATTACHMENT_OPTIMAL`. Run the launcher with `PETARI_GFX=vk`.
+
+Checks, as `ERROR` lines in the trace and a summary on stderr at the end of
+the session (`xrmock: summary ...`):
+
+- acquire, wait and release in order per swapchain (both APIs);
+- Vulkan: at each release the mock waits for the app's queue to go idle; more
+  than `MOCK_XR_BUSY_MS` (4) means the app released an image before its GPU
+  work had finished (SteamVR shows a released image at once). Other
+  processes' GPU work shows up to about 4 ms here; the stderr summary has the
+  histogram. `PETARI_NO_GPU_WAIT=1` in the app (at 72 Hz) is the negative test;
+- both eyes of a projection layer come from one `xrLocateViews` (the head
+  turns slowly, so views located for different times differ), and how many
+  refreshes before the display time submitted that locate was made for.
+
+A Vulkan session makes one set of eye swapchains (three with GLES) and
+transfer usage on the UI layers, so its setup trace differs from a GLES one;
+`trace-compare.sh` stays a GLES-against-GLES check.

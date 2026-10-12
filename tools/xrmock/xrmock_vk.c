@@ -23,6 +23,7 @@ static VkInstance gInstance;
 static VkPhysicalDevice gPhys;
 static VkDevice gDevice;
 static VkQueue gQueue;
+static uint32_t gQueueFamily;
 static PFN_vkGetDeviceProcAddr gGdpa;
 
 #define DEV(name) ((PFN_##name)gGdpa(gDevice, #name))
@@ -36,6 +37,7 @@ static int describeBinding(const XrBaseInStructure* n, char* out, size_t cap) {
     if (gDevice && b->device == gDevice) {
         gGdpa = (PFN_vkGetDeviceProcAddr)gGipa(gInstance, "vkGetDeviceProcAddr");
         DEV(vkGetDeviceQueue)(gDevice, b->queueFamilyIndex, b->queueIndex, &gQueue);
+        gQueueFamily = b->queueFamilyIndex;
     }
     return snprintf(out, cap, "binding=VULKAN2 handles=%s queueFamily=%u queueIndex=%u", ok ? "made-by-runtime" : "FOREIGN", b->queueFamilyIndex,
                     b->queueIndex);
@@ -124,7 +126,6 @@ static void* createImages(int64_t format, uint64_t usage, int width, int height,
     if (usage & XR_SWAPCHAIN_USAGE_SAMPLED_BIT) u |= VK_IMAGE_USAGE_SAMPLED_BIT;
     // The compositor samples every image.
     u |= VK_IMAGE_USAGE_SAMPLED_BIT;
-    (void)depth;
     VkPhysicalDeviceMemoryProperties mp;
     INST(vkGetPhysicalDeviceMemoryProperties)(gPhys, &mp);
     for (int i = 0; i < count; i++) {
@@ -162,6 +163,52 @@ static void* createImages(int64_t format, uint64_t usage, int width, int height,
         ai.memoryTypeIndex = type;
         VkDeviceMemory mem;
         if (DEV(vkAllocateMemory)(gDevice, &ai, NULL, &mem) == VK_SUCCESS) DEV(vkBindImageMemory)(gDevice, images[i], mem, 0);
+    }
+    // As a runtime hands them out: color images in COLOR_ATTACHMENT_OPTIMAL,
+    // depth in DEPTH_STENCIL_ATTACHMENT_OPTIMAL (XR_KHR_vulkan_enable2).
+    if (gQueue) {
+        VkCommandPoolCreateInfo pci;
+        memset(&pci, 0, sizeof(pci));
+        pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pci.queueFamilyIndex = gQueueFamily;
+        VkCommandPool pool;
+        DEV(vkCreateCommandPool)(gDevice, &pci, NULL, &pool);
+        VkCommandBufferAllocateInfo ai;
+        memset(&ai, 0, sizeof(ai));
+        ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        ai.commandPool = pool;
+        ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = 1;
+        VkCommandBuffer cb;
+        DEV(vkAllocateCommandBuffers)(gDevice, &ai, &cb);
+        VkCommandBufferBeginInfo bi;
+        memset(&bi, 0, sizeof(bi));
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        DEV(vkBeginCommandBuffer)(cb, &bi);
+        for (int i = 0; i < count; i++) {
+            VkImageMemoryBarrier b;
+            memset(&b, 0, sizeof(b));
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.dstAccessMask = depth ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image = images[i];
+            b.subresourceRange.aspectMask = depth ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+            b.subresourceRange.levelCount = (uint32_t)mips;
+            b.subresourceRange.layerCount = 1;
+            DEV(vkCmdPipelineBarrier)(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, NULL, 0, NULL, 1, &b);
+        }
+        DEV(vkEndCommandBuffer)(cb);
+        VkSubmitInfo si;
+        memset(&si, 0, sizeof(si));
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cb;
+        DEV(vkQueueSubmit)(gQueue, 1, &si, VK_NULL_HANDLE);
+        DEV(vkQueueWaitIdle)(gQueue);
+        DEV(vkDestroyCommandPool)(gDevice, pool, NULL);
     }
     return images;
 }
