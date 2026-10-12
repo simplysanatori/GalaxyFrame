@@ -35,7 +35,8 @@ struct ShaderUid {
     uint32_t efbHasAlpha;
     uint32_t hud;         // drawn into the HUD layer (no VR transform)
     uint32_t zTex;        // BP 0xF5: Z texture type (bits 0-1) and op (bits 2-3)
-    uint32_t cutaway;     // VR cutaway variant (see gpu::EyeView); has a discard
+    uint32_t cutaway;     // bit 0: VR cutaway variant (see gpu::EyeView), has a discard; bit 1 (Vulkan): the
+                          // pixel state from each vertex record, for a batch of many pixel states drawn whole
     uint32_t screenTexGens;  // bit n: texgen n maps positions to their screen position (VR: the eye's)
 
     bool operator==(const ShaderUid& o) const { return memcmp(this, &o, sizeof(*this)) == 0; }
