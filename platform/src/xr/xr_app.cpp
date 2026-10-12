@@ -183,6 +183,7 @@ struct App {
     struct VkSet {
         bool valid = false;
         bool submitted = false;
+        int set = 0;  // the eye swapchains it is in (a.eyes[set])
         xrgfx::Fence fence = 0;  // signalled when the GPU has finished it
         int64_t submittedAt = 0;
         XrPosef pose[2];
@@ -781,8 +782,10 @@ void initSession(App& a) {
         int32_t h = (int32_t)lroundf(vc.recommendedImageRectHeight * scale);
         w = w < (int32_t)vc.maxImageRectWidth ? w : (int32_t)vc.maxImageRectWidth;
         h = h < (int32_t)vc.maxImageRectHeight ? h : (int32_t)vc.maxImageRectHeight;
-        // Vulkan: one set (renderEyesVk), the images of a swapchain take turns.
-        for (int s = 0; s < (a.vk ? 1 : App::kEyeSets); s++) {
+        // Vulkan: two sets in turn (renderEyesVk): a set is rendered while
+        // the other is still waited for, and OpenXR allows one waited image
+        // per swapchain.
+        for (int s = 0; s < (a.vk ? 2 : App::kEyeSets); s++) {
             // Color only: the composite into the swapchain (vr::renderEye)
             // draws without depth.
             gfx.createChain(a.session, xrgfx::ImageKind::Eye, w, h, 1, &a.eyes[s][e]);
@@ -1734,13 +1737,13 @@ bool showPendingVk(App& a, XrTime displayTime, bool due) {
         }
     }
     for (int e = 0; e < 2; e++) {
-        releaseImage(a.eyes[0][e]);
-        a.setPose[0][e] = p.pose[e];
-        a.setFov[0][e] = p.fov[e];
-        a.setRect[0][e] = p.rect[e];
+        releaseImage(a.eyes[p.set][e]);
+        a.setPose[p.set][e] = p.pose[e];
+        a.setFov[p.set][e] = p.fov[e];
+        a.setRect[p.set][e] = p.rect[e];
     }
     releaseUiVk(a, a.uiPending);
-    a.shownSet = 0;
+    a.shownSet = p.set;
     a.shownSpace = p.space;
     if (due) notePoses(a, p, displayTime);
     p.valid = false;
@@ -1882,14 +1885,16 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
     vr::beginFrame(frame);
     int64_t t1 = port_host_time_ns();
     if (paired && gameRefresh && gBooted && (a.vkEvery || retraceInFirstStep())) port_vi_retrace();
+    // The set the last refresh's is not in (it is still waited for).
+    App::VkSet& p = a.vkNew;
+    p.set = a.vkPending.valid ? 1 - a.vkPending.set : 1 - (a.shownSet >= 0 ? a.shownSet : 1);
     uint32_t idx[2];
     for (int e = 0; e < 2; e++) {
-        idx[e] = acquireImage(a.eyes[0][e]);
+        idx[e] = acquireImage(a.eyes[p.set][e]);
     }
     int64_t t2 = port_host_time_ns();
-    App::VkSet& p = a.vkNew;
     for (int e = 0; e < 2; e++) {
-        Swapchain& sc = a.eyes[0][e];
+        Swapchain& sc = a.eyes[p.set][e];
         vr::Extent used = vr::renderEye(e, frame, sc.images[idx[e]], sc.width, sc.height);
         p.rect[e] = {used.width, used.height};
         p.pose[e] = views[e].pose;
@@ -1916,22 +1921,17 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
                      (t0 - a.workStartNs) / 1e6, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6);
         }
     }
-    maybeSaveShot(a, a.eyes[0], p.rect, idx);
+    maybeSaveShot(a, a.eyes[p.set], p.rect, idx);
 }
 
-// The end of a refresh's work on Vulkan, after the UI layers were drawn:
-// one submission for everything recorded; then the set of the last refresh
-// (with its UI images) goes out once finished, and this refresh's becomes
-// the pending one.  UI images drawn on a refresh without a new set go out at
-// once, finished.
-void finishFrameVk(App& a, const XrFrameState& fs) {
-    xrgfx::Gfx& gfx = xrgfx::gfx();
-    bool ui = false;
-    for (bool b : a.uiNew) ui |= b;
-    xrgfx::Fence f = 0;
-    if (a.vkNew.valid || ui) f = gfx.submit();
+// After the eyes of a refresh on Vulkan, before its UI layers: this
+// refresh's set is submitted, then the last refresh's set (with its UI
+// images) goes out once finished.  Its UI swapchain images are released
+// before this refresh's are acquired: OpenXR allows one waited image per
+// swapchain.
+void settleVk(App& a, const XrFrameState& fs) {
     if (a.vkNew.valid) {
-        a.vkNew.fence = f;
+        a.vkNew.fence = xrgfx::gfx().submit();
         a.vkNew.submittedAt = port_host_time_ns();
         a.vkNew.submitted = true;
     }
@@ -1939,7 +1939,18 @@ void finishFrameVk(App& a, const XrFrameState& fs) {
         bool late = showPendingVk(a, fs.predictedDisplayTime, fs.shouldRender);
         if (a.paired && fs.shouldRender) updatePaceVk(a, late);
     }
+}
+
+// The end of a refresh's work on Vulkan, after the UI layers were drawn: the
+// UI work submitted; with a new set it all goes out on the next refresh,
+// else the UI images go out now, once finished.
+void finishFrameVk(App& a) {
+    xrgfx::Gfx& gfx = xrgfx::gfx();
+    bool ui = false;
+    for (bool b : a.uiNew) ui |= b;
+    xrgfx::Fence f = ui ? gfx.submit() : 0;
     if (a.vkNew.valid) {
+        if (f) a.vkNew.fence = f;  // covers the eyes too (submitted earlier on the queue)
         a.vkPending = a.vkNew;
         a.vkNew.valid = false;
         for (int k = 0; k < vr::kUiLayerCount; k++) {
@@ -2242,6 +2253,9 @@ void renderFrame(App& a) {
     // they changed (a layer shows the image last released).  On Vulkan an
     // image is released once the work it was recorded with has finished
     // (finishFrameVk, showPendingVk).
+    if (a.vk) {
+        settleVk(a, fs);
+    }
     vr::UiLayer uiState[vr::kUiLayerCount];
     bool uiVisible[vr::kUiLayerCount] = {};
     if (fs.shouldRender && (a.shownSet >= 0 || a.vkPending.valid || a.vkNew.valid) && vr::uiLayers()) {
@@ -2270,7 +2284,7 @@ void renderFrame(App& a) {
         }
     }
     if (a.vk) {
-        finishFrameVk(a, fs);
+        finishFrameVk(a);
     }
 
     XrCompositionLayerProjectionView projViews[2] = {{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}, {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
