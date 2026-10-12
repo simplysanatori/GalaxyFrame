@@ -196,10 +196,18 @@ struct UiLayer {
 // kScreenRightLayer: the right eye's picture of the virtual screen while it
 // shows a stereo pair (kScreenLayer is the left eye's then, and both eyes'
 // otherwise).
-enum { kHudLayer, kSettingsLayer, kScreenLayer, kSetupLayer, kScreenRightLayer, kUiLayerCount };
+// kBeamLayer, kReticleLayer, kSkipLayer: the controller's laser beam, its
+// reticle and the skip ring, over every other layer (the compositor draws
+// quad layers over the eye layer, so in the eye images they were under the
+// virtual screen and the panels).
+enum { kHudLayer, kSettingsLayer, kScreenLayer, kSetupLayer, kScreenRightLayer, kBeamLayer, kReticleLayer, kSkipLayer, kUiLayerCount };
 // The UI layers from the bottom one to the top one.
-const int kUiLayerOrder[kUiLayerCount] = {kScreenLayer, kScreenRightLayer, kHudLayer, kSettingsLayer, kSetupLayer};
+const int kUiLayerOrder[kUiLayerCount] = {kScreenLayer, kScreenRightLayer, kHudLayer, kSettingsLayer, kSetupLayer, kBeamLayer, kReticleLayer, kSkipLayer};
 void setUiLayers(bool on);
+// The laser's origin and direction (stage space) from the controller's pose
+// at this refresh's display time, between the game's input updates (the
+// pointer and its length stay from the last pointerFromRay).
+void updateAimPose(xm::Vec3 origin, xm::Vec3 dir);
 bool uiLayers();
 // Image size of a UI layer (its swapchain).
 void uiLayerSize(int which, int* width, int* height);

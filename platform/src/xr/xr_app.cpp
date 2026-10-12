@@ -183,15 +183,18 @@ struct App {
     struct VkSet {
         bool valid = false;
         bool submitted = false;
+        xrgfx::Fence fence = 0;  // signalled when the GPU has finished it
+        int64_t submittedAt = 0;
         XrPosef pose[2];
         XrFovf fov[2];
         XrExtent2Di rect[2];
         XrSpace space = XR_NULL_HANDLE;  // the app space the poses are in
         XrTime time = 0;                 // the display time they were located for
     };
-    VkSet vkPending;              // rendered, not yet released
-    bool vkShownNow = false;      // this refresh released the last set (the second of a game frame's two)
-    bool uiPending[vr::kUiLayerCount] = {};  // UI layer image drawn, released with the work it was recorded with
+    VkSet vkPending;              // rendered on the last refresh, released on this one
+    VkSet vkNew;                  // rendered on this refresh
+    bool uiPending[vr::kUiLayerCount] = {};  // UI layer images drawn with vkPending (or alone), released with it
+    bool uiNew[vr::kUiLayerCount] = {};      // ... drawn on this refresh
     XrSpace shownSpace = XR_NULL_HANDLE;     // the space of the set on show
     XrSpace retiredSpaces[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};  // app spaces sets on show or pending may still be in
     // The views each set was rendered from, against a locate at the display
@@ -1588,61 +1591,69 @@ void notePoses(App& a, const App::VkSet& set, XrTime displayTime) {
     }
 }
 
-// The UI layer images drawn since the last release go back to the runtime
-// (their work is finished).
-void releaseUiVk(App& a) {
+// UI layer images whose work has finished go back to the runtime.
+void releaseUiVk(App& a, bool* list) {
     for (int k = 0; k < vr::kUiLayerCount; k++) {
-        if (!a.uiPending[k]) continue;
+        if (!list[k]) continue;
         releaseImage(a.ui[k]);
-        a.uiPending[k] = false;
+        list[k] = false;
         a.uiHasImage[k] = true;
     }
 }
+
+// A set counts as late for the pacing when the GPU had not finished it
+// this long after the next refresh's own set was recorded: a short wait
+// there still leaves the refresh time for xrEndFrame (T1: sets "not
+// finished" at the start of the refresh by a few ms, without a refresh
+// missed).
+const int64_t kLateWaitNs = 1500000;
 
 // The pending set (and the UI layer images recorded with it) released once
 // the GPU has finished it, and on show from this refresh.  `due`: its
 // display time has come (the second refresh of a game frame), so a GPU not
 // done by now counts as a set not finished when due.
-// Returns whether the set was not finished yet (and was waited for).
+// The pending set (and the UI layer images recorded with it) released once
+// the GPU has finished it, and on show from this refresh.  `due`: its
+// display time has come, so a GPU not done by now counts as a set not
+// finished when due.  Returns whether it was late (kLateWaitNs).
 bool showPendingVk(App& a, XrTime displayTime, bool due) {
     App::VkSet& p = a.vkPending;
     if (!p.valid) return false;
     xrgfx::Gfx& gfx = xrgfx::gfx();
     if (!p.submitted) {
-        a.renderedFence = gfx.submit();
-        a.renderedFenceAt = port_host_time_ns();
+        p.fence = gfx.submit();
+        p.submittedAt = port_host_time_ns();
         p.submitted = true;
     }
     int64_t t0 = port_host_time_ns();
     if (due) {
-        a.fenceGapNs += t0 - a.renderedFenceAt;
+        a.fenceGapNs += t0 - p.submittedAt;
         a.fenceChecks++;
     }
-    // PETARI_NO_GPU_WAIT=1: released unfinished (a test of tools/xrmock's check).
+    // PETARI_NO_GPU_WAIT=1: no wait here (a test of the check in xrgfx release).
     static const bool noWait = getenv("PETARI_NO_GPU_WAIT") != nullptr;
-    bool late = !gfx.waitFence(a.renderedFence, 0);
-    if (late && !noWait) {
-        gfx.waitFence(a.renderedFence, 1000000000);
+    int64_t waited = 0;
+    if (!gfx.waitFence(p.fence, 0) && !noWait) {
+        gfx.waitFence(p.fence, 1000000000);
+        waited = port_host_time_ns() - t0;
         if (due) {
             a.fenceWaits++;
-            int64_t waited = port_host_time_ns() - t0;
             a.fenceWaitNs += waited;
             if (waited > a.fenceWaitMaxNs) a.fenceWaitMaxNs = waited;
         }
     }
-    a.renderedFence = 0;
     for (int e = 0; e < 2; e++) {
         releaseImage(a.eyes[0][e]);
         a.setPose[0][e] = p.pose[e];
         a.setFov[0][e] = p.fov[e];
         a.setRect[0][e] = p.rect[e];
     }
-    releaseUiVk(a);
+    releaseUiVk(a, a.uiPending);
     a.shownSet = 0;
     a.shownSpace = p.space;
     if (due) notePoses(a, p, displayTime);
     p.valid = false;
-    return late;
+    return waited > kLateWaitNs;
 }
 
 // Every refresh or every second refresh at 120 Hz (see above), from the sets
@@ -1687,23 +1698,30 @@ void updatePaceVk(App& a, bool late) {
     }
 }
 
-// The eyes of a refresh on Vulkan (see above).
+// The laser between the game's input updates: the controller's aim pose at
+// the display time the eyes are rendered for (as updateInput locates it).
+void updateAimVk(App& a, XrTime time) {
+    static const bool scripted = getenv("PETARI_VRAIM") != nullptr;
+    if (scripted) return;
+    XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
+    const XrSpaceLocationFlags need = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT;
+    if (XR_FAILED(xrLocateSpace(a.aimSpace[1], a.appSpace, time, &loc)) || (loc.locationFlags & need) != need) return;
+    xm::Quat q{loc.pose.orientation.x, loc.pose.orientation.y, loc.pose.orientation.z, loc.pose.orientation.w};
+    vr::updateAimPose({loc.pose.position.x, loc.pose.position.y, loc.pose.position.z}, xm::rotate(q, {0, 0, -1}));
+}
+
+// The eyes of a refresh on Vulkan (see above): a new set into vkNew, for the
+// next refresh's display time; the set of the last refresh goes out in
+// finishFrameVk, after this one's work is submitted (the GPU finishes it
+// meanwhile).
 void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration period, bool paired) {
-    a.vkShownNow = false;
-    if (a.vkPending.valid) {
-        // Rendered on the last refresh for this one (or left over when the
-        // session stopped rendering).
-        bool late = showPendingVk(a, fs.predictedDisplayTime, fs.shouldRender);
-        a.vkShownNow = true;
-        if (paired && fs.shouldRender) updatePaceVk(a, late);
-    }
     if (!fs.shouldRender) {
         updateInput(a, fs.predictedDisplayTime);
         return;
     }
     bool every = !paired || a.vkEvery;
-    if (!every && a.vkShownNow) {
-        // Every second refresh: the one between shows the set again.  The
+    if (!every && a.vkPending.valid) {
+        // Every second refresh: this one puts out the set of the last.  The
         // game starts its next frame here with PETARI_RETRACE_STEP=2.
         if (gBooted && !retraceInFirstStep()) port_vi_retrace();
         return;
@@ -1714,7 +1732,11 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
     // For the next refresh's display time (the runtime's frame period away
     // when it is not pacing at 120 Hz).
     XrTime time = fs.predictedDisplayTime + (paired ? refresh : period);
-    if (gameRefresh) updateInput(a, time);
+    if (gameRefresh) {
+        updateInput(a, time);
+    } else {
+        updateAimVk(a, time);
+    }
     XrView views[2];
     locateViews(a, time, views);
     vr::FrameInfo frame = frameInfo(a, views, time);
@@ -1731,13 +1753,16 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
         idx[e] = acquireImage(a.eyes[0][e]);
     }
     int64_t t2 = port_host_time_ns();
-    App::VkSet& p = a.vkPending;
+    App::VkSet& p = a.vkNew;
     for (int e = 0; e < 2; e++) {
         Swapchain& sc = a.eyes[0][e];
         vr::Extent used = vr::renderEye(e, frame, sc.images[idx[e]], sc.width, sc.height);
         p.rect[e] = {used.width, used.height};
         p.pose[e] = views[e].pose;
         p.fov[e] = views[e].fov;
+        if (e == 0) {
+            xrgfx::gfx().submit();  // the GPU starts on the left eye while the right one is recorded
+        }
     }
     int64_t t3 = port_host_time_ns();
     p.valid = true;
@@ -1761,23 +1786,35 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
 }
 
 // The end of a refresh's work on Vulkan, after the UI layers were drawn:
-// one submission for everything recorded.  A set rendered now goes out on
-// the next refresh, with the UI images drawn now; UI images drawn on a
-// refresh without a set (the one between with eyes every second refresh)
-// go out now, once finished.
-void finishFrameVk(App& a) {
-    App::VkSet& p = a.vkPending;
+// one submission for everything recorded; then the set of the last refresh
+// (with its UI images) goes out once finished, and this refresh's becomes
+// the pending one.  UI images drawn on a refresh without a new set go out at
+// once, finished.
+void finishFrameVk(App& a, const XrFrameState& fs) {
+    xrgfx::Gfx& gfx = xrgfx::gfx();
     bool ui = false;
-    for (bool b : a.uiPending) ui |= b;
-    if (p.valid) {
-        if (!p.submitted) {
-            a.renderedFence = xrgfx::gfx().submit();
-            a.renderedFenceAt = port_host_time_ns();
-            p.submitted = true;
+    for (bool b : a.uiNew) ui |= b;
+    xrgfx::Fence f = 0;
+    if (a.vkNew.valid || ui) f = gfx.submit();
+    if (a.vkNew.valid) {
+        a.vkNew.fence = f;
+        a.vkNew.submittedAt = port_host_time_ns();
+        a.vkNew.submitted = true;
+    }
+    if (a.vkPending.valid) {
+        bool late = showPendingVk(a, fs.predictedDisplayTime, fs.shouldRender);
+        if (a.paired && fs.shouldRender) updatePaceVk(a, late);
+    }
+    if (a.vkNew.valid) {
+        a.vkPending = a.vkNew;
+        a.vkNew.valid = false;
+        for (int k = 0; k < vr::kUiLayerCount; k++) {
+            a.uiPending[k] = a.uiNew[k];
+            a.uiNew[k] = false;
         }
     } else if (ui) {
-        xrgfx::gfx().waitFence(xrgfx::gfx().submit(), 1000000000);
-        releaseUiVk(a);
+        gfx.waitFence(f, 1000000000);
+        releaseUiVk(a, a.uiNew);
     }
 }
 
@@ -2073,14 +2110,14 @@ void renderFrame(App& a) {
     // (finishFrameVk, showPendingVk).
     vr::UiLayer uiState[vr::kUiLayerCount];
     bool uiVisible[vr::kUiLayerCount] = {};
-    if (fs.shouldRender && (a.shownSet >= 0 || a.vkPending.valid) && vr::uiLayers()) {
+    if (fs.shouldRender && (a.shownSet >= 0 || a.vkPending.valid || a.vkNew.valid) && vr::uiLayers()) {
         for (int k : vr::kUiLayerOrder) {
             vr::UiLayer l = vr::uiLayer(k);
             uiState[k] = l;
             if (!l.visible) continue;
             uiVisible[k] = true;
             Swapchain& sc = a.ui[k];
-            if ((l.changed || !a.uiHasImage[k]) && !a.uiPending[k]) {
+            if ((l.changed || !a.uiHasImage[k]) && !a.uiNew[k]) {
                 uint32_t idx = acquireImage(sc);
                 vr::drawUiLayer(k, sc.images[idx]);
                 if (k == vr::kScreenLayer || k == vr::kScreenRightLayer) {
@@ -2090,7 +2127,7 @@ void renderFrame(App& a) {
                     vrdraw::draw().generateMips(sc.images[idx].color);
                 }
                 if (a.vk) {
-                    a.uiPending[k] = true;
+                    a.uiNew[k] = true;
                 } else {
                     releaseImage(sc);
                     a.uiHasImage[k] = true;
@@ -2099,7 +2136,7 @@ void renderFrame(App& a) {
         }
     }
     if (a.vk) {
-        finishFrameVk(a);
+        finishFrameVk(a, fs);
     }
 
     XrCompositionLayerProjectionView projViews[2] = {{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}, {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
