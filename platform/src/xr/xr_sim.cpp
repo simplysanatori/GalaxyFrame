@@ -150,18 +150,6 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
             sTurnsDone = index + 1;
         }
     }
-    // PETARI_XRSIM_STICK="t0-t1:x;...": the right stick's X held at x
-    // (-1..1) from t0 to t1 s after boot, for smooth turning (smooth_turn).
-    if (const char* spec = getenv("PETARI_XRSIM_STICK")) {
-        const char* t0env = getenv("PETARI_T0_MS");
-        double now = (port_host_time_ns() / 1000000 - (t0env ? atoll(t0env) : 0)) / 1000.0;
-        float held = 0.0f;
-        for (const char* p = spec; p && *p; p = strchr(p, ';') ? strchr(p, ';') + 1 : nullptr) {
-            float t0, t1, x;
-            if (sscanf(p, "%f-%f:%f", &t0, &t1, &x) == 3 && now >= t0 && now < t1) held = x;
-        }
-        if (vr::smoothTurning()) vr::smoothTurn(held);
-    }
     // PETARI_XRSIM_TIMING=1: each frame's eyes and UI layers timed apart,
     // the GPU finished before and after each (wall time with the GPU's work;
     // the CPU time to record them), averaged into one log line per call.
@@ -171,6 +159,22 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
     double eyesMs = 0.0, eyesCpuMs = 0.0, layersMs = 0.0, layersCpuMs = 0.0;
     int layerFrames = 0;
     for (int i = 0; i < frames; i++) {
+        // PETARI_XRSIM_STICK="t0-t1:x[,y[,g]];...": the view stick held at x, y
+        // (-1..1) from t0 to t1 s after boot, for smooth turning and tilting
+        // (smooth_turn), with the grip held when g is 1 (height and size).
+        if (const char* spec = getenv("PETARI_XRSIM_STICK")) {
+            const char* t0env = getenv("PETARI_T0_MS");
+            double now = (port_host_time_ns() / 1000000 - (t0env ? atoll(t0env) : 0)) / 1000.0;
+            float held = 0.0f, heldY = 0.0f, grip = 0.0f;
+            for (const char* p = spec; p && *p; p = strchr(p, ';') ? strchr(p, ';') + 1 : nullptr) {
+                float t0, t1, x, y = 0.0f, g = 0.0f;
+                if (sscanf(p, "%f-%f:%f,%f,%f", &t0, &t1, &x, &y, &g) >= 3 && now >= t0 && now < t1) held = x, heldY = y, grip = g;
+            }
+            if (vr::smoothTurning()) {
+                vr::smoothTurn(grip > 0.5f ? 0.0f : held, vr::smoothTilting() && grip <= 0.5f ? heldY : 0.0f);
+                vr::dioramaAdjust(grip > 0.5f ? held : 0.0f, grip > 0.5f ? heldY : 0.0f);
+            }
+        }
         int64_t t0 = 0, t1 = 0;
         if (sTiming) {
             gfx.finish();

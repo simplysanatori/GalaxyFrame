@@ -559,6 +559,8 @@ XrPath path(App& a, const char* s) {
 void suggest(App& a, const char* profile, bool touchPlus) {
     std::vector<XrActionSuggestedBinding> b = {
         {a.moveAction, path(a, "/user/hand/left/input/thumbstick")},
+        {a.moveAction, path(a, "/user/hand/right/input/thumbstick")},
+        {a.lookAction, path(a, "/user/hand/left/input/thumbstick")},
         {a.lookAction, path(a, "/user/hand/right/input/thumbstick")},
         {a.aAction, path(a, "/user/hand/right/input/a/click")},
         {a.bAction, path(a, "/user/hand/right/input/b/click")},
@@ -598,6 +600,8 @@ bool suggestFrame(App& a, const char* squeeze) {
     snprintf(right, sizeof(right), "/user/hand/right/input/%s", squeeze);
     std::vector<XrActionSuggestedBinding> b = {
         {a.moveAction, path(a, "/user/hand/left/input/thumbstick")},
+        {a.moveAction, path(a, "/user/hand/right/input/thumbstick")},
+        {a.lookAction, path(a, "/user/hand/left/input/thumbstick")},
         {a.lookAction, path(a, "/user/hand/right/input/thumbstick")},
         {a.aAction, path(a, "/user/hand/right/input/a/click")},
         {a.wiiBAction, path(a, "/user/hand/right/input/b/click")},
@@ -638,8 +642,10 @@ void initActions(App& a) {
     strcpy(ci.actionSetName, "gameplay");
     strcpy(ci.localizedActionSetName, "Gameplay");
     XR_CHECK(xrCreateActionSet(a.instance, &ci, &a.actionSet));
-    a.moveAction = makeAction(a, "move", XR_ACTION_TYPE_VECTOR2F_INPUT, false);
-    a.lookAction = makeAction(a, "look", XR_ACTION_TYPE_VECTOR2F_INPUT, false);
+    // Both sticks serve both roles: which hand moves Mario and which turns the
+    // view depends on left_handed.
+    a.moveAction = makeAction(a, "move", XR_ACTION_TYPE_VECTOR2F_INPUT, true);
+    a.lookAction = makeAction(a, "look", XR_ACTION_TYPE_VECTOR2F_INPUT, true);
     a.aAction = makeAction(a, "button_a", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
     a.bAction = makeAction(a, "button_b", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
     a.xAction = makeAction(a, "button_x", XR_ACTION_TYPE_BOOLEAN_INPUT, false);
@@ -840,9 +846,10 @@ float getFloat(App& a, XrAction act, XrPath sub) {
     return s.isActive ? s.currentState : 0.0f;
 }
 
-XrVector2f getVec2(App& a, XrAction act) {
+XrVector2f getVec2(App& a, XrAction act, XrPath sub) {
     XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
     gi.action = act;
+    gi.subactionPath = sub;
     XrActionStateVector2f s{XR_TYPE_ACTION_STATE_VECTOR2F};
     xrGetActionStateVector2f(a.session, &gi, &s);
     return s.isActive ? s.currentState : XrVector2f{0, 0};
@@ -878,25 +885,29 @@ void updateInput(App& a, XrTime time) {
 
     PortPadState pad{};
     pad.connected = 1;
-    XrVector2f move = getVec2(a, a.moveAction);
+    // The pointing hand (the right one; the left with left_handed) has the
+    // Remote: pointer, shoot trigger, view stick, first-person click, spin
+    // bumper.  The other has the Nunchuk: Mario's stick, crouch trigger, C.
+    const int hm = vr::leftHanded() ? 0 : 1, ho = 1 - hm;
+    XrVector2f move = getVec2(a, a.moveAction, a.handPath[ho]);
     pad.stickX = move.x;
     pad.stickY = move.y;
     // Button layout (see docs/CONTROLS.md):
     //   A = jump, right trigger = shoot star bits (B), B, Y or controller shake = spin,
     //   left trigger = crouch (Z), left grip = camera centre (C), menu = pause (+),
-    //   X = minus, right stick = D-pad, right stick click = first-person look (D-pad up).
+    //   X = minus, right stick = D-pad (smooth turning: turns and tilts the diorama), stick click = first-person look (D-pad up).
     if (getBool(a, a.aAction)) pad.buttons |= W_A;
-    if (getFloat(a, a.triggerAction, a.handPath[1]) > 0.5f) pad.buttons |= W_B;
+    if (getFloat(a, a.triggerAction, a.handPath[hm]) > 0.5f) pad.buttons |= W_B;
     if (a.wiiBAction != XR_NULL_HANDLE && getBool(a, a.wiiBAction)) pad.buttons |= W_B;
-    if (getFloat(a, a.triggerAction, a.handPath[0]) > 0.5f) pad.buttons |= W_Z;
-    if (getFloat(a, a.gripAction, a.handPath[0]) > 0.6f) pad.buttons |= W_C;
+    if (getFloat(a, a.triggerAction, a.handPath[ho]) > 0.5f) pad.buttons |= W_Z;
+    if (getFloat(a, a.gripAction, a.handPath[ho]) > 0.6f) pad.buttons |= W_C;
     // Menu and X are + and -; a press of either also asks for the pause
     // menu (port_input_set), which the game opens at once or as soon as it
     // allows it: on the Wii + or - had to be held for 12 frames, with no A,
     // B or shake.
     if (getBool(a, a.menuAction)) pad.buttons |= W_PLUS;
     if (getBool(a, a.xAction)) pad.buttons |= W_MINUS;
-    if (getBool(a, a.stickClickAction, a.handPath[1])) pad.buttons |= W_UP;
+    if (getBool(a, a.stickClickAction, a.handPath[hm])) pad.buttons |= W_UP;
     // Right stick: the D-pad.  In the diorama left/right turn it in steps
     // round Mario (a snap turn behind a blink; its yaw no longer follows the
     // game camera); elsewhere they turn the game camera.  With the
@@ -904,20 +915,25 @@ void updateInput(App& a, XrTime time) {
     // D-pad's sides for its camera, CameraLocalUtil.cpp): pushing the stick
     // right turns the view to the right.  Up is the first-person view.  A
     // direction engages past 0.7 and releases below 0.4, one press per flick.
-    // With smooth turning (smooth_turn) the stick's X turns the diorama in
-    // proportion to its deflection instead (vr::smoothTurn), and left and
-    // right are no D-pad presses there.
-    XrVector2f look = getVec2(a, a.lookAction);
+    // With smooth turning (smooth_turn) the stick turns and tilts the diorama
+    // in proportion to its deflection instead (vr::smoothTurn), and is no
+    // D-pad there (up and down stay the D-pad on a menu's list); first person
+    // is then the Frame's D-pad up or the stick's click.  With the grip of
+    // the same hand held it sets the diorama's height (up and down) and size
+    // (left and right) instead (vr::dioramaAdjust).
+    XrVector2f look = getVec2(a, a.lookAction, a.handPath[hm]);
     float lx = fabsf(look.x), ly = fabsf(look.y);
     const bool smooth = vr::smoothTurning();
-    float turnX = 0.0f;
+    const bool tilt = vr::smoothTilting();
+    const bool grip = smooth && getFloat(a, a.gripAction, a.handPath[hm]) > 0.6f;
+    float turnX = 0.0f, tiltY = 0.0f;
     if (a.dpad == 0) {
         if (lx > 0.7f && lx >= ly) {
             if (!smooth) {
                 a.dpad = look.x < 0.0f ? W_LEFT : W_RIGHT;
                 a.dpadTurned = vr::snapTurn((look.x < 0.0f ? -1 : 1) * (vr::invertCamera() ? -1 : 1));
             }
-        } else if (ly > 0.7f) {
+        } else if (ly > 0.7f && !tilt && !grip) {
             a.dpad = look.y > 0.0f ? W_UP : W_DOWN;
         }
     } else if (fmaxf(lx, ly) < 0.4f) {
@@ -925,7 +941,8 @@ void updateInput(App& a, XrTime time) {
         a.dpadTurned = false;
     }
     if (!a.dpadTurned) pad.buttons |= a.dpad;
-    if (smooth && a.dpad != W_UP && a.dpad != W_DOWN) turnX = look.x;
+    if (smooth && !grip && a.dpad != W_UP && a.dpad != W_DOWN) turnX = look.x;
+    if (tilt && !grip) tiltY = look.y;
     // The Steam Frame's D-pad: the Wii Remote's, left and right turning the
     // diorama like the right stick.  Bumpers: left centres the camera (C),
     // right spins (below).
@@ -940,9 +957,12 @@ void updateInput(App& a, XrTime time) {
         if (!a.padDpadTurned) pad.buttons |= held;
         // Held, left and right turn at a steady 0.7 of the stick's deflection (about 60 degrees a second).
         if (smooth && a.padDpadTurned && turnX == 0.0f) turnX = held == W_LEFT ? -0.7f : held == W_RIGHT ? 0.7f : 0.0f;
-        if (getBool(a, a.bumperAction, a.handPath[0])) pad.buttons |= W_C;
+        if (getBool(a, a.bumperAction, a.handPath[ho])) pad.buttons |= W_C;
     }
-    if (smooth) vr::smoothTurn(turnX);
+    if (smooth) {
+        vr::smoothTurn(turnX, tiltY);
+        vr::dioramaAdjust(grip ? look.x : 0.0f, grip ? look.y : 0.0f);
+    }
 
     // Spin: B or Y, or flicking the right controller like a Wii Remote,
     // produces the acceleration spike the game reads as a remote shake (some
@@ -951,7 +971,7 @@ void updateInput(App& a, XrTime time) {
     static int spinFrames = 0, nunSpinFrames = 0;
     static XrTime lastFlick[2] = {0, 0};
     if (getBool(a, a.bAction) || getBool(a, a.yAction) ||
-        (a.bumperAction != XR_NULL_HANDLE && getBool(a, a.bumperAction, a.handPath[1]))) {
+        (a.bumperAction != XR_NULL_HANDLE && getBool(a, a.bumperAction, a.handPath[hm]))) {
         spinFrames = 6;
     }
     for (int h = 0; h < 2; h++) {
@@ -962,7 +982,7 @@ void updateInput(App& a, XrTime time) {
             const XrVector3f& v = vel.linearVelocity;
             float speed = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
             if (speed > 2.5f && time - lastFlick[h] > 300000000) {  // m/s; 0.3 s between spins
-                (h == 1 ? spinFrames : nunSpinFrames) = 6;
+                (h == hm ? spinFrames : nunSpinFrames) = 6;
                 lastFlick[h] = time;
             }
         }
@@ -980,14 +1000,14 @@ void updateInput(App& a, XrTime time) {
         nunSpinFrames--;
     }
 
-    // Pointer: where the right controller's aim ray meets the HUD panel (in
+    // Pointer: where the pointing controller's aim ray meets the HUD panel (in
     // the diorama) or the virtual screen (menus).  While it is on the VR
     // settings panel beside the pause menu, the game gets no pointer, and an
     // A press made there goes to the panel.  Which way is down from the
     // controller tilts the Wii remote where the game steers by tilt.
     XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
     xm::Vec3 aimFrom{0, 0, 0}, aimDir{0, 0, 0};
-    bool aimOriented = XR_SUCCEEDED(xrLocateSpace(a.aimSpace[1], a.appSpace, time, &loc)) &&
+    bool aimOriented = XR_SUCCEEDED(xrLocateSpace(a.aimSpace[hm], a.appSpace, time, &loc)) &&
                        (loc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT);
     bool aimTracked = aimOriented && (loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT);
     xm::Quat aimQ{loc.pose.orientation.x, loc.pose.orientation.y, loc.pose.orientation.z, loc.pose.orientation.w};
@@ -1008,7 +1028,7 @@ void updateInput(App& a, XrTime time) {
         // the laser goes (rather than freezing where it was) and the game's
         // pointer leaves the screen until it is back.
         a.aimTracked = aimTracked;
-        port_log("vr: right controller aim %s", aimTracked ? "tracked again" : "lost");
+        port_log("vr: %s controller aim %s", hm ? "right" : "left", aimTracked ? "tracked again" : "lost");
         if (!aimTracked) {
             vr::pointerLost();
         }
@@ -1081,7 +1101,7 @@ void updateInput(App& a, XrTime time) {
     tick = vr::settingsTakeTick() || tick;
     tick = vr::setupTakeTick() || tick;
     if (tick && rumble == 0 && vr::haptics()) {
-        applyHaptic(a, a.handPath[1], 0.25f, 15000000);  // 15 ms
+        applyHaptic(a, a.handPath[hm], 0.25f, 15000000);  // 15 ms
     }
 }
 

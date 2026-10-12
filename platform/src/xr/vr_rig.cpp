@@ -36,6 +36,8 @@ xm::Vec3 turn(xm::Vec3 v, xm::Vec3 axis, float angle) {
 
 }  // namespace
 
+static void rigAxes(const RigState& rig, xm::Vec3* r, xm::Vec3* u, xm::Vec3* b, bool tilted = true);
+
 xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo& cam, float dt) {
     // Camera basis in world space: the view matrix rows are the camera's
     // right / up / back axes.
@@ -173,11 +175,26 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
         rig.turnRate = 0.0f;
     }
 
+    // The stick's tilt: the world tipped about Mario, within limits (the
+    // eye's elevation over his horizon, from the anchor, stays under 88 deg).
+    {
+        float prevPitch = rig.pitch;
+        float baseElevation = atan2f(-params.anchor.y, -params.anchor.z);
+        float top = fminf(params.maxPitch, 1.5359f - baseElevation);
+        if (rig.tiltOn) {
+            rig.pitch += rig.stickTilt * dt;
+        } else {
+            float step = 1.0472f * dt;  // back to level at 60 deg/s
+            rig.pitch = fabsf(rig.pitch) <= step ? 0.0f : rig.pitch - (rig.pitch > 0.0f ? step : -step);
+        }
+        rig.pitch = fminf(top, fmaxf(params.minPitch, rig.pitch));
+        if (dt > 0.0f) rig.turnRate = fmaxf(rig.turnRate, fabsf(rig.pitch - prevPitch) / dt);
+    }
+
     // Stage-from-world: world axes (right, up, back) -> stage X, Y, Z, scaled,
     // with the pivot at the anchor.
-    xm::Vec3 r = xm::normalize(xm::cross(rig.forward, rig.up));
-    xm::Vec3 u = rig.up;
-    xm::Vec3 b = rig.forward * -1.0f;
+    xm::Vec3 r, u, b;
+    rigAxes(rig, &r, &u, &b);
     xm::Mat4 rot = xm::Mat4::identity();
     rot.at(0, 0) = r.x, rot.at(0, 1) = r.y, rot.at(0, 2) = r.z;
     rot.at(1, 0) = u.x, rot.at(1, 1) = u.y, rot.at(1, 2) = u.z;
@@ -199,10 +216,24 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
 }
 
 // World axes of the rig: right, up, back map to stage X, Y, Z.
-static void rigAxes(const RigState& rig, xm::Vec3* r, xm::Vec3* u, xm::Vec3* b) {
+// With the tilt, up and back turn about right: up comes towards the player
+// (positive pitch: Mario is seen from higher).
+static void rigAxes(const RigState& rig, xm::Vec3* r, xm::Vec3* u, xm::Vec3* b, bool tilted) {
     *r = xm::normalize(xm::cross(rig.forward, rig.up));
     *u = rig.up;
     *b = rig.forward * -1.0f;
+    if (tilted && rig.pitch != 0.0f) {
+        float c = cosf(rig.pitch), s = sinf(rig.pitch);
+        xm::Vec3 up = *u * c - *b * s;
+        *b = *b * c + *u * s;
+        *u = up;
+    }
+}
+
+xm::Vec3 stageDirToWorldLevel(const RigState& rig, xm::Vec3 d) {
+    xm::Vec3 r, u, b;
+    rigAxes(rig, &r, &u, &b, false);
+    return r * d.x + u * d.y + b * d.z;
 }
 
 xm::Vec3 stageDirToWorld(const RigState& rig, xm::Vec3 d) {
