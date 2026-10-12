@@ -13,7 +13,7 @@ The first release of GalaxyFrame, Super Mario Galaxy in VR running natively on t
 
 ### Rendering
 
-- A native Vulkan renderer that replays the game's recorded frames, with OpenGL ES kept as the fallback.
+- A native Vulkan renderer that replays the game's recorded frames.
 - Both eyes rendered on every refresh of the 120 Hz display, from the head pose of that refresh, at SteamVR's recommended resolution. Each pair is handed to SteamVR only once the GPU has finished it.
 - When the GPU falls behind in a heavy scene, new eyes every second refresh until it is lighter again, then back.
 - The shaders compiled to SPIR-V at run time and cached; a warmed cache has every pipeline ready at launch.
@@ -24,22 +24,14 @@ The first release of GalaxyFrame, Super Mario Galaxy in VR running natively on t
 
 - The Steam Frame controllers bound through SteamVR's own profile, with rumble on both controllers.
 - Smooth turning of the diorama with the right stick, with a turn speed slider; 45 degree steps behind a blink as the alternative.
-- Tilting the diorama with the stick, up to see Mario from higher, with a tilt speed slider. A stick click levels it.
-- The diorama's height and size on the left grip and D-pad while you play.
-- First person on the D-pad. Star Bits shot twice as fast, with a slider.
-- A left-handed option that points with the left controller and swaps the hands.
 
 ### Comfort
 
 - A comfort vignette: a clear circle around where you look, closing in as the view moves, with its strength set for slow and for fast movement.
-- Planet turns: how the world turns on small planets so that Mario's up stays up. Smooth, in steps behind a blink, or off.
-- Flights between planets, arrivals and the game's in-engine cutscenes stay in the diorama and follow the game's own camera; afterwards the view keeps the angle the scene chose. The videos stay on the flat screen. A Cutscenes tab chooses this by kind.
-- The death screen and the game's other fades darken the whole view.
 
 ### The settings panel
 
 - Six tabs: Diorama, Screen, Cutscenes, Controls, Comfort and Display. The switches that do nothing on the Frame are hidden.
-- The panel sits clear of the game's pause menu, and the laser, the pointer and the skip ring draw over the flat screen.
 - One resolution setting, shown in pixels: 1.00 is what SteamVR's own resolution setting gives the game.
 
 ### Install
