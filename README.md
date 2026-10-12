@@ -106,7 +106,7 @@ The game sees a Wii Remote with a Nunchuk. The Frame controllers are mapped onto
 
 The right grip and the left stick click are not used.
 
-**Haptics.** When the game rumbles the Wii Remote, the right controller (the one that points) buzzes, in short pulses for as long as the game keeps the motor on. A light tick marks the pointer reaching a new target or a control of the VR settings panel. Both are on by default. `haptics = 0` in `petari_vr.ini` turns them off. The first pulse's result from SteamVR is logged once in `petari_log.txt` as `haptics: first pulse result N`.
+**Haptics.** When the game rumbles the Wii Remote, both controllers buzz, in short pulses for as long as the game keeps the motor on. A light tick marks the pointer reaching a new target or a control of the VR settings panel. Both are on by default. `haptics = 0` in `petari_vr.ini` turns them off. The first pulse's result from SteamVR is logged once in `petari_log.txt` as `haptics: first pulse result N`.
 
 **Pausing.** One press of Menu or View opens the pause menu. Where the game does not allow pausing for a moment, the menu opens as soon as it can, up to 1.5 seconds after the press. Opening the SteamVR dashboard pauses the game. When you return during play, the pause menu is open.
 
