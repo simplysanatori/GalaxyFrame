@@ -54,6 +54,14 @@ struct ShaderUidHash {
 
 // Builds the UID from the current BP/XF register state and the draw's
 // vertex layout.
+// PETARI_VKLEGACY=1: the Vulkan replay as before the perf work (A/B timing,
+// and a fallback): every optimisation below is off.
+bool vkLegacy();
+// Vulkan: the fragment shader reads the pixel state at the draw's push
+// constant (kVkPushPixBase) rather than a flat varying from the draw record
+// (each batch is drawn per run of one pixel state, Item::pixRunFirst).
+bool vkPixelStatePushed();
+
 ShaderUid makeShaderUid(const uint32_t* bp, const uint32_t* xfRegs, uint32_t vtxFlags, bool hud);
 
 // Which GLSL the generator writes.  GLES is what the GL renderer compiles
@@ -108,6 +116,7 @@ enum : uint32_t {
     kVkPushSize = 32,
     kVkPushFirstOrdinal = 0,
     kVkPushCopyMode = 4,
+    kVkPushPixBase = 8,  // draws: the pixel state's base in st[] (fragment shader)
     kVkPushCopyRect = 16,
 };
 
