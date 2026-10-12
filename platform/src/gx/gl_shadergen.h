@@ -56,8 +56,60 @@ struct ShaderUidHash {
 // vertex layout.
 ShaderUid makeShaderUid(const uint32_t* bp, const uint32_t* xfRegs, uint32_t vtxFlags, bool hud);
 
-std::string genVertexShader(const ShaderUid& uid);
-std::string genFragmentShader(const ShaderUid& uid);
+// Which GLSL the generator writes.  GLES is what the GL renderer compiles
+// (GLSL ES 3.20) and stays byte-identical per uid.  VK is for the Vulkan
+// backend, compiled to SPIR-V at run time (vk_spirv.h): GLSL 4.50 with the
+// layout below.
+enum class Dialect { GLES, VK };
+
+std::string genVertexShader(const ShaderUid& uid, Dialect dialect = Dialect::GLES);
+std::string genFragmentShader(const ShaderUid& uid, Dialect dialect = Dialect::GLES);
+
+// The fixed EFB copy program (12 modes, selected by u_mode / the push
+// constant copyMode), a fullscreen triangle drawn with 3 vertices.  The GLES
+// text is the same as the one kCopyVs / kCopyFs hold in gl_renderer.cpp.
+std::string genCopyVertexShader(Dialect dialect = Dialect::GLES);
+std::string genCopyFragmentShader(Dialect dialect = Dialect::GLES);
+
+// Vulkan dialect interface, shared by the generated shaders and the fixed
+// copy program, so one pipeline layout fits them all:
+//   set 0 (per frame, buffers)   binding 0 rows[] SSBO       VS (FS declares it too)
+//                                binding 1 recs[] SSBO       VS, FS
+//                                binding 2 st[] SSBO         VS, FS
+//                                binding 3 vtxRec[] SSBO     VS
+//                                binding 4 EyeBlock UBO      VS, FS (GLES: binding 2)
+//   set 1 (push descriptors)     bindings 0-7 combined image samplers s_tex0..7, FS
+//                                (the copy program reads s_color on 0, s_depth on 1)
+//   push constants, 32 bytes, stages VERTEX | FRAGMENT:
+//                                offset 0  uint u_firstOrdinal  (GX draws)
+//                                offset 4  int  u_copyMode      (copy program)
+//                                offset 8  uint pad[2]
+//                                offset 16 vec4 u_copyRect      (copy program)
+// Varyings carry explicit locations (see the kLoc* values in the .cpp), the
+// fragment output is location 0.  Vertex attribute locations are as in GLES.
+//
+// Vertex index contract: the shaders read vtxRec[u_firstOrdinal + gl_VertexIndex].
+// Draw with vkCmdDrawIndexed(vertexOffset = 0, firstInstance = 0), the vertex
+// buffer bound at the batch's first word (offset firstWord * 4) and the index
+// buffer offset to the batch's first index; the 32-bit indices of a batch start
+// at 0, so gl_VertexIndex is the index read from the index buffer, exactly
+// what gl_VertexID is for glDrawElements, and u_firstOrdinal is the batch's
+// firstOrdinal.  A nonzero vertexOffset would be added to gl_VertexIndex and
+// break the lookup: do not use one.  The copy program is vkCmdDraw(3, 1, 0, 0).
+enum : uint32_t {
+    kVkSetBuffers = 0,
+    kVkSetTextures = 1,
+    kVkBindRows = 0,
+    kVkBindRecs = 1,
+    kVkBindState = 2,
+    kVkBindVtxRec = 3,
+    kVkBindEye = 4,
+    kVkNumSamplers = 8,
+    kVkPushSize = 32,
+    kVkPushFirstOrdinal = 0,
+    kVkPushCopyMode = 4,
+    kVkPushCopyRect = 16,
+};
 
 // Per-frame shader data (see gl_renderer.cpp).  Draws are batched, so
 // everything that varies per draw lives in storage buffers:
