@@ -102,6 +102,11 @@ float sResolution = 1.6f;     // largest eye size, relative to the headset's rec
 float sResolution = 0.8f;
 #endif
 float sRefreshRate = 120.0f;  // requested display refresh rate, Hz
+// Foveation of the eye renders round the eye-tracked gaze (foveation,
+// foveation_radius, foveation_edge; see vr_renderer.h).  Never without gaze.
+float sFoveation = 0.0f;       // 0 off, 1 low, 2 medium, 3 high, 4 custom (off: see vr_renderer.h)
+float sFoveaRadiusPct = 30.0f;  // custom: full-resolution radius, % of the half field of view
+float sFoveaEdgePct = 50.0f;    // custom: resolution at the fringes, % of full
 bool sHighClocks = true;      // ask for Meta's SustainedHigh CPU/GPU levels
 bool sHaptics = true;         // controller haptics: rumble and pointer ticks (haptics)
 bool sSpaceWarp = true;       // Application SpaceWarp at 120 Hz
@@ -301,6 +306,28 @@ float panelDistance(xm::Vec3 o, xm::Vec3 d, xm::Vec3 center) {
     if (fabsf(d.z) < 1e-4f) return 1.0f;
     float t = (center.z - o.z) / d.z;
     return t > 0.0f ? t : 1.0f;
+}
+
+// The frame the eyes were last rendered for (the overlay layers face its head).
+vr::FrameInfo sOverlayFrame{};
+
+bool laserShown() {
+    if (!sAimValid || overlayBrightness() <= 0.0f) return false;
+    // On the giant screen the game's own cursor shows where the controller
+    // points (see drawLaser).
+    return !(sGiantScreen && !sVrMode && !sAimOnPanel && !vr::setupActive());
+}
+
+// A layer's orientation from its axes (the image faces +Z).
+xm::Quat basisQuat(xm::Vec3 x, xm::Vec3 y, xm::Vec3 z) {
+    xm::Mat4 b = xm::Mat4::identity();
+    xm::Vec3 axes[3] = {x, y, z};
+    for (int c = 0; c < 3; c++) {
+        b.at(0, c) = axes[c].x;
+        b.at(1, c) = axes[c].y;
+        b.at(2, c) = axes[c].z;
+    }
+    return xm::quatFromMatrix(b);
 }
 
 // Beam from the right controller to where it points, plus a reticle there.
@@ -561,6 +588,9 @@ vr::Setting sSettings[] = {
     {"resolution", 0.5f, 2.0f, 0.0f, NUMBER(sResolution)},
     {"min_resolution", 0.5f, 1.25f, 0.0f, NUMBER(sMinScale)},
     {"refresh_rate", 60.0f, 144.0f, 0.0f, NUMBER(sRefreshRate)},
+    {"foveation", 0.0f, 4.0f, 0.0f, NUMBER(sFoveation)},
+    {"foveation_radius", 10.0f, 60.0f, 0.0f, NUMBER(sFoveaRadiusPct)},
+    {"foveation_edge", 25.0f, 100.0f, 0.0f, NUMBER(sFoveaEdgePct)},
     {"high_clocks", 0.0f, 1.0f, 0.0f, FLAG(sHighClocks)},
     {"haptics", 0.0f, 1.0f, 0.0f, FLAG(sHaptics)},
     {"space_warp", 0.0f, 1.0f, 0.0f, FLAG(sSpaceWarp)},
@@ -619,6 +649,15 @@ void loadSettings(const char* path) {
         }
         if (sscanf(line, " renderer = %31[A-Za-z0-9_]", text) == 1) {
             continue;  // the graphics API, read by gpu::selectRenderer
+        }
+        // foveation = off | low | medium | high | custom (or 0 to 4).
+        if (sscanf(line, " foveation = %31[a-z]", text) == 1) {
+            static const char* const kNames[] = {"off", "low", "medium", "high", "custom"};
+            for (int i = 0; i < 5; i++) {
+                if (!strcmp(text, kNames[i])) sFoveation = (float)i;
+            }
+            port_log("%s: foveation = %s", path, text);
+            continue;
         }
         if (sscanf(line, " language = %31[A-Za-z]", text) == 1) {
             port_language_set(text);
@@ -1138,6 +1177,7 @@ static int64_t sRenderNs = 0, sUploadNs = 0;
 
 void beginFrame(const FrameInfo& frame) {
     int64_t frameStartNs = port_host_time_ns();
+    sOverlayFrame = frame;
     static double lastTime = 0;
     double now = frame.time;
     float dt = lastTime > 0 ? (float)(now - lastTime) : 0.0f;
@@ -1281,6 +1321,27 @@ void beginFrame(const FrameInfo& frame) {
     sRenderNs = port_host_time_ns() - frameStartNs;
 }
 
+bool foveationWanted() { return lroundf(sFoveation) > 0; }
+
+// The foveation setting as the full-resolution radius (normalized device
+// coordinates: a fraction of the half field of view; 0 = off) and the
+// density at the fringes (fraction of full per axis).
+void foveationLevel(float* radius, float* edge) {
+    // Presets: low, medium, high.
+    static const float kRadius[3] = {0.45f, 0.30f, 0.20f}, kEdge[3] = {0.5f, 0.5f, 0.25f};
+    int level = (int)lroundf(sFoveation);
+    if (level <= 0) {
+        *radius = 0.0f;
+        *edge = 1.0f;
+    } else if (level <= 3) {
+        *radius = kRadius[level - 1];
+        *edge = kEdge[level - 1];
+    } else {
+        *radius = fminf(0.6f, fmaxf(0.1f, sFoveaRadiusPct / 100.0f));
+        *edge = fminf(1.0f, fmaxf(0.25f, sFoveaEdgePct / 100.0f));
+    }
+}
+
 Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int width, int height) {
     int64_t eyeStartNs = port_host_time_ns();
     sWipeDim = 0.0f;
@@ -1313,6 +1374,24 @@ Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int
         ev.eyePos[1] = viewFromEye.at(1, 3);
         ev.eyePos[2] = viewFromEye.at(2, 3);
         ev.depthSnapshot = sMotionOn ? &sSnap[eye] : nullptr;
+        // Foveation follows the eye's gaze, and only the gaze: without eye
+        // tracking the eyes render at full density.
+        float radius, edge;
+        foveationLevel(&radius, &edge);
+        static bool sFoveated[2] = {false, false};
+        static int sFoveaLogged = -1;
+        bool foveate = frame.gazeValid && radius > 0.0f;
+        if (radius > 0.0f && !frame.gazeValid && sFoveaLogged != 0) {
+            port_log("vr: foveation %.0f wanted, but no eye-tracked gaze: the eyes render at full resolution", sFoveation);
+            sFoveaLogged = 0;
+        } else if (foveate && sFoveaLogged != 1) {
+            port_log("vr: foveation round the gaze: full resolution within %.0f%% of the half field of view, %.0f%% at the fringes", radius * 100.0f,
+                     edge * 100.0f);
+            sFoveaLogged = 1;
+        }
+        if (foveate || sFoveated[eye]) {
+            sFoveated[eye] = r.setFoveation(sEye[eye], frame.gaze[eye][0], frame.gaze[eye][1], foveate ? edge : 0.0f, radius) && foveate;
+        }
         r.render(sEye[eye], &ev, &sHud, eye == 0 ? gpu::HudMode::Target : gpu::HudMode::Skip);
         if (eye == 0) {
             sHudFresh = true;
@@ -1420,8 +1499,11 @@ Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int
         settingsDraw(viewProj);
         setupDraw(viewProj);
     }
-    drawLaser(ei, viewProj);
-    drawSkipIndicator(frame, viewProj);
+    if (!sUiLayers) {
+        // Else layers of their own (kBeamLayer, kReticleLayer, kSkipLayer).
+        drawLaser(ei, viewProj);
+        drawSkipIndicator(frame, viewProj);
+    }
     draw.endTarget();
     endEyeTimer();
     sRenderNs += port_host_time_ns() - eyeStartNs;
@@ -1619,7 +1701,14 @@ void setUiLayers(bool on) {
 bool uiLayers() { return sUiLayers; }
 
 void uiLayerSize(int which, int* width, int* height) {
-    if (which == kHudLayer) {
+    if (which == kBeamLayer) {
+        *width = 32;
+        *height = 512;
+    } else if (which == kReticleLayer) {
+        *width = *height = 64;
+    } else if (which == kSkipLayer) {
+        *width = *height = 128;
+    } else if (which == kHudLayer) {
         *width = sHud.width;
         *height = sHud.height;
     } else if (which == kScreenLayer || which == kScreenRightLayer) {
@@ -1632,8 +1721,85 @@ void uiLayerSize(int which, int* width, int* height) {
     }
 }
 
+// The laser beam, its reticle or the skip ring filling a layer's image, as
+// drawLaser and drawSkipIndicator draw them into the eyes.
+void drawOverlayLayer(int which) {
+    xm::Mat4 id = xm::Mat4::identity();
+    vrdraw::Draw& draw = vrdraw::draw();
+    draw.overlayBegin(id.m);
+    if (which == kBeamLayer) {
+        // Narrower at the controller: the layer is as wide as the far end.
+        float near = 0.0012f / (0.0012f + 0.0008f * sAimLength);
+        float beam[12] = {-near, -1.0f, 0.0f, near, -1.0f, 0.0f, -1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f};
+        const float beamColor[4] = {0.75f, 0.9f, 1.0f, 0.8f * overlayBrightness()};
+        draw.overlayQuad(beam, beamColor, vrdraw::kShapeBeam, nullptr);
+    } else {
+        const float full[12] = {-1.0f, -1.0f, 0.0f, 1.0f, -1.0f, 0.0f, -1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f};
+        if (which == kReticleLayer) {
+            float pulse = 1.0f - (float)(port_host_time_ns() - sTouchPulseAt.load()) / 250000000.0f;
+            pulse = pulse > 0.0f ? pulse : 0.0f;
+            const float retColor[4] = {1.0f, 0.95f + 0.05f * pulse, 0.55f + 0.45f * pulse, 0.95f * overlayBrightness()};
+            draw.overlayQuad(full, retColor, vrdraw::kShapeReticle, nullptr);
+        } else {
+            bool popping = sSkipPop >= 0.0f;
+            const float color[4] = {1.0f, 1.0f, 1.0f, popping ? 1.0f - sSkipPop : sSkipAlpha};
+            const float ring[3] = {popping ? 1.0f : sSkipFill, sSkipForwarding ? sSkipSpin : -1.0f, popping ? 1.0f - sSkipPop : 0.0f};
+            draw.overlayQuad(full, color, vrdraw::kShapeSkipRing, ring);
+        }
+    }
+    draw.overlayEnd();
+}
+
+void updateAimPose(xm::Vec3 origin, xm::Vec3 dir) {
+    if (!sAimValid) return;
+    sAimOrigin = origin;
+    sAimDir = xm::normalize(dir);
+    // On the virtual screen the beam ends on it; elsewhere it keeps its length.
+    if (!sVrMode && !sAimOnPanel) sAimLength = panelDistance(origin, sAimDir, screenCenter());
+}
+
 UiLayer uiLayer(int which) {
     UiLayer l;
+    if (which == kBeamLayer || which == kReticleLayer) {
+        // Drawn as in drawLaser, facing the middle of the head.
+        l.visible = sUiLayers && laserShown();
+        if (!l.visible) return l;
+        l.changed = true;
+        xm::Vec3 head = (sOverlayFrame.eyes[0].position + sOverlayFrame.eyes[1].position) * 0.5f;
+        xm::Vec3 p0 = sAimOrigin, p1 = sAimOrigin + sAimDir * sAimLength;
+        if (which == kBeamLayer) {
+            xm::Vec3 y = sAimDir;
+            xm::Vec3 x = xm::normalize(xm::cross(y, xm::normalize(head - (p0 + p1) * 0.5f)));
+            l.orientation = basisQuat(x, y, xm::cross(x, y));
+            l.position = (p0 + p1) * 0.5f;
+            l.width = 2.0f * (0.0012f + 0.0008f * sAimLength);
+            l.height = sAimLength;
+        } else {
+            float pulse = 1.0f - (float)(port_host_time_ns() - sTouchPulseAt.load()) / 250000000.0f;
+            pulse = pulse > 0.0f ? pulse : 0.0f;
+            float r = (0.008f + 0.01f * sAimLength) * (1.0f + 0.6f * pulse);
+            xm::Vec3 n = xm::normalize(head - p1);
+            xm::Vec3 u = xm::normalize(xm::cross(fabsf(n.y) < 0.9f ? xm::Vec3{0, 1, 0} : xm::Vec3{1, 0, 0}, n));
+            l.orientation = basisQuat(u, xm::cross(n, u), n);
+            l.position = p1;
+            l.width = l.height = 2.0f * r;
+        }
+        return l;
+    }
+    if (which == kSkipLayer) {
+        bool popping = sSkipPop >= 0.0f;
+        float alpha = popping ? 1.0f - sSkipPop : sSkipAlpha;
+        l.visible = sUiLayers && alpha > 0.0f;
+        if (!l.visible) return l;
+        l.changed = true;
+        const FrameInfo& f = sOverlayFrame;
+        xm::Quat q = f.eyes[0].orientation;
+        xm::Vec3 head = (f.eyes[0].position + f.eyes[1].position) * 0.5f;
+        l.position = head + xm::rotate(q, xm::Vec3{0.22f, -0.18f, -0.9f});
+        l.orientation = q;
+        l.width = l.height = 0.085f * (popping ? 1.0f + 0.4f * sSkipPop : 0.8f + 0.2f * sSkipAlpha);
+        return l;
+    }
     if (which == kHudLayer) {
         // Only while it holds something: a layer costs the compositor its
         // area on every refresh, drawn or not.
@@ -1685,6 +1851,8 @@ void drawUiLayer(int which, const gpu::EfbTarget& dst) {
         sFlatRightFresh = false;
     } else if (which == kSetupLayer) {
         setupDrawLayer();
+    } else if (which == kBeamLayer || which == kReticleLayer || which == kSkipLayer) {
+        drawOverlayLayer(which);
     } else {
         settingsDrawLayer();
     }
