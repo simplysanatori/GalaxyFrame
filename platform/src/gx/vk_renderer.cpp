@@ -398,7 +398,31 @@ struct CopyTex {
     u32 handle = 0;
     int w = 0, h = 0;
     u64 frame = 0;  // frame whose replay last wrote it
+    // A blitted copy (VkImpl::doCopy) holds the EFB's own channels; this
+    // view arranges them as its copy mode does (null: the image's own view).
+    VkImageView swizzled = VK_NULL_HANDLE;
+    int swizzledMode = -1;
 };
+
+// Copy modes (kCopyFsBody) that only rearrange the EFB's channels: as an
+// image view's swizzle of a plain copy.  The others (intensity, Z) need the
+// copy program.
+bool copyModeSwizzle(int mode, VkComponentMapping* out) {
+    const VkComponentSwizzle R = VK_COMPONENT_SWIZZLE_R, G = VK_COMPONENT_SWIZZLE_G, B = VK_COMPONENT_SWIZZLE_B, A = VK_COMPONENT_SWIZZLE_A,
+                             ONE = VK_COMPONENT_SWIZZLE_ONE;
+    switch (mode) {
+    case 0: *out = {R, G, B, A}; return true;    // RGBA8 / RGB5A3
+    case 1: *out = {R, G, B, ONE}; return true;  // RGB565
+    case 4: *out = {R, R, R, R}; return true;    // R4 / R8
+    case 5: *out = {R, R, R, A}; return true;    // RA4 / RA8
+    case 6: *out = {A, A, A, A}; return true;    // A8
+    case 7: *out = {G, G, G, G}; return true;    // G8
+    case 8: *out = {B, B, B, B}; return true;    // B8
+    case 9: *out = {G, G, G, R}; return true;    // RG8
+    case 10: *out = {B, B, B, G}; return true;   // GB8
+    default: return false;
+    }
+}
 
 class VulkanRenderer;
 
@@ -544,7 +568,7 @@ struct VkImpl {
     std::string segLog;
     // Which paths the renders took, since start (PETARI_VKSTATS, at finish).
     struct Coverage {
-        long zCopies = 0, deadDraws = 0, maskedClears = 0, attachmentClears = 0, xfbBlits = 0, snapshots = 0, lineBatches = 0, pointBatches = 0, emptyViewports = 0,
+        long zCopies = 0, blitCopies = 0, deadDraws = 0, maskedClears = 0, attachmentClears = 0, xfbBlits = 0, snapshots = 0, lineBatches = 0, pointBatches = 0, emptyViewports = 0,
              hudSwitches = 0;
     } cov;
     double finishGpuMs = 0.0;  // renders timed since the last finish() (PETARI_GPUTIME)
@@ -563,6 +587,7 @@ struct VkImpl {
     void flushDeletes();
     VkSampler sampler(u32 mode0, u32 mode1, u32 levels);
     CopyTex& copyTex(u64 key, int w, int h);
+    void setSwizzle(CopyTex& c, int mode);
     void evictCopies();
     u32 allocEye(const EyeBlock& eb);
     void execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMode, VulkanRenderer& r);
@@ -766,6 +791,7 @@ CopyTex& VkImpl::copyTex(u64 key, int w, int h) {
     CopyTex& c = copies[key];
     if (c.handle && (c.w != w || c.h != h)) {
         destroyImageLater(c.handle);
+        setSwizzle(c, -1);
         c.handle = 0;
     }
     if (!c.handle) {
@@ -780,11 +806,39 @@ CopyTex& VkImpl::copyTex(u64 key, int w, int h) {
     return c;
 }
 
+// The view a copy texture is sampled through: the swizzle of `mode` (a
+// blitted copy), or the image's own view (-1: made by the copy program).
+// An old view goes once the GPU is done with it.
+void VkImpl::setSwizzle(CopyTex& c, int mode) {
+    if (c.swizzledMode == mode && (mode < 0 || c.swizzled)) return;
+    if (c.swizzled) {
+        VkImageView old = c.swizzled;
+        deferUntilDone([old] { vkDestroyImageView(device().device, old, nullptr); });
+        c.swizzled = VK_NULL_HANDLE;
+    }
+    c.swizzledMode = -1;
+    VkComponentMapping map;
+    if (mode < 0 || !c.handle || !copyModeSwizzle(mode, &map)) return;
+    Img& im = sImages[c.handle];
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vci.image = im.image;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = im.format;
+    vci.components = map;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(device().device, &vci, nullptr, &c.swizzled) != VK_SUCCESS) {
+        c.swizzled = VK_NULL_HANDLE;
+        return;
+    }
+    c.swizzledMode = mode;
+}
+
 // Copy targets of addresses (or views) no longer copied to (kCopyKeepFrames).
 void VkImpl::evictCopies() {
     for (auto it = copies.begin(); it != copies.end();) {
         if (it->first != kXfbCopyKey && it->second.frame + kCopyKeepFrames < cur->number) {
             destroyImageLater(it->second.handle);
+            setSwizzle(it->second, -1);
             it = copies.erase(it);
         } else {
             ++it;
@@ -1389,7 +1443,38 @@ void VkImpl::doCopy(const Item& it, Target& src, VulkanRenderer& r, bool vr, siz
         } else {
             int dw = op.dw, dh = op.dh;
             CopyTex& dstTex = copyTex(op.key, dw, dh);
-            if (dstTex.handle) {
+            // A copy of the EFB's pixels as they are (same size, inside the
+            // EFB) whose mode only rearranges channels: a blit, rows flipped
+            // as the copy program writes them (texture rows run top-down),
+            // sampled through a swizzled view.  It takes each pixel exactly,
+            // as the console's copy does; the copy program's bilinear sample
+            // lands a hair off the texel centre and is off by one step now
+            // and then.  Faster than the copy pass.
+            VkComponentMapping map;
+            static const bool sBlitCopies = !vkLegacy() && !(debugEnv("PETARI_VKBLITCOPY") && !strcmp(debugEnv("PETARI_VKBLITCOPY"), "0"));
+            bool blit = sBlitCopies && dstTex.handle && !dumpingCopies && copyModeSwizzle(op.mode, &map) && dw == sx1 - sx0 && dh == sy1 - sy0 &&
+                        sx0 >= 0 && sy0 >= 0 && sx1 <= src.width && sy1 <= src.height;
+            if (blit) {
+                Img& dst = sImages[dstTex.handle];
+                bar.use(color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, kStageTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+                bar.use(dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, kStageTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT, true);
+                bar.flush();
+                VkImageBlit b{};
+                b.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                b.srcOffsets[0] = {sx0, sy0, 0};
+                b.srcOffsets[1] = {sx1, sy1, 1};
+                b.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                b.dstOffsets[0] = {0, dh, 0};
+                b.dstOffsets[1] = {dw, 0, 1};
+                vkCmdBlitImage(cmd, color.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b, VK_FILTER_NEAREST);
+                bar.use(dst, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, kStageSample, kAccessSample);
+                bar.flush();
+                setSwizzle(dstTex, op.mode);
+                ds.forget();
+                curCopies++;
+                cov.blitCopies++;
+            } else if (dstTex.handle) {
+                setSwizzle(dstTex, -1);
                 Img& dst = sImages[dstTex.handle];
                 bool z = op.mode == 11;
                 cov.zCopies += z;
@@ -1838,7 +1923,7 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
                 } else {
                     if (tr & 0x80000000u) {
                         auto cit = copies.find(copyKey(copySlot, (tr & 0x7FFFFFFF) << 5));
-                        if (cit != copies.end() && cit->second.handle) v = sImages[cit->second.handle].view;
+                        if (cit != copies.end() && cit->second.handle) v = cit->second.swizzled ? cit->second.swizzled : sImages[cit->second.handle].view;
                         s = sampler(it.texMode0[u], it.texMode1[u], 1);
                     } else if (tr < textures.size()) {
                         TexHandle th = textures[tr]->gpuTex;
@@ -1888,11 +1973,12 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         if (sExp == 3 && !eyeDraw && rect.vp[0] <= 0 && rect.vp[1] <= 0 && rect.vp[2] >= t.width && rect.vp[3] >= t.height) continue;
         bool fsMark = false;
         if (profEnabled() && !eyeDraw && rect.vp[0] <= 0 && rect.vp[1] <= 0 && rect.vp[2] >= t.width && rect.vp[3] >= t.height) {
-            static const char* kFs[8] = {"fs2d.0", "fs2d.1", "fs2d.2", "fs2d.3", "fs2d.4", "fs2d.5", "fs2d.6", "fs2d.7+"};
-            static int sFsN = 0;
-            if (pc.draws == 1) sFsN = 0;
-            profMark(kFs[sFsN < 7 ? sFsN : 7]);
-            sFsN++;
+            // By what it writes: color (blended or not), alpha only, depth only.
+            BlendState fb;
+            blendState(it, toHudTarget, fb);
+            const char* l = (fb.colorMask & 7) ? (fb.on ? "fs2d.blend" : "fs2d.color") : (fb.colorMask & 8) ? "fs2d.alpha" : "fs2d.depth";
+            if (toHudTarget) l = "fs2d.hud";
+            profMark(l);
             fsMark = true;
         }
         // One draw per run of the batch's draws with one pixel state, its
@@ -2280,9 +2366,9 @@ void VulkanRenderer::finish() {
     if (stats) {
         sImpl->pipes.logStats("so far");
         const VkImpl::Coverage& c = sImpl->cov;
-        port_log("vk: paths so far: %ld Z copies, %ld dead draws left out, %ld masked clears, %ld attachment clears, %ld XFB blits, %ld depth snapshots, %ld HUD target switches, "
+        port_log("vk: paths so far: %ld Z copies, %ld blitted copies, %ld dead draws left out, %ld masked clears, %ld attachment clears, %ld XFB blits, %ld depth snapshots, %ld HUD target switches, "
                  "%ld line batches, %ld point batches, %ld empty viewports",
-                 c.zCopies, c.deadDraws, c.maskedClears, c.attachmentClears, c.xfbBlits, c.snapshots, c.hudSwitches, c.lineBatches, c.pointBatches, c.emptyViewports);
+                 c.zCopies, c.blitCopies, c.deadDraws, c.maskedClears, c.attachmentClears, c.xfbBlits, c.snapshots, c.hudSwitches, c.lineBatches, c.pointBatches, c.emptyViewports);
     }
     profReport("finish", sImpl->finishGpuCount);
     perfReport("finish");
