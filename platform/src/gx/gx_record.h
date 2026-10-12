@@ -5,6 +5,7 @@
 // display refresh), without touching emulated memory.
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <atomic>
@@ -64,20 +65,28 @@ inline uint32_t vtxWords(uint32_t flags) {
     return w;
 }
 
+// A texture of the active renderer backend (gpu_renderer.h): a GL texture
+// name under GLES, an image slot index under Vulkan.  0 = none.
+using TexHandle = uint32_t;
+
 // A decoded texture shared between the recorder and the renderer.
 struct TexImage {
     uint32_t width = 0, height = 0, levels = 1;
     std::vector<uint32_t> rgba;  // all levels, level 0 first
     uint64_t version = 0;        // bumped when the pixels change
     // Renderer-side upload state (render thread only).
-    uint32_t glTex = 0;
-    uint64_t glVersion = 0;
+    TexHandle gpuTex = 0;
+    uint64_t gpuVersion = 0;     // `version` of the pixels in gpuTex
 
-    ~TexImage();  // queues glTex for deletion on the render thread
+    ~TexImage();  // queues gpuTex for deletion on the render thread
 };
 
-// GL objects released by other threads, deleted by the render thread.
-void queueGlTextureDelete(uint32_t tex);
+// Textures released by other threads, deleted by the render thread
+// (gpu_textures.cpp).  The render thread takes the queued handles with
+// drainTextureDeletes, which calls `fn` once with all of them (if any).
+void queueTextureDelete(TexHandle tex);
+void drainTextureDeletes(void (*fn)(const TexHandle* list, size_t count, void* ctx), void* ctx);
+inline void queueGlTextureDelete(uint32_t tex) { queueTextureDelete(tex); }  // the name before the backend split
 
 enum Cmd : uint32_t {
     CMD_XF = 1,        // addr, count, values[count]
@@ -151,6 +160,12 @@ private:
 };
 
 FrameQueue& frameQueue();
+
+// Headless frame replay (PETARI_FRAMELOAD, headless_render.cpp): while held,
+// the game thread waits in its next publish (so nothing it reports to the VR
+// presentation changes), and injectFrame publishes a loaded frame instead.
+void holdGameFrames(bool hold);
+void injectFrame(std::unique_ptr<Frame> f);
 
 // Installs the recording backend (game thread side of the renderer).
 void useRecorderBackend();
