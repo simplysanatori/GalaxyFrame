@@ -136,6 +136,8 @@ namespace vk {
     X(vkDestroyQueryPool)                  \
     X(vkGetQueryPoolResults)               \
     X(vkResetQueryPool)                    \
+    X(vkCmdBeginQuery)                     \
+    X(vkCmdEndQuery)                       \
     X(vkCmdBindPipeline)                   \
     X(vkCmdSetViewport)                    \
     X(vkCmdSetScissor)                     \
@@ -359,6 +361,13 @@ bool profEnabled();
 int profMark(const char* label);  // the mark's index in the open command buffer, -1 if none
 void profRelabel(int mark, const char* label);
 void profReport(const char* why, int per);
+// GPU counters (headless, PETARI_VKPERFC=1 with TU_DEBUG=perfc: Turnip's
+// VK_KHR_performance_query): perfBegin / perfEnd around commands in one
+// command buffer, perfReport (after the GPU finished them) logs every
+// counter.  No-ops without them.
+void perfBegin();
+void perfEnd();
+void perfReport(const char* why);
 
 // Names a Vulkan object for the validation layer's messages (no-op without
 // debug utils).
