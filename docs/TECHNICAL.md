@@ -468,7 +468,12 @@ In the diorama:
   out `CENTRE_PLAYER`. `updateRig` then takes the game camera's up, watch
   point, yaw and elevation, with no blink, and hands back to Mario's up
   afterwards; `gravity_turns` (smooth, steps, off) decides how that hand-back
-  and every later change of his up is made (`vr_rig.cpp`).
+  and every later change of his up is made (`vr_rig.cpp`). The same flag
+  carries the demo system's cutscenes (`MR::isDemoActive`, by kind from the
+  demo's name: `classifyDemo` in `GameScene.cpp`, `cutscene_*` settings) and
+  an event camera far from Mario; the THP movies never reach `draw3D`. After
+  a scene the rig keeps its yaw and folds the scene's tilt into the player's
+  own (`transitPitch` into `pitch`) instead of easing back.
 
 ## Development tools
 
