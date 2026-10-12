@@ -19,6 +19,14 @@
 //   --sequence      the five cases above, in that order, in ONE session; the
 //                   case number and a short label are drawn in each eye and
 //                   stdout gets a "CASE n start" line per case
+//   --spacewarp     XR_FB_space_warp: motion vectors (R16G16B16A16_SFLOAT,
+//                   (current - previous) NDC of the object's motion, head
+//                   motion left to the runtime) and depth chained on each
+//                   projection view as XrCompositionLayerSpaceWarpInfoFB; the
+//                   checkerboard drawn at --fps (default 60: half of 120 Hz)
+//   --spacewarp --no-mv  the same frame rate and content, nothing chained
+//   --sequence-sw   cases 6 and 7: --spacewarp, then --spacewarp --no-mv, in
+//                   one session ("6 SPACE", "7 no-SPC" in each eye)
 // Options: --hz N (XR_FB_display_refresh_rate), --seconds N (per case, default
 //   30, counted only while the session is VISIBLE or FOCUSED and rendering),
 //   --log FILE (default ./xrprobe.log), --fps N, --gpu-ms N (pace load target,
@@ -72,7 +80,7 @@ static const uint32_t kHeavyFrag[] =
 
 // ---------------------------------------------------------------- options
 
-enum Mode { MODE_NONE, MODE_PACE, MODE_PACE_FENCE, MODE_SYNTH, MODE_DEPTH, MODE_SEQUENCE };
+enum Mode { MODE_NONE, MODE_PACE, MODE_PACE_FENCE, MODE_SYNTH, MODE_DEPTH, MODE_SEQUENCE, MODE_SW, MODE_SEQUENCE_SW };
 
 static struct {
     enum Mode mode;
@@ -93,6 +101,8 @@ static const char* modeName(void) {
     case MODE_SYNTH: return g_opt.noMv ? "synth-no-mv" : "synth";
     case MODE_DEPTH: return "depth-only";
     case MODE_SEQUENCE: return "sequence";
+    case MODE_SW: return g_opt.noMv ? "spacewarp-no-mv" : "spacewarp";
+    case MODE_SEQUENCE_SW: return "sequence-sw";
     default: return "none";
     }
 }
@@ -113,6 +123,12 @@ static const Case kSequence[5] = {
     {MODE_DEPTH, 0, "depth-only", "5 dEPth"},
 };
 
+// --sequence-sw: XR_FB_space_warp against the same 60 fps without it.
+static const Case kSequenceSw[2] = {
+    {MODE_SW, 0, "spacewarp", "6 SPACE"},
+    {MODE_SW, 1, "spacewarp-no-mv", "7 no-SPC"},
+};
+
 // Seven-segment mask (bits a..g) for the characters the labels use.
 static uint32_t segChar(char c) {
     switch (c) {
@@ -122,6 +138,8 @@ static uint32_t segChar(char c) {
     case '3': return 0x4F;
     case '4': return 0x66;
     case '5': case 'S': return 0x6D;
+    case '6': return 0x7D;
+    case '7': return 0x07;
     case 'A': return 0x77;
     case 'C': return 0x39;
     case 'd': return 0x5E;
@@ -303,7 +321,7 @@ static ExtWant g_exts[] = {
     {"XR_FB_display_refresh_rate", 0, 1},
     {"XR_EXT_frame_synthesis", 0, 0},          // enabled for --synth only
     {"XR_KHR_composition_layer_depth", 0, 0},  // enabled for --depth-only only
-    {"XR_FB_space_warp", 0, 0},                // reported, never enabled
+    {"XR_FB_space_warp", 0, 0},                // enabled for --spacewarp / --sequence-sw only
 };
 #define N_EXTS (sizeof(g_exts) / sizeof(g_exts[0]))
 
@@ -698,12 +716,16 @@ static void usage(FILE* f, const char* argv0) {
             "  --depth-only      XR_KHR_composition_layer_depth, checkerboard at display rate\n"
             "  --sequence        all five cases above in one session, --seconds each, case number\n"
             "                    and label drawn in each eye\n"
+            "  --spacewarp       XR_FB_space_warp (MV + depth), checkerboard at --fps (60)\n"
+            "  --spacewarp --no-mv  the same frame rate, nothing chained\n"
+            "  --sequence-sw     the two SpaceWarp cases (6, 7) in one session\n"
             "options:\n"
             "  --hz N            request display refresh rate N (XR_FB_display_refresh_rate)\n"
             "  --seconds N       seconds per case, counted only while the session is VISIBLE or\n"
             "                    FOCUSED and shouldRender is set; default 30\n"
             "  --log FILE        per-frame log, default ./xrprobe.log\n"
-            "  --fps N           cap the app frame rate (default 30 for the synth cases, display rate otherwise)\n"
+            "  --fps N           cap the app frame rate (default 30 for the synth cases, 60 for the\n"
+            "                    SpaceWarp cases, display rate otherwise)\n"
             "  --gpu-ms N        GPU load target of the pace modes, default 14\n"
             "  --mv-head         motion vectors include head motion (default: object motion only)\n"
             "  --dry-run         parse, print the configuration, exit\n",
@@ -752,6 +774,10 @@ static int parseArgs(int argc, char** argv) {
             if (setMode(MODE_DEPTH)) goto twoModes;
         } else if (!strcmp(a, "--sequence")) {
             if (setMode(MODE_SEQUENCE)) goto twoModes;
+        } else if (!strcmp(a, "--spacewarp")) {
+            if (setMode(MODE_SW)) goto twoModes;
+        } else if (!strcmp(a, "--sequence-sw")) {
+            if (setMode(MODE_SEQUENCE_SW)) goto twoModes;
         } else if (!strcmp(a, "--no-mv")) {
             g_opt.noMv = 1;
         } else if (!strcmp(a, "--mv-head")) {
@@ -790,11 +816,11 @@ static int parseArgs(int argc, char** argv) {
         usage(stderr, argv[0]);
         return -1;
     }
-    if (g_opt.noMv && g_opt.mode != MODE_SYNTH) {
-        fprintf(stderr, "xrprobe: --no-mv goes with --synth\n");
+    if (g_opt.noMv && g_opt.mode != MODE_SYNTH && g_opt.mode != MODE_SW) {
+        fprintf(stderr, "xrprobe: --no-mv goes with --synth or --spacewarp\n");
         return -1;
     }
-    if (g_opt.mvHead && !(g_opt.mode == MODE_SEQUENCE || (g_opt.mode == MODE_SYNTH && !g_opt.noMv))) {
+    if (g_opt.mvHead && !(g_opt.mode == MODE_SEQUENCE || g_opt.mode == MODE_SEQUENCE_SW || ((g_opt.mode == MODE_SYNTH || g_opt.mode == MODE_SW) && !g_opt.noMv))) {
         fprintf(stderr, "xrprobe: --mv-head goes with --synth (with motion vectors) or --sequence\n");
         return -1;
     }
@@ -1017,6 +1043,26 @@ static void summarize(const char* name, RecList* recs, uint64_t endFailures) {
     LOG("SUMMARY %s xrWaitFrame gap ms p50 %.3f p95 %.3f max %.3f; %zu gaps > 1.5 periods", name, a, b, c, longGaps);
     LOG("SUMMARY %s GPU still busy at release: %zu of %zu rendered frames; at xrEndFrame return: %zu", name, busyRel,
         nr_, busyEnd);
+    // The cadence the frames went out at: display time steps between rendered
+    // frames, in refreshes (the shortest predicted period of the case).
+    {
+        XrDuration minPeriod = 0;
+        for (size_t i = 0; i < recs->n; i++)
+            if (recs->v[i].period > 0 && (!minPeriod || recs->v[i].period < minPeriod)) minPeriod = recs->v[i].period;
+        size_t steps[5] = {0};
+        XrTime last = 0;
+        for (size_t i = 0; i < recs->n && minPeriod > 0; i++) {
+            const FrameRec* r = &recs->v[i];
+            if (!r->rendered) continue;
+            if (last) {
+                long k = lround((double)(r->pdt - last) / (double)minPeriod);
+                steps[k <= 0 ? 0 : k >= 4 ? 4 : k]++;
+            }
+            last = r->pdt;
+        }
+        LOG("SUMMARY %s display time steps between rendered frames (refresh %.3f ms): 1: %zu, 2: %zu, 3: %zu, more: %zu, "
+            "none: %zu", name, minPeriod * 1e-6, steps[1], steps[2], steps[3], steps[4], steps[0]);
+    }
     free(gpu);
     free(gap);
     free(cpu);
@@ -1030,20 +1076,21 @@ int main(int argc, char** argv) {
     g_t0 = nowSec();
     if (parseArgs(argc, argv)) return 2;
 
-    const int seq = g_opt.mode == MODE_SEQUENCE;
+    const int seq = g_opt.mode == MODE_SEQUENCE || g_opt.mode == MODE_SEQUENCE_SW;
     const Case single = {g_opt.mode, g_opt.noMv, modeName(), ""};
-    const Case* cases = seq ? kSequence : &single;
-    const int nCases = seq ? 5 : 1;
-    int wantPace = 0, wantSynth = 0, wantDepthEye = 0;
+    const Case* cases = g_opt.mode == MODE_SEQUENCE ? kSequence : g_opt.mode == MODE_SEQUENCE_SW ? kSequenceSw : &single;
+    const int nCases = g_opt.mode == MODE_SEQUENCE ? 5 : g_opt.mode == MODE_SEQUENCE_SW ? 2 : 1;
+    int wantPace = 0, wantSynth = 0, wantDepthEye = 0, wantSw = 0;
     for (int c = 0; c < nCases; c++) {
         wantPace |= cases[c].mode == MODE_PACE || cases[c].mode == MODE_PACE_FENCE;
         wantSynth |= cases[c].mode == MODE_SYNTH && !cases[c].noMv;
         wantDepthEye |= cases[c].mode == MODE_DEPTH;
+        wantSw |= cases[c].mode == MODE_SW;  // the control case too: the same session settings
     }
 
-    char fpsStr[32];
+    char fpsStr[64];
     if (g_opt.fps >= 0) snprintf(fpsStr, sizeof(fpsStr), "%.1f", g_opt.fps);
-    else snprintf(fpsStr, sizeof(fpsStr), "auto (30 synth, else display)");
+    else snprintf(fpsStr, sizeof(fpsStr), "auto (30 synth, 60 SpaceWarp, else display)");
     char cfg[512];
     snprintf(cfg, sizeof(cfg),
              "mode %s, %d case(s) of %.1f s, hz %s%.1f, fps cap %s, gpu target %.1f ms, mv %s, log %s",
@@ -1115,6 +1162,13 @@ int main(int argc, char** argv) {
         }
         ext("XR_EXT_frame_synthesis")->enable = 1;
     }
+    if (wantSw) {
+        if (!hasExt("XR_FB_space_warp")) {
+            LOG("FAIL the SpaceWarp cases need XR_FB_space_warp, which the runtime does not offer");
+            return 1;
+        }
+        ext("XR_FB_space_warp")->enable = 1;
+    }
     if (wantDepthEye) {
         if (!hasExt("XR_KHR_composition_layer_depth")) {
             LOG("FAIL the depth-only case needs XR_KHR_composition_layer_depth, which the runtime does not offer");
@@ -1161,7 +1215,12 @@ int main(int argc, char** argv) {
         return 1;
     }
     XrSystemProperties sp = {XR_TYPE_SYSTEM_PROPERTIES};
+    XrSystemSpaceWarpPropertiesFB swp = {XR_TYPE_SYSTEM_SPACE_WARP_PROPERTIES_FB};
+    if (wantSw) sp.next = &swp;
     XR_CHECK(xrGetSystemProperties(g_instance, system, &sp));
+    if (wantSw)
+        LOG("space warp: recommended motion vector / depth rect %ux%u", swp.recommendedMotionVectorImageRectWidth,
+            swp.recommendedMotionVectorImageRectHeight);
     LOG("system: %s, max swapchain %ux%u, max layers %u", sp.systemName, sp.graphicsProperties.maxSwapchainImageWidth,
         sp.graphicsProperties.maxSwapchainImageHeight, sp.graphicsProperties.maxLayerCount);
 
@@ -1269,12 +1328,14 @@ int main(int argc, char** argv) {
     // All swapchains are made up front, so a --sequence session never creates
     // one mid-run.
     int64_t depthFormat = VK_FORMAT_UNDEFINED;
-    if (wantSynth) {
+    if (wantSynth || wantSw) {
         int32_t dw[2], dh[2];
         for (int e = 0; e < 2; e++) {
-            if (fsv[e].recommendedMotionVectorImageRectWidth && fsv[e].recommendedMotionVectorImageRectHeight) {
-                dw[e] = (int32_t)fsv[e].recommendedMotionVectorImageRectWidth;
-                dh[e] = (int32_t)fsv[e].recommendedMotionVectorImageRectHeight;
+            uint32_t rw = wantSw ? swp.recommendedMotionVectorImageRectWidth : fsv[e].recommendedMotionVectorImageRectWidth;
+            uint32_t rh = wantSw ? swp.recommendedMotionVectorImageRectHeight : fsv[e].recommendedMotionVectorImageRectHeight;
+            if (rw && rh) {
+                dw[e] = (int32_t)rw;
+                dh[e] = (int32_t)rh;
             } else {
                 dw[e] = eyes[e].width / 2;
                 dh[e] = eyes[e].height / 2;
@@ -1317,7 +1378,7 @@ int main(int argc, char** argv) {
     if (wantPace)
         heavyPipe = makePipeline(vk.device, layout, kFullVert, sizeof(kFullVert), kHeavyFrag, sizeof(kHeavyFrag),
                                  (VkFormat)colorFormat, VK_FORMAT_UNDEFINED);
-    if (wantSynth)
+    if (wantSynth || wantSw)
         mvPipe = makePipeline(vk.device, layout, kQuadVert, sizeof(kQuadVert), kMvFrag, sizeof(kMvFrag),
                               VK_FORMAT_R16G16B16A16_SFLOAT, (VkFormat)depthFormat);
 
@@ -1444,9 +1505,11 @@ int main(int argc, char** argv) {
 
         const Case* cs = &cases[caseIdx < nCases ? caseIdx : nCases - 1];
         const int pace = cs->mode == MODE_PACE || cs->mode == MODE_PACE_FENCE;
-        const int synth = cs->mode == MODE_SYNTH && !cs->noMv;
+        const int sw = cs->mode == MODE_SW && !cs->noMv;
+        const int synthExt = cs->mode == MODE_SYNTH && !cs->noMv;
+        const int synth = synthExt || sw;  // a motion vector and depth pass
         const int depthOnly = cs->mode == MODE_DEPTH;
-        const double fps = g_opt.fps >= 0 ? g_opt.fps : (cs->mode == MODE_SYNTH ? 30.0 : 0.0);
+        const double fps = g_opt.fps >= 0 ? g_opt.fps : (cs->mode == MODE_SYNTH ? 30.0 : cs->mode == MODE_SW ? 60.0 : 0.0);
         if (!caseStarted && caseIdx < nCases) {
             caseStarted = 1;
             caseTime = 0;
@@ -1499,6 +1562,7 @@ int main(int argc, char** argv) {
 
         XrCompositionLayerProjectionView pv[2];
         XrFrameSynthesisInfoEXT fsi[2];
+        XrCompositionLayerSpaceWarpInfoFB swi[2];
         XrCompositionLayerDepthInfoKHR di[2];
         XrCompositionLayerProjection proj = {XR_TYPE_COMPOSITION_LAYER_PROJECTION};
         const XrCompositionLayerBaseHeader* layers[1];
@@ -1706,7 +1770,26 @@ int main(int argc, char** argv) {
                 pv[e].subImage.swapchain = eye->handle;
                 pv[e].subImage.imageRect.extent.width = eye->width;
                 pv[e].subImage.imageRect.extent.height = eye->height;
-                if (synth) {
+                if (sw) {
+                    // XR_FB_space_warp: motion vectors as (current - previous)
+                    // NDC of the content (object motion only: the runtime
+                    // takes the head's motion from the poses), depth of the
+                    // same pass; LOCAL never moves here, so no app space delta.
+                    swi[e] = (XrCompositionLayerSpaceWarpInfoFB){XR_TYPE_COMPOSITION_LAYER_SPACE_WARP_INFO_FB};
+                    swi[e].layerFlags = 0;
+                    swi[e].motionVectorSubImage.swapchain = mv[e].handle;
+                    swi[e].motionVectorSubImage.imageRect.extent.width = mv[e].width;
+                    swi[e].motionVectorSubImage.imageRect.extent.height = mv[e].height;
+                    swi[e].appSpaceDeltaPose.orientation.w = 1;
+                    swi[e].depthSubImage.swapchain = depthMv[e].handle;
+                    swi[e].depthSubImage.imageRect.extent.width = depthMv[e].width;
+                    swi[e].depthSubImage.imageRect.extent.height = depthMv[e].height;
+                    swi[e].minDepth = 0.0f;
+                    swi[e].maxDepth = 1.0f;
+                    swi[e].nearZ = NEAR_Z;
+                    swi[e].farZ = FAR_Z;
+                    pv[e].next = &swi[e];
+                } else if (synth) {
                     fsi[e] = (XrFrameSynthesisInfoEXT){XR_TYPE_FRAME_SYNTHESIS_INFO_EXT};
                     fsi[e].layerFlags = XR_FRAME_SYNTHESIS_INFO_REQUEST_RELAXED_FRAME_INTERVAL_BIT_EXT;
                     fsi[e].motionVectorSubImage.swapchain = mv[e].handle;
@@ -1744,7 +1827,9 @@ int main(int argc, char** argv) {
             VK_CHECK(vkQueueSubmit(vk.queue, 1, &si, fences[slot]));
             rec.cpuMs = (nowSec() - c0) * 1e3;
 
-            if (cs->mode == MODE_PACE_FENCE) {
+            // SteamVR shows a released image at once, finished or not (H1b):
+            // the SpaceWarp cases release only finished images.
+            if (cs->mode == MODE_PACE_FENCE || cs->mode == MODE_SW) {
                 double f0 = nowSec();
                 VK_CHECK(vkWaitForFences(vk.device, 1, &fences[slot], VK_TRUE, UINT64_MAX));
                 rec.fenceWaitMs = (nowSec() - f0) * 1e3;
