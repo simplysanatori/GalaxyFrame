@@ -26,7 +26,9 @@
 // The graphics API is chosen by the app's binding (xrmock_gfx.h).
 //
 // Checks (ERROR lines in the trace, and a summary on stderr when the session
-// ends): acquire / wait / release order per swapchain; with Vulkan, that the
+// ends): acquire / wait / release order per swapchain (one image waited for
+// at a time, a release only of a waited image, no more acquired than the
+// swapchain has); with Vulkan, that the
 // app's GPU work had finished at each release (SteamVR shows a released image
 // at once); that both eyes of a projection layer come from one xrLocateViews
 // (the views turn with time, so views located for different times differ),
@@ -271,6 +273,13 @@ static XrResult XRAPI_CALL mWaitImage(XrSwapchain sc, const XrSwapchainImageWait
         gErrors++;
         return XR_ERROR_CALL_ORDER_INVALID;
     }
+    // OpenXR: one image of a swapchain waited for at a time (SteamVR returns
+    // XR_ERROR_CALL_ORDER_INVALID, and the game aborted on it in round 3).
+    if (c->waited > 0) {
+        trace("ERROR wait sc%d with an image already waited for and not released", chainId(sc));
+        gErrors++;
+        return XR_ERROR_CALL_ORDER_INVALID;
+    }
     c->waited++;
     return XR_SUCCESS;
 }
@@ -281,6 +290,9 @@ static XrResult XRAPI_CALL mRelease(XrSwapchain sc, const XrSwapchainImageReleas
         trace("ERROR release sc%d without acquire", chainId(sc));
         return XR_ERROR_CALL_ORDER_INVALID;
     }
+    // The image released is the oldest acquired, and it must have been waited
+    // for: with one waited image at most, acquired must not exceed the
+    // waited one plus those acquired after it.
     if (c->waited <= 0) {
         trace("ERROR release sc%d of an image not waited for", chainId(sc));
         gErrors++;
