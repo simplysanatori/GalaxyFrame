@@ -98,6 +98,8 @@ struct App {
     bool dpadTurned = false;        // that flick was a snap turn of the diorama, not the D-pad
     bool aimTracked = true;         // the right controller's aim pose is known
     int lastRumble = 0;
+    int64_t nextRumblePulse = 0;    // host time (ns) the held rumble is pulsed again
+    bool hapticLogged = false;      // the runtime's answer to the first pulse is in the log
     bool hasRefreshRate = false;
     bool hasTouchPlus = false;
     bool hasPerfSettings = false;
@@ -799,6 +801,22 @@ XrVector2f getVec2(App& a, XrAction act) {
     return s.isActive ? s.currentState : XrVector2f{0, 0};
 }
 
+// One haptic pulse on a hand; the first one's result goes in the log.
+void applyHaptic(App& a, XrPath hand, float amplitude, int64_t durationNs) {
+    XrHapticActionInfo hi{XR_TYPE_HAPTIC_ACTION_INFO};
+    hi.action = a.hapticAction;
+    hi.subactionPath = hand;
+    XrHapticVibration v{XR_TYPE_HAPTIC_VIBRATION};
+    v.amplitude = amplitude;
+    v.duration = durationNs;
+    v.frequency = XR_FREQUENCY_UNSPECIFIED;
+    XrResult r = xrApplyHapticFeedback(a.session, &hi, (XrHapticBaseHeader*)&v);
+    if (!a.hapticLogged) {
+        a.hapticLogged = true;
+        port_log("haptics: first pulse result %d", (int)r);
+    }
+}
+
 void updateInput(App& a, XrTime time) {
     XrActiveActionSet active{a.actionSet, XR_NULL_PATH};
     XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
@@ -976,39 +994,34 @@ void updateInput(App& a, XrTime time) {
     }
     port_input_set(0, &pad);
 
-    // Rumble -> Touch Plus haptics.
-    int rumble = port_input_rumble(0);
-    if (rumble != a.lastRumble) {
-        for (int h = 0; h < 2; h++) {
-            XrHapticActionInfo hi{XR_TYPE_HAPTIC_ACTION_INFO};
-            hi.action = a.hapticAction;
-            hi.subactionPath = a.handPath[h];
-            if (rumble) {
-                XrHapticVibration v{XR_TYPE_HAPTIC_VIBRATION};
-                v.amplitude = 0.6f;
-                v.duration = XR_INFINITE_DURATION;
-                v.frequency = XR_FREQUENCY_UNSPECIFIED;
-                xrApplyHapticFeedback(a.session, &hi, (XrHapticBaseHeader*)&v);
-            } else {
-                xrStopHapticFeedback(a.session, &hi);
-            }
+    // Rumble -> haptics.  The game switches the Wii Remote's motor on and off
+    // (WPADControlMotor); the remote is the right controller here (it
+    // points), so that hand buzzes: short pulses renewed while the motor is
+    // on, stopped at once when it goes off, so that a runtime that ignores a
+    // pulse's duration can never leave a controller running.  haptics = 0 in
+    // petari_vr.ini turns this and the pointer ticks off.
+    int rumble = vr::haptics() ? port_input_rumble(0) : 0;
+    int64_t now = (int64_t)port_host_time_ns();
+    if (rumble) {
+        if (now >= a.nextRumblePulse) {
+            applyHaptic(a, a.handPath[1], 0.5f, 120000000);  // 120 ms
+            a.nextRumblePulse = now + 80000000;
         }
-        a.lastRumble = rumble;
+    } else if (a.lastRumble) {
+        XrHapticActionInfo hi{XR_TYPE_HAPTIC_ACTION_INFO};
+        hi.action = a.hapticAction;
+        hi.subactionPath = a.handPath[1];
+        xrStopHapticFeedback(a.session, &hi);
+        a.nextRumblePulse = 0;
     }
+    a.lastRumble = rumble;
     // A light tick when the pointer touches a new target or a control of the
     // settings panel (while no rumble).
     bool tick = vr::takePointerTouch();
     tick = vr::settingsTakeTick() || tick;
     tick = vr::setupTakeTick() || tick;
-    if (tick && rumble == 0) {
-        XrHapticActionInfo hi{XR_TYPE_HAPTIC_ACTION_INFO};
-        hi.action = a.hapticAction;
-        hi.subactionPath = a.handPath[1];
-        XrHapticVibration v{XR_TYPE_HAPTIC_VIBRATION};
-        v.amplitude = 0.25f;
-        v.duration = 15000000;  // 15 ms
-        v.frequency = XR_FREQUENCY_UNSPECIFIED;
-        xrApplyHapticFeedback(a.session, &hi, (XrHapticBaseHeader*)&v);
+    if (tick && rumble == 0 && vr::haptics()) {
+        applyHaptic(a, a.handPath[1], 0.25f, 15000000);  // 15 ms
     }
 }
 
