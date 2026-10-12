@@ -116,6 +116,11 @@ float sStereoFar = 0.95f;     // the farthest things' distance apart on the scre
 float sStereoSize = 0.8f;     // each picture's size relative to the screen's single one (stereo_resolution)
 float sSkipHold = 1.0f;       // seconds A is held to skip a cutscene (skip_hold)
 bool sInvertCamera = true;    // the right stick's turns swapped (invert_camera)
+bool sSmoothTurn = true;      // the right stick turns the diorama smoothly, not in steps (smooth_turn)
+// The stick's smooth turn (rad/s) and when it was set (host ns): input comes
+// from the frame loop's thread, the rig is updated on the game's.
+std::atomic<float> sStickTurn{0.0f};
+std::atomic<int64_t> sStickTurnAt{0};
 // The room around the giant screen instead of the dark (passthrough): the
 // eye images are see-through where nothing is drawn, over the headset's
 // passthrough layer (xr_app.cpp).
@@ -541,6 +546,7 @@ vr::Setting sSettings[] = {
          sSkipHold = x;
          port_skip_set_hold_seconds(x);
      }},
+    {"smooth_turn", 0.0f, 1.0f, 0.0f, FLAG(sSmoothTurn)},
     {"invert_camera", 0.0f, 1.0f, 0.0f, [] { return sInvertCamera ? 1.0f : 0.0f; },
      [](float x) {
          sInvertCamera = x != 0.0f;
@@ -668,6 +674,16 @@ bool snapTurn(int dir) {
     sRig.pendingTurn += (dir > 0 ? 1.0f : -1.0f) * 0.78539816f;
     port_log("vr: snap turn %s", dir > 0 ? "right" : "left");
     return true;
+}
+
+bool smoothTurning() { return sSmoothTurn && sVrMode && sRig.valid && !sRigParams.turnWithCamera; }
+void smoothTurn(float x) {
+    // Dead zone 0.15, then a gentle curve (the deflection to the power 1.5)
+    // up to 120 degrees a second.
+    float m = fminf(1.0f, fmaxf(0.0f, (fabsf(x) - 0.15f) / 0.85f));
+    float rate = (x < 0.0f ? -1.0f : 1.0f) * powf(m, 1.5f) * 2.0943951f;
+    sStickTurn.store(rate * (sInvertCamera ? -1.0f : 1.0f));
+    sStickTurnAt.store(port_host_time_ns());
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,6 +1152,8 @@ void beginFrame(const FrameInfo& frame) {
     if (sVrMode) {
         bool wasValid = sRig.valid;
         xm::Vec3 prevPivot = sRig.pivot;
+        bool stickFresh = port_host_time_ns() - sStickTurnAt.load() < 250000000;  // input stopped: no turn
+        sRig.stickTurn = stickFresh && smoothTurning() ? sStickTurn.load() : 0.0f;
         sStageFromView = updateRig(sRig, sRigParams, r.camera(), dt);
         static const bool sRigLog = getenv("PETARI_RIGLOG") != nullptr;
         if (sRigLog && wasValid && (sRig.snapped || sRig.turnRate > 1.0f)) {

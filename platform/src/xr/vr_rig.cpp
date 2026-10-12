@@ -161,6 +161,10 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
         if (xm::length(f) < 1e-3f) {
             f = flatten(fwd, rig.up);
         }
+        // The stick's smooth turn, about the same pivot as a snap turn.
+        if (rig.stickTurn != 0.0f) {
+            f = flatten(turn(xm::normalize(f), rig.up, rig.stickTurn * dt), rig.up);
+        }
         rig.forward = xm::normalize(f);
         float du = acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(prevUp, rig.up))));
         float df = acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(prevFwd, rig.forward))));

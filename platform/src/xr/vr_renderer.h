@@ -94,7 +94,10 @@ void init();
 //                     screen (empty: the app's own folder, files/game)
 //   turn_with_camera  1 to have the diorama turn with the game camera as it
 //                     swings round Mario (0: the world keeps its facing; the
-//                     right stick turns it in steps)
+//                     right stick turns it, see smooth_turn)
+//   smooth_turn       1 (default) turns the diorama smoothly round Mario
+//                     with the right stick (up to 120 deg/s, no blink); 0
+//                     turns it in 45 degree steps behind a blink
 //   sharpening        1 to sharpen (and scale) the diorama with AMD
 //                     FidelityFX CAS as it is composited; 0 (default) off
 //   sharpening_strength  CAS strength, 0 .. 1 (default 0.5)
@@ -159,6 +162,13 @@ bool superResolution();
 // press is the game's D-pad then) unless the diorama is shown with its own
 // yaw (not turn_with_camera).
 bool snapTurn(int dir);
+// Smooth turning (smooth_turn): true when the stick should turn the diorama
+// continuously, under the same conditions as snapTurn.  smoothTurn(x) is
+// called every input update with the stick's X (-1..1, right positive; 0
+// when not turning) and sets the turn rate for the rig, honouring
+// invert_camera; it lapses a quarter second after the last call.
+bool smoothTurning();
+void smoothTurn(float x);
 // The render scale now (the dynamic resolution moves it between the
 // min_resolution and resolution settings), and the scale of the screen's 3D
 // pictures (the giant screen's gameplay): 1 is the full picture, and the
