@@ -24,8 +24,8 @@ Played on a Steam Frame in the headset, October 2026. The game runs at 60 frames
 Known issues:
 
 - A hitch of about a second when a new area loads, while its textures upload and its shaders compile. `steam-frame/warm-shaders.sh` reduces it (see Install, step 5).
-- SpaceWarp and passthrough do not work on the Frame. SteamVR does not offer them to this kind of app. The *Smooth motion* and *Passthrough* switches in the VR settings have no effect.
-- Not yet checked: haptics, long sessions, every switch of the VR settings panel, discs other than the US one.
+- Several switches of the VR settings panel do nothing on the Frame (SpaceWarp, passthrough and others). See the table under Settings.
+- Not yet checked in the headset: haptics (new in frame.3), long sessions, discs other than the US one.
 
 ## Requirements
 
@@ -106,6 +106,8 @@ The game sees a Wii Remote with a Nunchuk. The Frame controllers are mapped onto
 
 The right grip and the left stick click are not used.
 
+**Haptics.** When the game rumbles the Wii Remote, the right controller (the one that points) buzzes, in short pulses for as long as the game keeps the motor on. A light tick marks the pointer reaching a new target or a control of the VR settings panel. Both are on by default. `haptics = 0` in `petari_vr.ini` turns them off. The first pulse's result from SteamVR is logged once in `petari_log.txt` as `haptics: first pulse result N`.
+
 **Pausing.** One press of Menu or View opens the pause menu. Where the game does not allow pausing for a moment, the menu opens as soon as it can, up to 1.5 seconds after the press. Opening the SteamVR dashboard pauses the game. When you return during play, the pause menu is open.
 
 **Skipping.** Hold A during a cutscene or a dialogue. A ring fills at the lower right of your view, and the cutscene is skipped when it is full. `skip_hold` in `petari_vr.ini` sets how long to hold (1 second by default).
@@ -114,7 +116,7 @@ The right grip and the left stick click are not used.
 
 **Recentring.** Use SteamVR's recentre (hold the system button, or use the dashboard). The game puts the screen or the diorama in front of you again.
 
-**The VR settings panel.** Press Menu or View. The pause menu opens, and the VR settings panel appears to the right of its buttons. Aim the right controller at it and press A or pull the right trigger. Its four tabs hold every setting of `petari_vr.ini`. [docs/CONTROLS.md](docs/CONTROLS.md) explains each setting, pointing, tilt and skipping in detail. That page was written for the Quest's Touch Plus controllers. Its button table does not apply to the Frame, and the rest does.
+**The VR settings panel.** Press Menu or View. The pause menu opens, and the VR settings panel appears to the right of its buttons. Aim the right controller at it and press A or pull the right trigger. Its four tabs hold the settings of `petari_vr.ini`, except `haptics`. [docs/CONTROLS.md](docs/CONTROLS.md) explains each setting, pointing, tilt and skipping in detail. That page was written for the Quest's Touch Plus controllers. Its button table does not apply to the Frame, and the rest does.
 
 ## Settings
 
@@ -139,6 +141,18 @@ Settings that matter on the Frame:
 - **Lower latency.** `PETARI_RETRACE_STEP=2` in `petari_debug.env` moves the game's frame timing one refresh later, for about 8 ms less latency. The game then has 8 ms per frame, and a slow frame is shown twice, which happens as areas load.
 - **Sound** goes to the default PipeWire output.
 
+**Switches that do nothing on the Frame.** The VR settings panel and `petari_vr.ini` came from the Quest build. These switches are in them but SteamVR on the Frame does not provide what they need. Each was checked against the code and the game's log (`XR runtime extensions` and the lines after it).
+
+| Setting (panel label) | Why it has no effect |
+|---|---|
+| `passthrough` (*Passthrough*) | SteamVR has no `XR_FB_passthrough`. The panel says it is not available. |
+| `space_warp` (*Smooth motion*) | SpaceWarp needs motion vector and depth swapchains, which SteamVR does not offer to OpenGL ES apps (`SpaceWarp: swapchain formats missing: off` in the log). It may come back with the Vulkan renderer. |
+| `super_resolution` (*Super resolution*) | Needs `XR_FB_composition_layer_settings`, which SteamVR lacks. |
+| `high_clocks` (*High clocks*) | Needs `XR_EXT_performance_settings`, which SteamVR lacks. |
+| `refresh_rate` (*Refresh rate*) | SteamVR lists only the current rate and refuses a request for another one. Set the rate in SteamVR. `install.sh` and `galaxyquest.sh` set 120 Hz for the game. |
+
+The other switches (resolution, sharpening, giant screen, stereo screen, comfort and camera settings) work.
+
 ## How it works
 
 Upstream's Android glue has a Linux counterpart. A launcher loads the game at the fixed address the decompiled code expects. The GL context is EGL on Mesa's surfaceless platform (zink on Turnip). The OpenXR session is created through SteamVR's `XR_MNDX_egl_enable`. Sound goes through SDL2.
@@ -155,6 +169,7 @@ The frame pacing was reworked for SteamVR. SteamVR reads an eye image as soon as
 - **`warm-shaders.sh` stops at once.** It needs the game files, a save, and the game closed. The message says which is missing.
 - **The Steam overlay does not appear in the game.** Steam's overlay does not inject into this program. The `LD_PRELOAD` warnings in `launch.log` come from that and are harmless.
 - **No controller models are shown.** Upstream draws none either. The laser shows while you point at the settings panel.
+- **No vibration.** Check that `haptics` is not 0 in `petari_vr.ini`, and look for `haptics: first pulse result` in `petari_log.txt`. A negative number is the runtime refusing the pulse.
 
 ## Reporting problems
 

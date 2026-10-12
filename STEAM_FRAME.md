@@ -21,18 +21,20 @@ Checked on the Frame, in the headset:
 - Sound plays through SDL2 (PipeWire).
 - Quitting from Steam ends the session cleanly.
 
-Known: a hitch of about a second when a new area loads (texture uploads and shader compiles). One refractive crystal once showed streaks in one eye. Not yet confirmed: haptics, every switch of the VR settings panel, long sessions.
+Known: a hitch of about a second when a new area loads (texture uploads and shader compiles). One refractive crystal once showed streaks in one eye. Not yet confirmed in the headset: haptics (frame.3), long sessions.
 
 Two upstream features do not work on the Frame, because SteamVR does not provide them:
 
 - **SpaceWarp** (Meta's frame extrapolation). SteamVR offers no motion vector or depth swapchain formats to OpenGL ES apps. At 120 Hz the game paces itself without it.
 - **Passthrough.** SteamVR's OpenXR runtime has no `XR_FB_passthrough`. The *Passthrough* switch in the VR settings has no effect.
 
+The same holds for *Super resolution* (no `XR_FB_composition_layer_settings`), *High clocks* (no `XR_EXT_performance_settings`) and *Refresh rate* (the runtime lists only the current rate and refuses a request for another). The README has the table.
+
 ## What the branch changes
 
 1. **Launcher** (`platform/linux/launcher.c`). The game code assumes the Wii's 32-bit address space. The launcher reserves 0x80000000 to 0xE0010000 and loads `libgame.so` at 0x98000000. Android has `android_dlopen_ext` for that. Here the library is linked with that address as its image base, glibc's loader honours it, and the launcher checks where it landed.
 2. **GL context and OpenXR session** (`platform/src/xr/xr_app.cpp`). EGL runs on Mesa's surfaceless platform (zink on Turnip, OpenGL ES 3.2). The session is created through `XR_MNDX_egl_enable` in place of `XR_KHR_android_create_instance`. The OpenXR loader is SteamVR's own (`/opt/steamvr/bin/linuxarm64/libopenxr_loader.so`).
-3. **Steam Frame controllers** (`suggestFrame()` and `updateInput()` in `xr_app.cpp`). They are bound through `XR_VALVE_frame_controller_interaction`, so SteamVR does not translate them into Quest Touch controllers. A and B are the Wii Remote's A and B, as the game's own prompts name them. X, Y, the right bumper or a flick spin. The left controller's D-pad is the Wii Remote's D-pad, and View is minus. The full table is in the README.
+3. **Steam Frame controllers** (`suggestFrame()` and `updateInput()` in `xr_app.cpp`). They are bound through `XR_VALVE_frame_controller_interaction`, so SteamVR does not translate them into Quest Touch controllers. A and B are the Wii Remote's A and B, as the game's own prompts name them. X, Y, the right bumper or a flick spin. The left controller's D-pad is the Wii Remote's D-pad, and View is minus. The full table is in the README. Rumble is routed to the haptic action bound on both hands' `output/haptic`; see "Haptics" below.
 4. **Sound** (`platform/src/audio/aaudio_out.cpp`). The same ring buffer, drained by SDL2 in place of AAudio.
 5. **Storage.** Everything lives in `~/.local/share/GalaxyQuest` (or `$GALAXYQUEST_HOME`): `game/` the converted disc, `nand/` the saves, `petari_vr.ini` the VR settings, `petari_log.txt` the log, `shaders.bin` the shader cache. The setup screen's "all files access" step does not exist on Linux.
 6. **Clean exit.** SIGTERM (Steam's stop button) asks the runtime to end the session, and the program leaves once it has.
@@ -47,6 +49,20 @@ Two upstream features do not work on the Frame, because SteamVR does not provide
 
 Under `decomp/`, the only changes are include spellings, one added `<cfloat>` include and one renamed local `lerp`. Under `platform/`, the changes are those listed above.
 
+## frame.3: structure for the Vulkan backend
+
+frame.3 prepares the code for a native Vulkan renderer beside the GLES one. The game's behaviour does not change: GLES stays the default and the fallback, and the replay and xrsim outputs of the GLES path are byte for byte what they were before the split.
+
+- **Renderer interface** (`platform/src/gx/gpu_renderer.h`). `gpu::Renderer` is an abstract class with the public methods the game and the XR layer already used. Textures are `TexHandle` (a GL name under GLES, an image slot under Vulkan) and render targets are `Target {fbo, color, depth, w, h}`. The preparation of a recorded frame (`Builder`, the item list, the copy-texture keys) moved to `gx/gpu_prepare.*` and is shared by both backends. The GLES backend is `gl_renderer.cpp`. `gpu::selectRenderer` picks the backend at startup: `PETARI_GFX=vk|gles` in the environment, else `renderer=vk|gles` in `petari_vr.ini`, else GLES. A Vulkan request that cannot be met logs why and uses GLES.
+- **Shader library** (`tools/glsl`, `libgq_glsl.so`). The game generates its shaders as GLSL at run time. For Vulkan they go through glslang (linked statically into this separate library, which keeps `libgame.so`'s own flags and fixed address untouched) to SPIR-V. `libgq_glsl.so` needs only libstdc++, libm, libgcc_s and libc and is loaded with `dlopen` from the directory of `libgame.so`. It is stripped and shipped beside it in the release. If it is missing the Vulkan backend reports that and the game runs on GLES. `PETARI_GQ_GLSL=<path>` names another copy. The front end (`gx/vk_spirv.*`) keeps the compiled SPIR-V in `spirv.bin` and can seed it from an existing `shaders.bin`.
+- **XR graphics split** (`xr/xr_gfx*`, `xr/vr_draw*`). `xr_gfx` is the graphics half of the OpenXR session (binding, swapchains, submit and fences, depth and motion vector swapchains); `vr_draw` is what the presentation draws itself (the composite of the diorama into the eye image, panels, laser, skip ring, UI layer images, motion passes, GPU timers). `xr_app.cpp`, `vr_game.cpp`, `vr_settings.cpp` and `vr_setup.cpp` work through them and no longer call a graphics API. The GLES implementations are `xr_gfx_gl.cpp` and `vr_draw_gl.cpp`. The frame loop stays in `xr_app.cpp`.
+- **Probes** (`tools/xrprobe`). A standalone OpenXR + Vulkan program that tests how SteamVR treats Vulkan apps (pacing, frame synthesis, depth). It is GPLv3, not part of the game build and not shipped in the release (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)). Results are at the end of this document.
+- **Packaging.** The release tarball now holds `libgq_glsl.so` too. `install.sh` copies it into the app folder and removes an older copy when a release has none. `tools/privacy-check.sh` checks the tree, the history of the current branch or a tarball for personal data (the personal strings come from a file outside the repository).
+
+### Haptics
+
+The game drives the Wii Remote's rumble motor with `WPADControlMotor` (`platform/src/input/wpad.cpp`), which `updateInput()` reads through `port_input_rumble(0)` every frame. The Wii Remote is the right controller here (it points), so that is the hand that buzzes. While the motor is on the right controller gets a 120 ms pulse at amplitude 0.5, renewed every 80 ms; when the motor goes off the haptic is stopped at once. Short pulses mean a runtime that ignores the duration cannot leave a controller running. A 15 ms tick at amplitude 0.25 marks the pointer reaching a new target or control of the settings panel. The haptic action is bound on `/user/hand/left/output/haptic` and `/user/hand/right/output/haptic` for the Frame profile (`/interaction_profiles/valve/frame_controller`) and the Touch profiles. `haptics = 0` in `petari_vr.ini` turns both off. The result of the first `xrApplyHapticFeedback` is logged once as `haptics: first pulse result N`.
+
 ## Building
 
 All on the Frame, with the tools SteamOS has: clang, lld, CMake 3.24 or newer, Ninja, the EGL/GLES and SDL2 headers, Python 3, and SteamVR installed.
@@ -54,10 +70,12 @@ All on the Frame, with the tools SteamOS has: clang, lld, CMake 3.24 or newer, N
 ```sh
 ./build_linux.sh                      # build-linux/galaxyquest, libgame.so, petari_headless (about 35 minutes)
 steam-frame/install.sh                # installs that build (stripped) and adds the shortcut
-steam-frame/build.sh v0.1.8-frame.2   # builds and packages steam-frame/release/*.tar.gz
+steam-frame/build.sh v0.1.8-frame.3   # builds and packages steam-frame/release/*.tar.gz
 ```
 
-A release tarball holds four files: `galaxyquest` (the launcher), `libgame.so` (the game, stripped), `petari_headless` (the headless runner for `warm-shaders.sh`) and `galaxyquest.sh` (the launch wrapper). `steam-frame/release/` is ignored by git.
+A release tarball holds five files: `galaxyquest` (the launcher), `libgame.so` (the game, stripped), `libgq_glsl.so` (the Vulkan backend's shader compiler, stripped; the game runs without it, on GLES), `petari_headless` (the headless runner for `warm-shaders.sh`) and `galaxyquest.sh` (the launch wrapper). `steam-frame/release/` is ignored by git.
+
+**Trial install.** `install.sh` can install into a scratch folder without touching Steam or SteamVR: `GALAXYQUEST_APP=DIR GALAXYQUEST_SKIP_STEAM=1 steam-frame/install.sh TARBALL`. Run `tools/privacy-check.sh TARBALL` on a release before publishing it.
 
 The first build fetches the Khronos OpenXR headers (`tools/fetch_openxr.sh`, the Android loader package; only its headers are used). `compat.h` and `ppc_intrinsics.h` are included in every file, so a change to them rebuilds everything.
 

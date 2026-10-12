@@ -1,0 +1,7 @@
+# Known false positives of tools/privacy-check.sh: PATH_REGEX<TAB>TEXT_REGEX.
+# Text matching TEXT_REGEX on a line of a file whose path matches PATH_REGEX is
+# blanked before that line is scanned.  Nothing personal belongs in this file.
+^decomp/	[a-z]Very[A-Z][A-Za-z]*
+^\.github/workflows/	desktop-[i]nstallers\.yml
+^decomp/src/RVL_SDK/(bte/bte_version\.c|net/NETVersion\.c)$	[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+
+^(.*/)?libgame\.so$	Camera[V]ery(Weak|Strong)
