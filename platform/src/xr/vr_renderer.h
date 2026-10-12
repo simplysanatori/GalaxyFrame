@@ -130,6 +130,8 @@ void init();
 //                     screen (empty: the app's own folder, files/game)
 //   turn_speed        the stick's top turn speed, degrees a second (120)
 //   tilt_speed        the stick's top tilt speed, degrees a second (60)
+//   star_bit_speed    how fast a shot Star Bit flies, 1 to 3 (2; 1 is the
+//                     game's speed)
 //   left_handed       1 to point with the left controller and swap the
 //                     sticks, triggers, grips and bumpers (0, default)
 //   diorama_transitions  1 (default) keeps the diorama through launch stars,

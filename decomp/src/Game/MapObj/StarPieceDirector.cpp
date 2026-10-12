@@ -6,6 +6,10 @@
 #include "Game/Screen/StarPointerDirector.hpp"
 #include "Game/Util.hpp"
 
+#ifdef TARGET_PC
+extern "C" float port_vr_star_bit_speed(void);
+#endif
+
 void StarPieceDirector_FORCE_MATCH_SDATA2() {
     (void)0.0f;
     (void)3.814697265625e-06f;
@@ -478,6 +482,16 @@ bool StarPieceShooter::shoot() {
     }
 #ifdef TARGET_PC
     deadStarPiece->mThrownFromVr = vrShot;
+    // star_bit_speed: the shot covers its line in 30 / rate steps.  A step
+    // may not be longer than about what the Star Bit's own sensor and a small
+    // enemy's add up to (the sensors are tested once a frame, not swept), so
+    // a long shot is not sped up further than that allows, and never slowed.
+    f32 rate = port_vr_star_bit_speed();
+    f32 step = (deadStarPiece->_B4 - deadStarPiece->_A8).length() / 30.0f;
+    if (step * rate > 100.0f) {
+        rate = step > 100.0f ? 1.0f : 100.0f / step;
+    }
+    deadStarPiece->mThrowRate = rate < 1.0f ? 1.0f : rate;
 #endif
 
     return true;

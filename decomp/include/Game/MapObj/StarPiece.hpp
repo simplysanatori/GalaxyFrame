@@ -140,5 +140,8 @@ public:
     // Shot from the VR pointing controller (StarPieceShooter::shoot), not
     // from beside the game camera.
     bool mThrownFromVr;
+    // Flight speed of a thrown star bit relative to the original 30 steps
+    // (1 = as in the game); StarPieceShooter::shoot sets it.
+    f32 mThrowRate;
 #endif
 };
