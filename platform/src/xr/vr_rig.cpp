@@ -64,13 +64,19 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
     const bool transit = (cam.flags & kCameraTransit) != 0;
     if (!rig.valid) {
         rig.inTransit = rig.settle = false;
+        rig.resetT = -1.0f;
         rig.transitPitch = 0.0f;
     }
     if (transit) {
         xm::Vec3 wu = xm::normalize(vec(cam.watchUp));
         if (xm::length(wu) > 0.5f) up = wu;
     }
-    if (rig.valid && rig.inTransit && !transit) {
+    // gravity_turns: smooth hands back by gliding to Mario's up; steps and
+    // off keep the camera's up until the angle to Mario's up says he landed
+    // elsewhere, then re-level in one step (behind a blink, below).
+    const bool smoothGravity = params.gravityTurns == 0;
+    const bool handBack = rig.valid && rig.inTransit && !transit;
+    if (handBack && smoothGravity) {
         rig.settle = true;
         rig.settleLeft = 3.0f;
     }
@@ -119,9 +125,21 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
     // caller fades from black), not as a turn of the whole world.  Sudden:
     // away from where it was a moment ago; running round a small planet turns
     // it steadily, and the world turns with it smoothly.
-    bool flip = rig.valid && acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(rig.recentUp, up)))) > params.gravitySnapAngle;
-    // So does an up trailing Mario's very far (thrown round a small planet).
-    flip = flip || (rig.valid && acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(rig.up, up)))) > params.maxUpLag);
+    const float upAngle = rig.valid ? acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(rig.up, up)))) : 0.0f;
+    bool flip = false;
+    if (smoothGravity) {
+        flip = rig.valid && acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(rig.recentUp, up)))) > params.gravitySnapAngle;
+        // So does an up trailing Mario's very far (thrown round a small planet).
+        flip = flip || upAngle > params.maxUpLag;
+    } else {
+        // Steps: the world holds still until Mario's up is gravityStepAngle
+        // away (this covers a sudden jump of gravity too).  Off: only after a
+        // transit that landed on another planet, and on the stick's click.
+        flip = params.gravityTurns == 1 && upAngle > params.gravityStepAngle;
+        flip = flip || (handBack && upAngle > params.gravityStepAngle);
+        flip = flip || (rig.relevel && upAngle > 0.02f);
+    }
+    rig.relevel = false;
     flip = flip && !quiet;
     bool snapTurn = rig.valid && rig.pendingTurn != 0.0f;
     rig.snapped = cut || flip || snapTurn;
@@ -174,10 +192,16 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
         // Catching up never turns the world faster than maxCatchUpRate.
         float step = acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(rig.up, nextUp))));
         float maxStep = fmaxf(params.maxCatchUpRate * dt, acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(rig.up, xm::normalize(rig.up + (up - rig.up) * blend(dt, params.rotHalfLife)))))));
+        // Following the camera in a transit and handing back after it turn
+        // the world gently: 1.5 and 1.2 rad/s at most.
+        if (rig.settle || transit) {
+            maxStep = (rig.settle ? 1.2f : 1.5f) * dt;
+            catchUp = true;
+        }
         if (catchUp && step > maxStep && step > 1e-6f) {
             nextUp = turn(rig.up, xm::normalize(xm::cross(rig.up, nextUp)), maxStep);
         }
-        rig.up = nextUp;
+        if (transit || smoothGravity) rig.up = nextUp;  // else it holds still (gravity_turns)
         // The yaw goes along with the up as it turns; it follows the game
         // camera only in the old way (turn_with_camera).
         xm::Vec3 f = xm::rotate(rotationBetween(prevUp, rig.up), rig.forward);
@@ -206,7 +230,19 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
         float prevPitch = rig.pitch + rig.transitPitch;
         float baseElevation = atan2f(-params.anchor.y, -params.anchor.z);
         float top = fminf(params.maxPitch, 1.5359f - baseElevation);
-        if (rig.tiltOn) {
+        if (rig.resetTilt) {
+            rig.resetTilt = false;
+            rig.resetT = 0.0f;
+            rig.resetFrom = rig.pitch;
+        }
+        if (rig.stickTilt != 0.0f || !rig.tiltOn) rig.resetT = -1.0f;
+        if (rig.resetT >= 0.0f) {
+            // Half a second, eased at both ends.
+            rig.resetT += dt / 0.5f;
+            float t = fminf(1.0f, rig.resetT);
+            rig.pitch = rig.resetFrom * (1.0f - t * t * (3.0f - 2.0f * t));
+            if (t >= 1.0f) rig.resetT = -1.0f;
+        } else if (rig.tiltOn) {
             rig.pitch += rig.stickTilt * dt;
         } else {
             float step = 1.0472f * dt;  // back to level at 60 deg/s
@@ -221,7 +257,7 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
             float camElevation = asinf(fminf(1.0f, fmaxf(-1.0f, xm::dot(camBack, rig.up))));
             wantTilt = camElevation - baseElevation;
         }
-        rig.transitPitch += (wantTilt - rig.transitPitch) * blend(dt, params.rotHalfLife);
+        rig.transitPitch += (wantTilt - rig.transitPitch) * blend(dt, transit ? params.rotHalfLife : 2.0f * params.rotHalfLife);  // back more gently
         rig.transitPitch = fminf(top, fmaxf(params.minPitch, rig.pitch + rig.transitPitch)) - rig.pitch;
         if (dt > 0.0f) rig.turnRate = fmaxf(rig.turnRate, fabsf(rig.pitch + rig.transitPitch - prevPitch) / dt);
     }

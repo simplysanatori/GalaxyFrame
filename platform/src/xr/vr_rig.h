@@ -37,6 +37,13 @@ struct RigParams {
     float minEyeElevation = 0.17f;           // radians (10 deg): the eye above Mario's horizon; below, the up catches up
     float maxUpLag = 1.75f;                  // radians (100 deg): the up trailing further snaps behind a blink
     float maxCatchUpRate = 2.0f;             // radians per second the up turns at most while catching up
+    // gravity_turns: how the world follows Mario's up on a round planet.
+    // smooth: it turns with him (the default); steps: it holds still until
+    // the angle to his up passes gravityStepAngle, then re-levels in one step
+    // behind a blink; off: only when asked (resetTilt, the stick's click) and
+    // after a transit that landed on another planet.
+    int gravityTurns = 0;                    // 0 smooth, 1 steps, 2 off
+    float gravityStepAngle = 0.61f;          // radians (35 deg)
     bool turnWithCamera = false;             // the old way: the yaw follows the game camera, smoothed
     float jumpDeadZone = 350.0f;             // game units Mario rises off the ground before the world follows
     float landingHalfLife = 0.25f;           // seconds: back on Mario after landing
@@ -83,6 +90,14 @@ struct RigState {
     // The extra tilt (radians, like pitch) that gives the game camera's height
     // during a transit; eases back to 0 afterwards.
     float transitPitch = 0.0f;
+    // The stick's click: the stick tilt eases back to level over half a
+    // second, unless the stick tilts again.  Set by the caller, cleared here.
+    bool resetTilt = false;
+    float resetT = -1.0f;     // 0..1 while the tilt eases back (resetFrom: where from), else -1
+    float resetFrom = 0.0f;
+    // gravity_turns steps / off: re-level the up to Mario's now, behind a
+    // blink (the stick's click).  Set by the caller, cleared by the update.
+    bool relevel = false;
 };
 
 // Advances the rig towards the camera's framing by dt seconds and returns

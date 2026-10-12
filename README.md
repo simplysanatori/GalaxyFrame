@@ -103,7 +103,7 @@ The game sees a Wii Remote with a Nunchuk. The Frame controllers are mapped onto
 | Left grip held, D-pad up / down | None | In the diorama, smoothly raise or lower it (*Height*), saved to the settings file. Works with *Smooth turning* on or off; the D-pad reaches nothing else meanwhile |
 | Left grip held, D-pad left / right | None | In the diorama, smoothly make it smaller or bigger (*World size*), saved the same way |
 | D-pad up (left) | D-pad up | First-person look. With *Smooth turning* off the right stick up does it too |
-| Right stick click | D-pad up | First-person look |
+| Right stick click | None | In the diorama, level the tilt; with *Gravity turns* Steps or Off, also level the world to Mario's up (behind a blink) |
 | Right stick down (smooth turning off) | D-pad down | Page down in lists |
 | Right controller aim | Pointer | Collect star bits, grab Pull Stars, point at menus and the VR settings panel |
 | Right controller tilt | Remote tilt | Steer the Star Ball and the Ray |
@@ -120,7 +120,7 @@ The left stick click is not used. *Left-handed* (VR settings, Game tab, or `left
 
 **Recentring.** Use SteamVR's recentre (hold the system button, or use the dashboard). The game puts the screen or the diorama in front of you again.
 
-**The VR settings panel.** Press Menu or View. The pause menu opens, and the VR settings panel appears to the right of its buttons. Aim the right controller at it and press A or pull the right trigger. Its four tabs hold the settings of `petari_vr.ini`, except `haptics`. [docs/CONTROLS.md](docs/CONTROLS.md) explains each setting, pointing, tilt and skipping in detail. That page was written for the Quest's Touch Plus controllers. Its button table does not apply to the Frame, and the rest does.
+**The VR settings panel.** Press Menu or View. The pause menu opens, and the VR settings panel appears to the right of its buttons. Aim the right controller at it and press A or pull the right trigger. Its five tabs hold the settings of `petari_vr.ini`, except `haptics`. In the diorama, launch stars, pipes and the flight into a galaxy stay in the diorama and follow the game camera (*Diorama in flights*, on the *Diorama* tab); the *Comfort* tab has the vignette and *Gravity turns* (smooth, steps or off) for motion sickness. [docs/CONTROLS.md](docs/CONTROLS.md) explains each setting, pointing, tilt and skipping in detail. That page was written for the Quest's Touch Plus controllers. Its button table does not apply to the Frame, and the rest does.
 
 ## Settings
 

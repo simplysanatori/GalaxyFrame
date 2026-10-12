@@ -148,9 +148,32 @@ void skipText(float value, char* out, size_t size) {
     }
 }
 
+bool smoothGravityOn() {
+    const vr::Setting* s = vr::findSetting("gravity_turns");
+    return !s || s->get() < 0.5f;
+}
+const char* const kGravityNames[] = {"Smooth", "Steps", "Off"};
+int gravityOptions(float* out, int max) {
+    int n = max < 3 ? max : 3;
+    for (int i = 0; i < n; i++) out[i] = (float)i;
+    return n;
+}
+void gravityText(float value, char* out, size_t size) { snprintf(out, size, "%s", kGravityNames[(int)lroundf(fminf(2.0f, fmaxf(0.0f, value)))]); }
+void gravityFile(char* out, size_t size) {
+    const vr::Setting* s = vr::findSetting("gravity_turns");
+    snprintf(out, size, "%s", kGravityNames[s ? (int)lroundf(s->get()) : 0]);
+    for (char* c = out; *c; c++) *c = (char)tolower((unsigned char)*c);
+}
+void hintGravity(char* out, size_t size) {
+    const vr::Setting* s = vr::findSetting("gravity_turns");
+    int mode = s ? (int)lroundf(s->get()) : 0;
+    snprintf(out, size, "%s", mode == 0 ? "The world turns with Mario's up"
+                              : mode == 1 ? "Holds still, re-levels in one step"
+                                          : "Never turns; click the right stick");
+}
+
 const Item kScreenItems[] = {
     {"giant_screen", "Giant screen", "Play on a big screen, no diorama", kSwitch},
-    {"diorama_transitions", "Diorama in flights", "Launch stars, pipes and arrivals stay in the diorama", kSwitch, 0, 0, 0, nullptr, giantOff},
     {"screen_distance", "Screen distance", "How far away the giant screen is", kSlider, 2.5f, 10.0f, 0.5f, "%.1f m", giantOn},
     {"passthrough", "Passthrough", nullptr, kSwitch, 0, 0, 0, nullptr, passthroughUsable, hintPassthrough},
     {"stereo_screen", "Stereoscopic 3D", nullptr, kSwitch, 0, 0, 0, nullptr, giantOn, hintStereo},
@@ -163,9 +186,14 @@ const Item kDioramaItems[] = {
     {"diorama_height", "Height", "Mario below your eyes", kStepper, 0.0f, 1.6f, 0.05f, "%.2f m"},
     {"diorama_scale", "World size", "1.0 is the usual size", kStepper, 0.5f, 3.0f, 0.1f, "%.1f"},
     {"follow_smoothing", "Follow smoothing", "How gently the world follows Mario", kStepper, 0.0f, 0.5f, 0.02f, "%.2f s"},
-    {"turn_smoothing", "Turn smoothing", "How gently it turns with gravity", kStepper, 0.0f, 1.5f, 0.05f, "%.2f s"},
-    {"vignette", "Turn vignette", "Darker edges while the world turns", kStepper, 0.0f, 1.0f, 0.1f, "%.1f"},
     {"cutaway", "See through scenery", "Fade what hides Mario from you", kSwitch},
+    {"diorama_transitions", "Diorama in flights", "Launch stars, pipes and arrivals stay in the diorama", kSwitch, 0, 0, 0, nullptr, giantOff},
+};
+const Item kComfortItems[] = {
+    {"gravity_turns", "Gravity turns", nullptr, kStepper, 0, 0, 0, nullptr, nullptr, hintGravity, gravityOptions, gravityText, nullptr, nullptr, gravityFile},
+    {"turn_smoothing", "Turn smoothing", "How gently it turns with gravity", kStepper, 0.0f, 1.5f, 0.05f, "%.2f s", smoothGravityOn},
+    {"comfort_vignette", "Comfort vignette", "Darker edges whenever the view moves", kSwitch},
+    {"vignette", "Vignette strength", "How dark the edges get", kStepper, 0.0f, 1.0f, 0.1f, "%.1f"},
     {"turn_with_camera", "Turn with the camera", "The world swings with the game camera", kSwitch},
 };
 const Item kPictureItems[] = {
@@ -197,9 +225,10 @@ struct Tab {
 const int kMaxItems = 8;  // on a tab
 #define TAB(name, items) {name, items, (int)(sizeof(items) / sizeof(items[0]))}
 #define FITS(items) static_assert(sizeof(items) / sizeof(items[0]) <= kMaxItems, "too many settings on a tab")
-const Tab kTabs[] = {TAB("Screen", kScreenItems), TAB("Diorama", kDioramaItems), TAB("Picture", kPictureItems), TAB("Game", kGameItems)};
+const Tab kTabs[] = {TAB("Screen", kScreenItems), TAB("Diorama", kDioramaItems), TAB("Comfort", kComfortItems), TAB("Picture", kPictureItems), TAB("Game", kGameItems)};
 FITS(kScreenItems);
 FITS(kDioramaItems);
+FITS(kComfortItems);
 FITS(kPictureItems);
 FITS(kGameItems);
 #undef TAB
