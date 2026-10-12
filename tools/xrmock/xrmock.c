@@ -19,6 +19,8 @@
 //   MOCK_XR_SPACEWARP=1       offer XR_FB_space_warp (the app then renders
 //                             motion vectors and depth with each frame)
 //   MOCK_XR_EXTENSIONS=a,b    replace the list of extensions offered
+//   MOCK_XR_BUSY_MS=<ms>      Vulkan: a release that waits longer than this
+//                             for the app's queue to go idle is an error (4)
 // The graphics API is chosen by the app's binding (xrmock_gfx.h).
 //
 // Checks (ERROR lines in the trace, and a summary on stderr when the session
