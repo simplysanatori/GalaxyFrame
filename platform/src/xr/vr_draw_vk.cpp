@@ -32,6 +32,12 @@
 #include "ui_canvas.h"
 #include "vr_draw.h"
 
+namespace xrgfx {
+// xr_gfx_vk.cpp: a swapchain image is released once the work recorded on it
+// has finished.
+void noteVulkanImageUse(uint32_t handle);
+}  // namespace xrgfx
+
 namespace vrdraw {
 namespace {
 
@@ -511,6 +517,7 @@ public:
         if (it != mLevels.end()) levels = it->second;
         transitionImage(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
         blitMips(texture, info, levels);
+        xrgfx::noteVulkanImageUse(texture);
     }
 
     void readPixels(const gpu::EfbTarget& image, int width, int height, uint8_t* rgba) override {
@@ -711,6 +718,7 @@ private:
         ri.colorAttachmentCount = 1;
         ri.pColorAttachments = &att;
         VkCommandBuffer cmd = commandBuffer();
+        xrgfx::noteVulkanImageUse(mDst);
         vkCmdBeginRenderingKHR(cmd, &ri);
         VkViewport vp{0.0f, 0.0f, (float)mW, (float)mH, 0.0f, 1.0f};
         VkRect2D sc{{0, 0}, {(uint32_t)mW, (uint32_t)mH}};

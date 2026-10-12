@@ -100,7 +100,109 @@ private:
 };
 
 ImageTable sImages;
-bool sKeepDepth = false;  // store the depth at the end of a render (vk::setKeepDepth)
+bool sKeepDepth = false;
+
+// ---------------------------------------------------------------------------
+// Foveation (VulkanRenderer::setFoveation): a fragment density map for a
+// target, attached to the rendering instances of the renders into it.  Each
+// target has a ring of maps in linear, host-visible memory written by the
+// CPU (Turnip offers density maps in R16G16_SFLOAT and R32G32_SFLOAT, linear
+// tiling included),
+// so a map changing every frame (the gaze) needs no copy and no wait: a map
+// is rewritten only once the GPU has finished the render that used it.
+// ---------------------------------------------------------------------------
+const VkFormat kFdmFormat = VK_FORMAT_R16G16_SFLOAT;
+const int kFdmRing = 4;
+struct FdmMap {
+    VkImage image = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    Allocation mem;
+    VkSubresourceLayout layout{};
+    uint64_t usedBy = 0;  // timeline value of the last render that read it
+};
+struct Fdm {
+    u32 w = 0, h = 0;      // map texels
+    u32 tw = 0, th = 0;    // target pixels
+    FdmMap ring[kFdmRing];
+    int next = 0;
+    int current = -1;      // the map the target's renders use now (-1: none)
+    bool initialized = false;
+};
+std::unordered_map<u32, Fdm> sFdm;  // by the target's color handle
+bool sFdmChecked = false, sFdmOk = false;
+
+void destroyFdm(Fdm& f) {
+    VkDevice dev = device().device;
+    for (FdmMap& m : f.ring) {
+        if (m.view) vkDestroyImageView(dev, m.view, nullptr);
+        if (m.image) vkDestroyImage(dev, m.image, nullptr);
+        freeMemory(m.mem);
+        m = FdmMap();
+    }
+}
+
+bool createFdmMap(FdmMap& m, u32 w, u32 h) {
+    VkDevice dev = device().device;
+    VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ci.imageType = VK_IMAGE_TYPE_2D;
+    ci.format = kFdmFormat;
+    ci.extent = {w, h, 1};
+    ci.mipLevels = 1;
+    ci.arrayLayers = 1;
+    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.tiling = VK_IMAGE_TILING_LINEAR;
+    ci.usage = VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT;
+    ci.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
+    if (vkCreateImage(dev, &ci, nullptr, &m.image) != VK_SUCCESS) return false;
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(dev, m.image, &req);
+    if (!allocateMemory(req, MemUse::Upload, MemCat::Misc, true, &m.mem, "density map") || vkBindImageMemory(dev, m.image, m.mem.memory, 0) != VK_SUCCESS) {
+        return false;
+    }
+    VkImageSubresource sub{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0};
+    vkGetImageSubresourceLayout(dev, m.image, &sub, &m.layout);
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vci.image = m.image;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = kFdmFormat;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(dev, &vci, nullptr, &m.view) != VK_SUCCESS) return false;
+    setName(VK_OBJECT_TYPE_IMAGE, (uint64_t)m.image, "density map");
+    return true;
+}
+
+// Density around the focal point (normalized device coordinates, y up as
+// the target is stored): full within `inner`, then the larger of `edge` and
+// a half out to 1.6 x `inner`, then `edge` (per axis; Turnip makes
+// fragments of 1, 2 or 4 pixels a side from it).  Turnip applies the map per
+// tile of its tiled rendering (a tile of an eye is about a third of its
+// width), at the tile's lowest density as measured: a full-density region
+// smaller than a tile does not show.
+uint16_t halfFloat(float v) {
+    // v in 1/16..1: a normal half float.
+    uint32_t b;
+    memcpy(&b, &v, 4);
+    return (uint16_t)(((b >> 16) & 0x8000) | ((((b >> 23) & 0xff) - 112) << 10) | ((b >> 13) & 0x3ff));
+}
+
+void fillFdm(Fdm& f, FdmMap& m, float fx, float fy, float inner, float edge) {
+    uint8_t* base = m.mem.ptr + m.layout.offset;
+    float aspect = (float)f.tw / (float)f.th;  // round on the image, not in NDC
+    for (u32 y = 0; y < f.h; y++) {
+        uint16_t* row = (uint16_t*)(base + y * m.layout.rowPitch);
+        float ny = ((y + 0.5f) * f.th / f.h) / f.th * 2.0f - 1.0f;
+        for (u32 x = 0; x < f.w; x++) {
+            float nx = ((x + 0.5f) * f.tw / f.w) / f.tw * 2.0f - 1.0f;
+            float dx = (nx - fx) * aspect, dy = ny - fy;
+            float r = sqrtf(dx * dx + dy * dy);
+            float v = r < inner ? 1.0f : r < 1.6f * inner ? fmaxf(edge, 0.5f) : edge;
+            uint16_t d = halfFloat(fminf(1.0f, fmaxf(0.0625f, v)));
+            row[x * 2] = d;
+            row[x * 2 + 1] = d;
+        }
+    }
+}
+  // store the depth at the end of a render (vk::setKeepDepth)
 
 u32 newImage(u32 w, u32 h, u32 levels, VkFormat format, VkImageUsageFlags usage, ImgKind kind, MemCat cat, const char* name) {
     VkDevice dev = device().device;
@@ -342,7 +444,7 @@ public:
     Target createTarget(int width, int height) override;
     Target createDepthTarget(int width, int height) override;
     void destroyTarget(Target& t) override;
-    bool setFoveation(Target&, float, float, float, float) override { return false; }
+    bool setFoveation(Target& t, float focalX, float focalY, float gain, float foveaArea) override;
     void setFrame(std::shared_ptr<const Frame> frame) override;
     bool update() override;
     bool hasFrame() const override;
@@ -1005,6 +1107,18 @@ void VkImpl::ensurePass(Target& t, size_t index) {
     ri.pColorAttachments = &ca;
     ri.pDepthAttachment = &da;
     ri.pStencilAttachment = &da;
+    // A foveated eye render (setFoveation): the density map of this render.
+    VkRenderingFragmentDensityMapAttachmentInfoEXT fdm{VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_INFO_EXT};
+    if (&t == efbTarget && !sFdm.empty()) {
+        auto it = sFdm.find(t.color);
+        if (it != sFdm.end() && it->second.current >= 0) {
+            FdmMap& m = it->second.ring[it->second.current];
+            fdm.imageView = m.view;
+            fdm.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            m.usedBy = pendingValue();
+            ri.pNext = &fdm;
+        }
+    }
     vkCmdBeginRenderingKHR(cmd, &ri);
     passTarget = &t;
     curPasses++;
@@ -1717,6 +1831,80 @@ bool VulkanRenderer::init() {
     return sImpl->ready;
 }
 
+// Foveation of the target's renders around (focalX, focalY) (normalized
+// device coordinates).  Under Vulkan `gain` is the density at the fringes
+// (0..1 of full per axis; <= 0 turns foveation off) and `foveaArea` the
+// radius of the full-density region (NDC, on the image's own aspect).
+bool VulkanRenderer::setFoveation(Target& t, float focalX, float focalY, float gain, float foveaArea) {
+    if (!deviceReady() || !device().fragmentDensityMap || !sImages.valid(t.color)) return false;
+    if (!sFdmChecked) {
+        sFdmChecked = true;
+        VkFormatProperties fp;
+        vkGetPhysicalDeviceFormatProperties(device().phys, kFdmFormat, &fp);
+        sFdmOk = (fp.linearTilingFeatures & VK_FORMAT_FEATURE_FRAGMENT_DENSITY_MAP_BIT_EXT) != 0;
+        port_log("vk: foveation %s (density map texels %ux%u to %ux%u px)", sFdmOk ? "available" : "unavailable (no linear density map format)",
+                 device().fdmTexelMin.width, device().fdmTexelMin.height, device().fdmTexelMax.width, device().fdmTexelMax.height);
+    }
+    if (!sFdmOk) return false;
+    auto it = sFdm.find(t.color);
+    if (gain <= 0.0f) {
+        if (it != sFdm.end()) it->second.current = -1;
+        return true;
+    }
+    Fdm& f = sFdm[t.color];
+    u32 tw = (u32)t.width, th = (u32)t.height;
+    if (f.tw != tw || f.th != th) {
+        // A new target (or one of a new size): a new ring, the old one once
+        // the GPU is done with it.
+        if (f.ring[0].image) {
+            Fdm old = f;
+            deferUntilDone([old]() mutable { destroyFdm(old); });
+        }
+        f = Fdm();
+        f.tw = tw;
+        f.th = th;
+        u32 texW = device().fdmTexelMin.width ? device().fdmTexelMin.width : 32, texH = device().fdmTexelMin.height ? device().fdmTexelMin.height : 32;
+        f.w = (tw + texW - 1) / texW;
+        f.h = (th + texH - 1) / texH;
+        for (FdmMap& m : f.ring) {
+            if (!createFdmMap(m, f.w, f.h)) {
+                port_log("vk: cannot create a density map");
+                destroyFdm(f);
+                sFdm.erase(t.color);
+                return false;
+            }
+        }
+    }
+    FdmMap& m = f.ring[f.next];
+    if (m.usedBy && completedValue() < m.usedBy) waitValue(m.usedBy);
+    fillFdm(f, m, focalX, focalY, foveaArea, fminf(1.0f, gain));
+    f.current = f.next;
+    f.next = (f.next + 1) % kFdmRing;
+    if (!f.initialized) {
+        // PREINITIALIZED -> GENERAL keeps what the CPU wrote; the maps stay
+        // in GENERAL (host writes before a submission are visible to it).
+        f.initialized = true;
+        VkImageMemoryBarrier2 b[kFdmRing];
+        for (int i = 0; i < kFdmRing; i++) {
+            b[i] = VkImageMemoryBarrier2{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            b[i].srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+            b[i].srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT;
+            b[i].dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_DENSITY_PROCESS_BIT_EXT;
+            b[i].dstAccessMask = VK_ACCESS_2_FRAGMENT_DENSITY_MAP_READ_BIT_EXT;
+            b[i].oldLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
+            b[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b[i].srcQueueFamilyIndex = b[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b[i].image = f.ring[i].image;
+            b[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        }
+        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        di.imageMemoryBarrierCount = kFdmRing;
+        di.pImageMemoryBarriers = b;
+        vkCmdPipelineBarrier2KHR(commandBuffer(), &di);
+    }
+    return true;
+}
+
 Target VulkanRenderer::createTarget(int width, int height) {
     Target t;
     if (!deviceReady()) {
@@ -1760,6 +1948,12 @@ Target VulkanRenderer::createDepthTarget(int width, int height) {
 }
 
 void VulkanRenderer::destroyTarget(Target& t) {
+    auto fdm = sFdm.find(t.color);
+    if (fdm != sFdm.end()) {
+        Fdm old = fdm->second;
+        sFdm.erase(fdm);
+        deferUntilDone([old]() mutable { destroyFdm(old); });
+    }
     if (deviceReady()) {
         destroyImageLater(t.color);
         destroyImageLater(t.depth);

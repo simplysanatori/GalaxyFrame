@@ -20,7 +20,9 @@
 //                             motion vectors and depth with each frame)
 //   MOCK_XR_EXTENSIONS=a,b    replace the list of extensions offered
 //   MOCK_XR_BUSY_MS=<ms>      Vulkan: a release that waits longer than this
-//                             for the app's queue to go idle is an error (4)
+//                             for the app's queue to go idle is an error
+//                             (off unless set: the app submits its next set
+//                             before releasing the last since frame.3 round 3)
 // The graphics API is chosen by the app's binding (xrmock_gfx.h).
 //
 // Checks (ERROR lines in the trace, and a summary on stderr when the session
@@ -128,6 +130,9 @@ static XrResult XRAPI_CALL mGetSystemProps(XrInstance i, XrSystemId s, XrSystemP
     (void)s;
     strcpy(p->systemName, "mock frame");
     for (XrBaseOutStructure* n = (XrBaseOutStructure*)p->next; n; n = n->next) {
+        if (n->type == XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT) {
+            ((XrSystemEyeGazeInteractionPropertiesEXT*)n)->supportsEyeGazeInteraction = XR_TRUE;
+        }
         if (n->type == XR_TYPE_SYSTEM_SPACE_WARP_PROPERTIES_FB) {
             XrSystemSpaceWarpPropertiesFB* w = (XrSystemSpaceWarpPropertiesFB*)n;
             w->recommendedMotionVectorImageRectWidth = 420;
@@ -281,7 +286,11 @@ static XrResult XRAPI_CALL mRelease(XrSwapchain sc, const XrSwapchainImageReleas
         gErrors++;
         return XR_ERROR_CALL_ORDER_INVALID;
     }
-    if (gGfx && gGfx->release_wait_ms) {
+    // Opt-in (MOCK_XR_BUSY_MS): the app's frame loop now submits the next
+    // set before it releases the last, so the queue is rarely idle here.
+    static int busyCheck = -1;
+    if (busyCheck < 0) busyCheck = getenv("MOCK_XR_BUSY_MS") != NULL;
+    if (busyCheck && gGfx && gGfx->release_wait_ms) {
         // The wait includes other processes' GPU work (the desktop's
         // compositor) ahead of the mock's own check: up to 4 ms seen
         // with the app's work all done.  The eyes' work takes 10 ms and more.
@@ -623,7 +632,7 @@ static void init(void) {
         free(copy);
     } else {
         const char* exts[] = {"XR_KHR_opengl_es_enable", "XR_MNDX_egl_enable", "XR_KHR_vulkan_enable2", "XR_FB_display_refresh_rate",
-                              "XR_EXT_performance_settings", "XR_VALVE_frame_controller_interaction", "XR_KHR_composition_layer_depth"};
+                              "XR_EXT_performance_settings", "XR_VALVE_frame_controller_interaction", "XR_KHR_composition_layer_depth", "XR_EXT_eye_gaze_interaction"};
         for (unsigned i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) strcpy(gExtNames[gExtCount++], exts[i]);
         if (getenv("MOCK_XR_SPACEWARP")) strcpy(gExtNames[gExtCount++], "XR_FB_space_warp");
     }

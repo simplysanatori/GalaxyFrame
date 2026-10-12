@@ -33,6 +33,11 @@ struct FrameInfo {
     // the eyes are rendered on every refresh of a 60 Hz game): one that has
     // not come counts as shown twice.
     bool newFrameDue = true;
+    // Where the eyes look, per eye in its normalized device coordinates
+    // (eye tracking; gazeValid false without): the eye renders are
+    // foveated around it (Vulkan), and only then.
+    bool gazeValid = false;
+    float gaze[2][2] = {};
 };
 
 // Near and far planes of the eye projections, metres (the depth images
@@ -58,7 +63,27 @@ void init();
 //                     stays sharper, but frames come late when the GPU
 //                     cannot keep up
 //   refresh_rate      display refresh rate, Hz (120: each game frame stays
-//                     up for exactly two refreshes)
+//                     up for exactly two refreshes; 90 is possible on the
+//                     Steam Frame but not recommended: the game's 60 frames
+//                     then stay up for one or two refreshes in turn)
+//   foveation         off | low | medium | high | custom (or 0 to 4; off):
+//                     lower resolution away from where the eyes look, by
+//                     eye tracking only (Vulkan); without a gaze the eyes
+//                     render at full resolution.  Presets (radius, edge):
+//                     low 45 %, 50 %; medium 30 %, 50 %; high 20 %, 25 %.
+//                     Off by default: Turnip applies the density per tile
+//                     of its tiled rendering (a third of an eye's width) at
+//                     the tile's lowest density, so the sharp region does
+//                     not follow the gaze closely, and the eyes' GPU time
+//                     drops 8 % at best (xr_sim, resolution 0.8, all at a
+//                     quarter density; none at 1.0)
+//   foveation_radius  custom: radius of the full-resolution region round the
+//                     gaze, % of the half field of view (10 to 60; 30)
+//   foveation_edge    custom: resolution at the fringes, % of full per axis
+//                     (25 to 100; 50).  The GPU makes fragments of 1, 2 or 4
+//                     pixels a side, so 50 % and 25 % are the steps that save
+//                     work.  Between the radius and 1.6 times it the
+//                     resolution is at least 50 %
 //   high_clocks       1 to ask for Meta's SustainedHigh CPU/GPU levels (1),
 //                     0 to leave the clocks to the system (saves battery)
 //   space_warp        1 to show the game's 60 frames a second at 120 Hz with
@@ -218,10 +243,20 @@ struct UiLayer {
 // kScreenRightLayer: the right eye's picture of the virtual screen while it
 // shows a stereo pair (kScreenLayer is the left eye's then, and both eyes'
 // otherwise).
-enum { kHudLayer, kSettingsLayer, kScreenLayer, kSetupLayer, kScreenRightLayer, kUiLayerCount };
+// kBeamLayer, kReticleLayer, kSkipLayer: the controller's laser beam, its
+// reticle and the skip ring, over every other layer (the compositor draws
+// quad layers over the eye layer, so in the eye images they were under the
+// virtual screen and the panels).
+enum { kHudLayer, kSettingsLayer, kScreenLayer, kSetupLayer, kScreenRightLayer, kBeamLayer, kReticleLayer, kSkipLayer, kUiLayerCount };
 // The UI layers from the bottom one to the top one.
-const int kUiLayerOrder[kUiLayerCount] = {kScreenLayer, kScreenRightLayer, kHudLayer, kSettingsLayer, kSetupLayer};
+const int kUiLayerOrder[kUiLayerCount] = {kScreenLayer, kScreenRightLayer, kHudLayer, kSettingsLayer, kSetupLayer, kBeamLayer, kReticleLayer, kSkipLayer};
 void setUiLayers(bool on);
+// The foveation setting is on (it takes effect only with an eye-tracked gaze).
+bool foveationWanted();
+// The laser's origin and direction (stage space) from the controller's pose
+// at this refresh's display time, between the game's input updates (the
+// pointer and its length stay from the last pointerFromRay).
+void updateAimPose(xm::Vec3 origin, xm::Vec3 dir);
 bool uiLayers();
 // Image size of a UI layer (its swapchain).
 void uiLayerSize(int which, int* width, int* height);

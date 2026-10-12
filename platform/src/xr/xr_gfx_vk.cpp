@@ -17,6 +17,8 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+
+#include <unordered_map>
 #include <string.h>
 
 #include "xr_gfx.h"
@@ -38,6 +40,15 @@ namespace xrgfx {
 namespace {
 
 using namespace gpu::vk;
+
+}  // namespace
+void noteVulkanImageUse(uint32_t handle);
+namespace {
+
+// The timeline value of the command buffer that last recorded work on each
+// swapchain image (vr_draw_vk.cpp notes its passes): the image is released
+// once that has finished.
+std::unordered_map<uint32_t, uint64_t> sUse;
 
 bool hasExtension(const std::vector<XrExtensionProperties>& exts, const char* name) {
     for (const auto& e : exts) {
@@ -248,6 +259,7 @@ public:
         for (Acquired& a : mAcquired) {
             if (a.swapchain == chain.handle && !a.waited) {
                 a.waited = true;
+                sUse[a.handle] = 0;
                 assumeImageLayout(a.handle, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
                 break;
             }
@@ -261,15 +273,16 @@ public:
         if (i < mAcquired.size()) {
             Acquired a = mAcquired[i];
             mAcquired.erase(mAcquired.begin() + (long)i);
+            a.value = sUse[a.handle];
             ImageInfo info;
-            if (!a.value || (imageInfo(a.handle, &info) && info.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL && commandBufferOpen())) {
-                // Nothing submitted since it was acquired (or drawn into
-                // after): back to the layout the runtime takes, then submitted.
+            bool unsubmitted = commandBufferOpen() && a.value >= pendingValue();
+            if (!a.value || unsubmitted || (imageInfo(a.handle, &info) && info.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)) {
+                // Nothing recorded on it, or recorded and not yet submitted:
+                // back to the layout the runtime takes, then submitted.
                 transitionImage(a.handle, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, kColorStage, kColorAccess);
                 a.value = gpu::vk::submit();
             }
-            static const bool noWait = getenv("PETARI_NO_GPU_WAIT") != nullptr;  // test of the mock's check
-            if (completedValue() < a.value && !noWait) {
+            if (completedValue() < a.value) {
                 // The frame loop waits before it releases; this is the safety net.
                 int64_t t0 = port_host_time_ns();
                 waitValue(a.value);
@@ -295,11 +308,10 @@ public:
             ImageInfo info;
             if (imageInfo(a.handle, &info) && info.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
                 transitionImage(a.handle, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, kColorStage, kColorAccess);
+                noteVulkanImageUse(a.handle);
             }
         }
-        uint64_t v = gpu::vk::submit();
-        for (Acquired& a : mAcquired) a.value = v;
-        return (Fence)v;
+        return (Fence)gpu::vk::submit();
     }
 
     bool waitFence(Fence fence, int64_t timeoutNs) override {
@@ -401,6 +413,11 @@ private:
 };
 
 }  // namespace
+
+void noteVulkanImageUse(uint32_t handle) {
+    commandBuffer();  // the value the recording goes out with
+    sUse[handle] = pendingValue();
+}
 
 Gfx* createVulkanGfx() { return new VulkanGfx(); }
 
