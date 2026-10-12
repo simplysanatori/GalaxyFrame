@@ -92,6 +92,10 @@ void init();
 //                     the screen 4.5 m away
 //   game_path         the folder of the game's files chosen on the setup
 //                     screen (empty: the app's own folder, files/game)
+//   turn_speed        the stick's top turn speed, degrees a second (120)
+//   tilt_speed        the stick's top tilt speed, degrees a second (60)
+//   left_handed       1 to point with the left controller and swap the
+//                     sticks, triggers, grips and bumpers (0, default)
 //   turn_with_camera  1 to have the diorama turn with the game camera as it
 //                     swings round Mario (0: the world keeps its facing; the
 //                     right stick turns it, see smooth_turn)
@@ -168,7 +172,23 @@ bool snapTurn(int dir);
 // when not turning) and sets the turn rate for the rig, honouring
 // invert_camera; it lapses a quarter second after the last call.
 bool smoothTurning();
-void smoothTurn(float x);
+// Likewise for the tilt: not on a menu's list (pointer UI), where the stick's
+// up and down are still the D-pad's.
+bool smoothTilting();
+// x turns the diorama (invert_camera honoured, turn_speed at the stop), y
+// tilts it (positive: seen from higher, tilt_speed at the stop).
+void smoothTurn(float x, float y);
+// The right grip held (smooth turning on): the stick's y raises or lowers the
+// diorama (diorama_height), x makes it smaller or bigger (diorama_scale); saved
+// to the file a moment after the last change.  Call every update (0, 0 when
+// not held).
+void dioramaAdjust(float x, float y);
+// left_handed: the left controller points (the laser, the pointer, the settings
+// panel and the haptic ticks) and the hands' sticks, triggers, grips and
+// bumpers swap roles.
+bool leftHanded();
+// Writes one setting's current value to the ini file, as the panel does.
+void saveSetting(const char* key);
 // The render scale now (the dynamic resolution moves it between the
 // min_resolution and resolution settings), and the scale of the screen's 3D
 // pictures (the giant screen's gameplay): 1 is the full picture, and the

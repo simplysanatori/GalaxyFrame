@@ -31,6 +31,8 @@ struct RigParams {
     bool turnWithCamera = false;             // the old way: the yaw follows the game camera, smoothed
     float jumpDeadZone = 350.0f;             // game units Mario rises off the ground before the world follows
     float landingHalfLife = 0.25f;           // seconds: back on Mario after landing
+    float minPitch = -1.0472f;               // radians (-60 deg): the view from below Mario's level
+    float maxPitch = 1.309f;                 // radians (75 deg): from above; also kept under 88 deg of eye elevation
 };
 
 struct RigState {
@@ -52,6 +54,13 @@ struct RigState {
     // yaw, same sign as pendingTurn.  Set before each update; the update
     // applies it over its dt, with no blink.
     float stickTurn = 0.0f;
+    // Smooth tilt: radians per second the stick tips the view up (positive:
+    // seen from higher), set like stickTurn.  `pitch` is how far the world is
+    // tipped about Mario (stage X axis at the anchor), within the params'
+    // limits.  With tiltOn false (smooth turning off) it eases back to 0.
+    float stickTilt = 0.0f;
+    float pitch = 0.0f;
+    bool tiltOn = false;
     // Mario's up followed within about 0.1 s: gravity that jumps away from it
     // changed suddenly (a switch, a room's wall), not by Mario running round
     // a small planet (that it keeps up with).
@@ -65,6 +74,8 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
 // Stage-space point / direction -> game world, for the rig's current state.
 xm::Vec3 stageToWorld(const RigState& rig, const RigParams& params, xm::Vec3 p);
 xm::Vec3 stageDirToWorld(const RigState& rig, xm::Vec3 d);
+// The same without the tilt (Mario's movement axes follow the ground, not the tilt).
+xm::Vec3 stageDirToWorldLevel(const RigState& rig, xm::Vec3 d);
 
 // Row-major copy for gpu::EyeView.
 void toRowMajor(const xm::Mat4& m, float out[16]);

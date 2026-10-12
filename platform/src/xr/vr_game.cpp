@@ -119,8 +119,11 @@ bool sInvertCamera = true;    // the right stick's turns swapped (invert_camera)
 bool sSmoothTurn = true;      // the right stick turns the diorama smoothly, not in steps (smooth_turn)
 // The stick's smooth turn (rad/s) and when it was set (host ns): input comes
 // from the frame loop's thread, the rig is updated on the game's.
-std::atomic<float> sStickTurn{0.0f};
+std::atomic<float> sStickTurn{0.0f}, sStickTilt{0.0f};
 std::atomic<int64_t> sStickTurnAt{0};
+float sTurnSpeed = 120.0f;    // top speed of the stick's turn, degrees a second (turn_speed)
+float sTiltSpeed = 60.0f;     // top speed of the stick's tilt, degrees a second (tilt_speed)
+bool sLeftHanded = false;     // the left controller points and the right hand's controls swap (left_handed)
 // The room around the giant screen instead of the dark (passthrough): the
 // eye images are see-through where nothing is drawn, over the headset's
 // passthrough layer (xr_app.cpp).
@@ -424,9 +427,9 @@ void publishCullView(const vr::FrameInfo& frame) {
     std::lock_guard<std::mutex> lock(sCullLock);
     float m[12] = {left.x, up.x, fwd.x, p.x, left.y, up.y, fwd.y, p.y, left.z, up.z, fwd.z, p.z};
     memcpy(sCullMtx, m, sizeof(m));
-    sMoveRight = vr::stageDirToWorld(sRig, {1, 0, 0});
-    sMoveUp = vr::stageDirToWorld(sRig, {0, 1, 0});
-    sMoveForward = vr::stageDirToWorld(sRig, {0, 0, -1});
+    sMoveRight = vr::stageDirToWorldLevel(sRig, {1, 0, 0});
+    sMoveUp = vr::stageDirToWorldLevel(sRig, {0, 1, 0});
+    sMoveForward = vr::stageDirToWorldLevel(sRig, {0, 0, -1});
     // Both eyes' field of view plus a margin for head motion before the next
     // game frame is shown.
     sCullTanX = frame.cullTanX * 1.35f;
@@ -547,6 +550,9 @@ vr::Setting sSettings[] = {
          port_skip_set_hold_seconds(x);
      }},
     {"smooth_turn", 0.0f, 1.0f, 0.0f, FLAG(sSmoothTurn)},
+    {"turn_speed", 20.0f, 360.0f, 0.0f, NUMBER(sTurnSpeed)},
+    {"tilt_speed", 10.0f, 180.0f, 0.0f, NUMBER(sTiltSpeed)},
+    {"left_handed", 0.0f, 1.0f, 0.0f, FLAG(sLeftHanded)},
     {"invert_camera", 0.0f, 1.0f, 0.0f, [] { return sInvertCamera ? 1.0f : 0.0f; },
      [](float x) {
          sInvertCamera = x != 0.0f;
@@ -677,13 +683,48 @@ bool snapTurn(int dir) {
 }
 
 bool smoothTurning() { return sSmoothTurn && sVrMode && sRig.valid && !sRigParams.turnWithCamera; }
-void smoothTurn(float x) {
-    // Dead zone 0.15, then a gentle curve (the deflection to the power 1.5)
-    // up to 120 degrees a second.
+bool smoothTilting() { return smoothTurning() && !(gpu::renderer().camera().flags & PORT_GX_CAMERA_POINTER_UI); }
+bool leftHanded() { return sLeftHanded; }
+namespace {
+// Dead zone 0.15, then a gentle curve (the deflection to the power 1.5).
+float stickCurve(float x) {
     float m = fminf(1.0f, fmaxf(0.0f, (fabsf(x) - 0.15f) / 0.85f));
-    float rate = (x < 0.0f ? -1.0f : 1.0f) * powf(m, 1.5f) * 2.0943951f;
-    sStickTurn.store(rate * (sInvertCamera ? -1.0f : 1.0f));
+    return (x < 0.0f ? -1.0f : 1.0f) * powf(m, 1.5f);
+}
+}  // namespace
+void smoothTurn(float x, float y) {
+    const float kRad = 0.017453293f;
+    sStickTurn.store(stickCurve(x) * sTurnSpeed * kRad * (sInvertCamera ? -1.0f : 1.0f));
+    sStickTilt.store(stickCurve(y) * sTiltSpeed * kRad);
     sStickTurnAt.store(port_host_time_ns());
+}
+void dioramaAdjust(float x, float y) {
+    // The stick with the grip held: up raises the diorama (Mario nearer your
+    // eyes), right makes the world bigger.  Saved to the file a moment after
+    // the last change, as the panel does.
+    static int64_t sLastNs = 0, sChangedNs = 0;
+    static bool sUnsaved = false;
+    int64_t now = port_host_time_ns();
+    float dt = sLastNs ? fminf(0.1f, (now - sLastNs) / 1e9f) : 0.0f;
+    sLastNs = now;
+    const Setting* height = findSetting("diorama_height");
+    const Setting* scale = findSetting("diorama_scale");
+    float cy = stickCurve(y), cx = stickCurve(x);
+    if (smoothTurning() && cy != 0.0f && height) {
+        height->set(fminf(1.6f, fmaxf(0.0f, height->get() - cy * 0.4f * dt)));  // m/s at the stop
+        sChangedNs = now;
+        sUnsaved = true;
+    }
+    if (smoothTurning() && cx != 0.0f && scale) {
+        scale->set(fminf(3.0f, fmaxf(0.5f, scale->get() * expf(cx * 0.6f * dt))));  // up to 1.8x a second
+        sChangedNs = now;
+        sUnsaved = true;
+    }
+    if (sUnsaved && now - sChangedNs > 600000000) {
+        sUnsaved = false;
+        saveSetting("diorama_height");
+        saveSetting("diorama_scale");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1154,12 +1195,14 @@ void beginFrame(const FrameInfo& frame) {
         xm::Vec3 prevPivot = sRig.pivot;
         bool stickFresh = port_host_time_ns() - sStickTurnAt.load() < 250000000;  // input stopped: no turn
         sRig.stickTurn = stickFresh && smoothTurning() ? sStickTurn.load() : 0.0f;
+        sRig.tiltOn = smoothTurning();
+        sRig.stickTilt = stickFresh && smoothTilting() ? sStickTilt.load() : 0.0f;
         sStageFromView = updateRig(sRig, sRigParams, r.camera(), dt);
         static const bool sRigLog = getenv("PETARI_RIGLOG") != nullptr;
         if (sRigLog && wasValid && (sRig.snapped || sRig.turnRate > 1.0f)) {
             const float* w = r.camera().watch;
-            port_log("vr: rig %s: watch moved %.0f from the pivot, turn %.2f rad/s, up %.2f %.2f %.2f", sRig.snapped ? "snapped" : "turning",
-                     xm::length(xm::Vec3{w[0], w[1], w[2]} - prevPivot), sRig.turnRate, sRig.up.x, sRig.up.y, sRig.up.z);
+            port_log("vr: rig %s: watch moved %.0f from the pivot, turn %.2f rad/s, up %.2f %.2f %.2f, tilt %.1f deg", sRig.snapped ? "snapped" : "turning",
+                     xm::length(xm::Vec3{w[0], w[1], w[2]} - prevPivot), sRig.turnRate, sRig.up.x, sRig.up.y, sRig.up.z, sRig.pitch * 57.29578f);
         }
         // Comfort vignette while the world turns (0.35 rad/s .. 1.5 rad/s),
         // easing in and out.
