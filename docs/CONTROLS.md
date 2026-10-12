@@ -300,21 +300,26 @@ it (`GameScene.cpp`), so a scene the words miss counts as *Other scenes*.
   and size, the world following Mario's gravity, and the game camera in a
   transit. Off, only turns faster than about 20 degrees a second darken the
   edges, up to full at about 85 degrees a second, as before.
-- **Vignette at slow movement** and **Vignette at fast movement** (60 % and
-  100 % by default): how strong the vignette is at the slowest smooth
+- **Vignette at slow movement** and **Vignette at fast movement** (30 % and
+  50 % by default): how strong the vignette is at the slowest smooth
   movement and at full speed (a turn of 1 radian, about 57 degrees, a
   second); in between it follows the speed. The vignette is a clear circle
   round the middle of your view with the edges darkening outside it, by the
   angle from where you look, so it does not depend on the headset's field of
-  view: at 0 % the circle is 55 degrees across its radius, at 100 % it
-  closes in to 34 degrees (Mario, 25 to 30 degrees below your line of sight,
-  stays clear) and the edges go to black about 30 degrees further out; the
-  percentage is how dark they get. They apply to the stick's turn and tilt,
+  view. Up to 30 % the edges darken more and the circle closes in, from 55
+  degrees across its radius to 34 degrees (Mario, 25 to 30 degrees below
+  your line of sight, stays clear), the edges going to black about 30
+  degrees further out. From 30 % to 100 % it is a tighter tunnel: 50 % has
+  the circle at 28 degrees with the black 26 degrees further out, 100 % at
+  13 degrees with the black 17 degrees further out (Mario darkens there). They apply to the stick's turn and tilt,
   the height and size adjust, the world turning with Mario's gravity and the
   game camera in a transit or cutscene. With *Comfort vignette* off only the
   fast value is used, for turns faster than about 20 degrees a second; 0 on
-  both turns every vignette off. The old `vignette` line of the file is read
-  as the fast value.
+  both turns every vignette off. The scale changed once: a file without a
+  `vignette_scale = 2` line (the panel writes it with the values) has the
+  old scale, and its `vignette`, `vignette_slow` and `vignette_fast` values
+  are multiplied by 0.3 when it is read (an old 100 % is today's 30 %); the
+  old `vignette` line is read as the fast value.
 
 **Display**
 
@@ -374,12 +379,16 @@ diorama_distance = 1.5
 follow_smoothing = 0.12
 turn_smoothing = 0.35
 # Darkening at the edges while the view moves (0 = off, 1 = full)
-# How dark the edges get (0 to 1) at the slowest smooth movement and at full
-# speed (1 radian a second) with comfort_vignette on; with it off, only the
-# fast value, for turns above about 20 degrees a second.  An old `vignette`
-# line is read as vignette_fast.
-vignette_slow = 0.6
-vignette_fast = 1
+# How strong the vignette is (0 to 1; 0.3 is a clear circle of 34 degrees
+# with the edges black, 1 a tunnel of 13 degrees) at the slowest smooth
+# movement and at full speed (1 radian a second) with comfort_vignette on;
+# with it off, only the fast value, for turns above about 20 degrees a
+# second.  vignette_scale = 2 marks these values as being on this scale (a
+# file without it has the old one: its values are multiplied by 0.3 when
+# read).  An old `vignette` line is read as vignette_fast.
+vignette_slow = 0.3
+vignette_fast = 0.5
+vignette_scale = 2
 # Fade out scenery that hides Mario (0 = off)
 cutaway = 1
 # Seconds to hold A to skip a cutscene (0 = never skip)
