@@ -121,11 +121,15 @@ float sStereoFar = 0.95f;     // the farthest things' distance apart on the scre
 float sStereoSize = 0.8f;     // each picture's size relative to the screen's single one (stereo_resolution)
 float sSkipHold = 1.0f;       // seconds A is held to skip a cutscene (skip_hold)
 bool sInvertCamera = true;    // the right stick's turns swapped (invert_camera)
+bool sComfortVignette = true;  // a gentle vignette for every smooth movement of the view (comfort_vignette)
 bool sDioramaTransitions = true;  // launch stars, pipes and arrivals stay in the diorama (diorama_transitions)
 bool sSmoothTurn = true;      // the right stick turns the diorama smoothly, not in steps (smooth_turn)
 // The stick's smooth turn (rad/s) and when it was set (host ns): input comes
 // from the frame loop's thread, the rig is updated on the game's.
 std::atomic<float> sStickTurn{0.0f}, sStickTilt{0.0f};
+std::atomic<bool> sTiltReset{false};                    // the stick's click, for the rig
+std::atomic<float> sAdjustAmount{0.0f};                 // the height / size adjust's deflection (0..1) and when
+std::atomic<int64_t> sAdjustAt{0};
 std::atomic<int64_t> sStickTurnAt{0};
 float sTurnSpeed = 120.0f;    // top speed of the stick's turn, degrees a second (turn_speed)
 float sTiltSpeed = 60.0f;     // top speed of the stick's tilt, degrees a second (tilt_speed)
@@ -572,8 +576,11 @@ vr::Setting sSettings[] = {
     {"follow_smoothing", 0.0f, 10.0f, 0.0f, NUMBER(sRigParams.posHalfLife)},
     {"turn_smoothing", 0.0f, 10.0f, 0.0f, NUMBER(sRigParams.rotHalfLife)},
     {"vignette", 0.0f, 1.0f, 0.0f, NUMBER(sVignetteStrength)},
+    {"comfort_vignette", 0.0f, 1.0f, 0.0f, FLAG(sComfortVignette)},
     {"cutaway", 0.0f, 1.0f, 0.0f, FLAG(sCutawayOn)},
     {"turn_with_camera", 0.0f, 1.0f, 0.0f, FLAG(sRigParams.turnWithCamera)},
+    // 0 smooth, 1 steps, 2 off; the file also takes the words.
+    {"gravity_turns", 0.0f, 2.0f, 0.0f, [] { return (float)sRigParams.gravityTurns; }, [](float x) { sRigParams.gravityTurns = (int)lroundf(x); }},
     {"skip_hold", 0.0f, 10.0f, 0.0f, [] { return sSkipHold; },
      [](float x) {
          sSkipHold = x;
@@ -663,6 +670,15 @@ void loadSettings(const char* path) {
             port_log("%s: foveation = %s", path, text);
             continue;
         }
+        // gravity_turns = smooth | steps | off (or 0 to 2).
+        if (sscanf(line, " gravity_turns = %31[a-z]", text) == 1) {
+            static const char* const kNames[] = {"smooth", "steps", "off"};
+            for (int i = 0; i < 3; i++) {
+                if (!strcmp(text, kNames[i])) sRigParams.gravityTurns = i;
+            }
+            port_log("%s: gravity_turns = %s", path, text);
+            continue;
+        }
         if (sscanf(line, " language = %31[A-Za-z]", text) == 1) {
             port_language_set(text);
             port_log("%s: language = %s", path, text);
@@ -742,6 +758,9 @@ void smoothTurn(float x, float y) {
     sStickTilt.store(stickCurve(y) * sTiltSpeed * kRad);
     sStickTurnAt.store(port_host_time_ns());
 }
+void resetTilt() {
+    if (dioramaShown() && !(gpu::renderer().camera().flags & PORT_GX_CAMERA_POINTER_UI)) sTiltReset.store(true);
+}
 void dioramaAdjust(float x, float y) {
     // The left D-pad with the left grip held: up raises the diorama (Mario
     // nearer your eyes), right makes the world bigger.  Saved to the file a
@@ -754,6 +773,10 @@ void dioramaAdjust(float x, float y) {
     const Setting* height = findSetting("diorama_height");
     const Setting* scale = findSetting("diorama_scale");
     float cy = stickCurve(y), cx = stickCurve(x);
+    if (dioramaShown() && (cx != 0.0f || cy != 0.0f)) {
+        sAdjustAmount.store(fmaxf(fabsf(cx), fabsf(cy)));
+        sAdjustAt.store(now);
+    }
     if (dioramaShown() && cy != 0.0f && height) {
         height->set(fminf(1.6f, fmaxf(0.0f, height->get() - cy * 0.4f * dt)));  // m/s at the stop
         sChangedNs = now;
@@ -1242,16 +1265,34 @@ void beginFrame(const FrameInfo& frame) {
         sRig.stickTurn = stickFresh && smoothTurning() ? sStickTurn.load() : 0.0f;
         sRig.tiltOn = smoothTurning();
         sRig.stickTilt = stickFresh && smoothTilting() ? sStickTilt.load() : 0.0f;
+        if (sTiltReset.exchange(false)) sRig.resetTilt = sRig.relevel = true;
         sStageFromView = updateRig(sRig, sRigParams, r.camera(), dt);
         static const bool sRigLog = getenv("PETARI_RIGLOG") != nullptr;
-        if (sRigLog && wasValid && (sRig.snapped || sRig.turnRate > 1.0f)) {
+        if (sRigLog && (sRig.inTransit || sRig.settle) && wasValid) {
+            // A transit kept in the diorama: where the rig is against the game camera, about 4 times a second.
+            static int sTransitLogged = 0;
+            if (sTransitLogged++ % 15 == 0 || sRig.snapped) {
+                const float* w = r.camera().watch;
+                port_log("vr: rig %s: watch %.0f from the pivot, turn %.2f rad/s, up %.2f %.2f %.2f, tilt %.1f deg, vignette %.2f", sRig.inTransit ? "follows the camera" : "settling",
+                         xm::length(xm::Vec3{w[0], w[1], w[2]} - prevPivot), sRig.turnRate, sRig.up.x, sRig.up.y, sRig.up.z,
+                         (sRig.pitch + sRig.transitPitch) * 57.29578f, sVignette);
+            }
+        } else if (sRigLog && wasValid && (sRig.snapped || sRig.turnRate > 1.0f)) {
             const float* w = r.camera().watch;
             port_log("vr: rig %s: watch moved %.0f from the pivot, turn %.2f rad/s, up %.2f %.2f %.2f, tilt %.1f deg", sRig.snapped ? "snapped" : "turning",
-                     xm::length(xm::Vec3{w[0], w[1], w[2]} - prevPivot), sRig.turnRate, sRig.up.x, sRig.up.y, sRig.up.z, sRig.pitch * 57.29578f);
+                     xm::length(xm::Vec3{w[0], w[1], w[2]} - prevPivot), sRig.turnRate, sRig.up.x, sRig.up.y, sRig.up.z, (sRig.pitch + sRig.transitPitch) * 57.29578f);
         }
-        // Comfort vignette while the world turns (0.35 rad/s .. 1.5 rad/s),
-        // easing in and out.
-        float target = fminf(1.0f, fmaxf(0.0f, (sRig.turnRate - 0.35f) / 1.15f)) * 0.85f * sVignetteStrength;
+        // Comfort vignette while the view moves.  The rate is how fast it
+        // turns (rad/s): the rig's, or the equivalent of the height / size
+        // adjust's deflection, or a floor while a transit's camera drives
+        // it.  comfort_vignette: slight at once (a quarter of the way) and
+        // growing to full at 1.5 rad/s; off: only from 0.35 rad/s on.
+        float rate = sRig.turnRate;
+        if (port_host_time_ns() - sAdjustAt.load() < 250000000) rate = fmaxf(rate, 1.5f * sAdjustAmount.load());
+        if (sRig.inTransit) rate = fmaxf(rate, 0.1f);
+        float amount = sComfortVignette ? (rate > 0.02f ? 0.25f + 0.75f * fminf(1.0f, rate / 1.5f) : 0.0f)
+                                        : fminf(1.0f, fmaxf(0.0f, (rate - 0.35f) / 1.15f));
+        float target = amount * 0.85f * sVignetteStrength;
         sVignette += (target - sVignette) * fminf(1.0f, dt * (target > sVignette ? 12.0f : 4.0f));
         // Grow the cutaway in over ~0.15 s while level geometry hides the
         // player, and out over ~0.3 s once it no longer does.
