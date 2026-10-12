@@ -93,7 +93,9 @@ struct App {
     bool sessionRunning = false;
     bool focused = false;
     bool pausedInGameplay = false;  // focus was lost during ordinary gameplay
+    int64_t focusLostAt = 0;        // host time (ns) focus was lost
     uint32_t dpad = 0;              // D-pad direction held by the right stick
+    bool stickClickHeld = false;    // the right stick's click, for its edge
     bool dpadTurned = false;        // that flick was a snap turn of the diorama, not the D-pad
     bool aimTracked = true;         // the right controller's aim pose is known
     int lastRumble = 0;
@@ -961,7 +963,7 @@ void updateInput(App& a, XrTime time) {
     // Button layout (see docs/CONTROLS.md):
     //   A = jump, right trigger = shoot star bits (B), B, Y or controller shake = spin,
     //   left trigger = crouch (Z), left grip = camera centre (C; the diorama's modifier on the Frame), menu = pause (+),
-    //   X = minus, right stick = D-pad (smooth turning: turns and tilts the diorama), stick click = first-person look (D-pad up).
+    //   X = minus, right stick = D-pad (smooth turning: turns and tilts the diorama), stick click = level the diorama's tilt.
     if (getBool(a, a.aAction)) pad.buttons |= W_A;
     if (getFloat(a, a.triggerAction, a.handPath[hm]) > 0.5f) pad.buttons |= W_B;
     if (a.wiiBAction != XR_NULL_HANDLE && getBool(a, a.wiiBAction)) pad.buttons |= W_B;
@@ -979,7 +981,13 @@ void updateInput(App& a, XrTime time) {
     // B or shake.
     if (getBool(a, a.menuAction)) pad.buttons |= W_PLUS;
     if (getBool(a, a.xAction)) pad.buttons |= W_MINUS;
-    if (getBool(a, a.stickClickAction, a.handPath[hm])) pad.buttons |= W_UP;
+    // The stick's click levels the diorama's tilt (once per click); first
+    // person is the D-pad's up.
+    {
+        bool click = getBool(a, a.stickClickAction, a.handPath[hm]);
+        if (click && !a.stickClickHeld) vr::resetTilt();
+        a.stickClickHeld = click;
+    }
     // Right stick: the D-pad.  In the diorama left/right turn it in steps
     // round Mario (a snap turn behind a blink; its yaw no longer follows the
     // game camera); elsewhere they turn the game camera.  With the
@@ -990,7 +998,7 @@ void updateInput(App& a, XrTime time) {
     // With smooth turning (smooth_turn) the stick turns and tilts the diorama
     // in proportion to its deflection instead (vr::smoothTurn), and is no
     // D-pad there (up and down stay the D-pad on a menu's list); first person
-    // is then the Frame's D-pad up or the stick's click.
+    // is then the Frame's D-pad up.
     XrVector2f look = getVec2(a, a.lookAction, a.handPath[hm]);
     float lx = fabsf(look.x), ly = fabsf(look.y);
     const bool smooth = vr::smoothTurning();
@@ -1187,7 +1195,10 @@ void updateInput(App& a, XrTime time) {
 }
 
 // The game only runs while the session has input focus.  Coming back to
-// gameplay opens the game's pause menu, as the Wii's HOME menu did.
+// gameplay opens the game's pause menu, as the Wii's HOME menu did, but only
+// after a real absence: SteamVR sometimes takes focus for a few milliseconds
+// (FOCUSED -> VISIBLE -> SYNCHRONIZED and straight back), and opening the
+// menu then looked like the settings panel opening by itself.
 void updateFocus(App& a) {
     bool focused = a.state == XR_SESSION_STATE_FOCUSED;
     if (focused == a.focused) {
@@ -1197,6 +1208,7 @@ void updateFocus(App& a) {
     if (!focused) {
         uint32_t flags = gpu::renderer().camera().flags;
         a.pausedInGameplay = (flags & PORT_GX_CAMERA_DIORAMA) && !(flags & PORT_GX_CAMERA_POINTER_UI);
+        a.focusLostAt = port_host_time_ns();
         if (a.sessionRunning) {
             for (int h = 0; h < 2; h++) {
                 XrHapticActionInfo hi{XR_TYPE_HAPTIC_ACTION_INFO};
@@ -1207,7 +1219,12 @@ void updateFocus(App& a) {
         }
         a.lastRumble = 0;
     } else if (a.pausedInGameplay) {
-        port_input_request_pause();  // back from the system menu: the game's pause menu
+        int64_t away = port_host_time_ns() - a.focusLostAt;
+        if (away > 1000000000ll) {
+            port_input_request_pause();  // back from the system menu: the game's pause menu
+        } else {
+            port_log("vr: focus back after %.0f ms: no pause menu", away / 1e6);
+        }
         a.pausedInGameplay = false;
     }
     port_set_paused(!focused);

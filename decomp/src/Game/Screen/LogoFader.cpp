@@ -25,6 +25,9 @@ LogoFader::LogoFader(const char* pName) : LayoutActor(pName, true), _20(true), m
 
 void LogoFader::draw() const {
     if (mRate > RATE_MIN) {
+#ifdef TARGET_PC
+        port_vr_wipe(0, mRate, 0x000000);  // the VR view around the screen fades too
+#endif
         GXSetColorUpdate(GX_TRUE);
         GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_NOOP);
 

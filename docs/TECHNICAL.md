@@ -383,7 +383,12 @@ In the diorama:
   camera pulls back to show the whole planet, which put the viewer inside
   it.
 - Screen wipes (fades, and the ring that closes on Mario) cover the whole
-  view instead of the HUD panel.
+  view instead of the HUD panel.  On the virtual screen and the giant
+  screen the game draws the wipe into the picture, so the view around the
+  screen follows it too (the eye image's clear colour goes to the wipe's
+  colour and opaque), and the panels, laser and skip ring dim with it.  A
+  wipe that closed all the way holds through the blank frames of a loading
+  scene (up to four seconds, until the game draws a wipe again).
 - Water and heat haze sample a capture of the screen where each surface
   lands on it. The renderer recognises those texture coordinates (they
   match the game camera's projection) and uses the eye's screen position
@@ -459,6 +464,21 @@ In the diorama:
   the file's loader and the settings panel (`vr_settings.cpp`), whose four
   tabs are tables of rows over those keys (a switch, a stepper or a
   slider). The panel writes only the lines of the settings changed on it.
+- Transits and arrivals in the diorama (`diorama_transitions`):
+  `GameScene::draw3D` keeps `PORT_GX_CAMERA_DIORAMA` during a transit
+  (`port_vr_transit_begin`) and the galaxy's opening scenes, and adds the
+  camera hint 64 (`kCameraTransit` there and in `vr_rig.h`; not in
+  `port/compat.h`, which every decomp file includes, so the two values must
+  be kept equal by hand and apart from the flags 1 to 32 there) and leaves
+  out `CENTRE_PLAYER`. `updateRig` then takes the game camera's up, watch
+  point, yaw and elevation, with no blink, and hands back to Mario's up
+  afterwards; `gravity_turns` (smooth, steps, off) decides how that hand-back
+  and every later change of his up is made (`vr_rig.cpp`). The same flag
+  carries the demo system's cutscenes (`MR::isDemoActive`, by kind from the
+  demo's name: `classifyDemo` in `GameScene.cpp`, `cutscene_*` settings) and
+  an event camera far from Mario; the THP movies never reach `draw3D`. After
+  a scene the rig keeps its yaw and folds the scene's tilt into the player's
+  own (`transitPitch` into `pitch`) instead of easing back.
 
 ## Development tools
 
@@ -496,6 +516,7 @@ controlled with environment variables:
 | `PETARI_XRSIM_LAYERS=1` | In `PETARI_XRSIM`, send the HUD and settings panels out as UI layers as the headset does, and composite their images into the captures in the compositor's stead |
 | `PETARI_XRSIM_TURN="t:dir;..."` | In `PETARI_XRSIM`, snap-turn the diorama t s after boot (the right stick in the headset; dir 1 right, -1 left) |
 | `PETARI_XRSIM_STICK="t0-t1:x[,y[,g]];..."` | In `PETARI_XRSIM`, hold the view stick at x, y (-1..1) from t0 to t1 s after boot, the smooth turn and tilt (`smooth_turn`); with g 1 it is the left D-pad with the left grip instead (diorama height and size); `PETARI_RIGLOG=1` shows the turn rate and the tilt |
+| `PETARI_XRSIM_TILTRESET="t;..."` | In `PETARI_XRSIM`, click the right stick at t s after boot (levels the diorama's tilt) |
 | `PETARI_XRSIM_STEPS=n`, `PETARI_XRSIM_SMALL=1`, `PETARI_RIGLOG=1` | Display frames simulated per `PETARI_XRSIM` capture (default 40; 1 with `PETARI_XRSIM_FPS` for a continuous sequence); save only the left eye at half size; log diorama rig jumps and fast turns |
 | `PETARI_ASYNC=1`, `PETARI_NOCOPY=1` | Use the worker-thread renderer path; perf experiments |
 | `PETARI_DLCHECK=1`, `PETARI_NODLCACHE=1` | Decode every draw the display list cache supplies as well and log any difference; turn the cache off |

@@ -57,6 +57,46 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
     if (xm::length(up) < 0.5f) {
         up = xm::normalize(camUp);
     }
+    // A transit or an arrival kept in the diorama (diorama_transitions): the
+    // game camera drives the view as the screen would show it: its up, its
+    // watch point as the pivot, its yaw and its pitch, all smoothed.  When it
+    // ends the pivot returns to Mario and the up settles to his without
+    // blinks; the yaw and the tilt stay as the scene left them.
+    const bool transit = (cam.flags & kCameraTransit) != 0;
+    if (!rig.valid) {
+        rig.inTransit = rig.settle = false;
+        rig.resetT = -1.0f;
+        rig.transitPitch = 0.0f;
+    }
+    if (transit) {
+        xm::Vec3 wu = xm::normalize(vec(cam.watchUp));
+        if (xm::length(wu) > 0.5f) up = wu;
+    }
+    // gravity_turns: smooth hands back by gliding to Mario's up; steps and
+    // off keep the camera's up until the angle to Mario's up says he landed
+    // elsewhere, then re-level in one step (behind a blink, below).
+    const bool smoothGravity = params.gravityTurns == 0;
+    const bool handBack = rig.valid && rig.inTransit && !transit;
+    // The view the scene set up stays: its yaw is the rig's already, and its
+    // tilt becomes the player's own (within the usual range, never from
+    // below Mario's horizon), instead of easing back to the old one.
+    if (handBack && rig.tiltOn) {
+        const float baseElevation = atan2f(-params.anchor.y, -params.anchor.z);
+        const float hi = fminf(params.maxPitch, 1.5359f - baseElevation);
+        rig.pitch = fminf(hi, fmaxf(params.minPitch, rig.pitch + rig.transitPitch));  // the view as it is, no jump
+        rig.transitPitch = 0.0f;
+        rig.floorLeft = 2.0f;
+    }
+    if (handBack && smoothGravity) {
+        rig.settle = true;
+        rig.settleLeft = 3.0f;
+    }
+    rig.inTransit = transit;
+    if (rig.settle) {
+        rig.settleLeft -= dt;
+        if (rig.settleLeft <= 0.0f || acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(rig.up, up)))) < 0.1f) rig.settle = false;
+    }
+    const bool quiet = transit || rig.settle;  // no blink for a change of up: it glides
     // The game camera's facing along the ground: the yaw the diorama takes on
     // a cut.  The more the camera looks down, the more its up vector (the top
     // of the picture) says it: seen from straight above, as over the Dino
@@ -96,12 +136,25 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
     // caller fades from black), not as a turn of the whole world.  Sudden:
     // away from where it was a moment ago; running round a small planet turns
     // it steadily, and the world turns with it smoothly.
-    bool flip = rig.valid && acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(rig.recentUp, up)))) > params.gravitySnapAngle;
-    // So does an up trailing Mario's very far (thrown round a small planet).
-    flip = flip || (rig.valid && acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(rig.up, up)))) > params.maxUpLag);
+    const float upAngle = rig.valid ? acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(rig.up, up)))) : 0.0f;
+    bool flip = false;
+    if (smoothGravity) {
+        flip = rig.valid && acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(rig.recentUp, up)))) > params.gravitySnapAngle;
+        // So does an up trailing Mario's very far (thrown round a small planet).
+        flip = flip || upAngle > params.maxUpLag;
+    } else {
+        // Steps: the world holds still until Mario's up is gravityStepAngle
+        // away (this covers a sudden jump of gravity too).  Off: only after a
+        // transit that landed on another planet, and on the stick's click.
+        flip = params.gravityTurns == 1 && upAngle > params.gravityStepAngle;
+        flip = flip || (handBack && upAngle > params.gravityStepAngle);
+        flip = flip || (rig.relevel && upAngle > 0.02f);
+    }
+    rig.relevel = false;
+    flip = flip && !quiet;
     bool snapTurn = rig.valid && rig.pendingTurn != 0.0f;
     rig.snapped = cut || flip || snapTurn;
-    rig.recentUp = rig.snapped ? up : xm::normalize(rig.recentUp + (up - rig.recentUp) * blend(dt, 0.07f));
+    rig.recentUp = rig.snapped || quiet ? up : xm::normalize(rig.recentUp + (up - rig.recentUp) * blend(dt, 0.07f));
     if (cut) {
         if (centre) {
             target = target + up * rig.lift;
@@ -129,7 +182,8 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
         xm::Vec3 d = target - rig.pivot;
         xm::Vec3 along = flatten(d, rig.up);
         float n = xm::length(along);
-        xm::Vec3 goal = rig.pivot + (d - along) + (n > params.followDeadZone ? along * (1.0f - params.followDeadZone / n) : xm::Vec3{0, 0, 0});
+        const float deadZone = transit ? 0.0f : params.followDeadZone;  // the camera's framing, exactly
+        xm::Vec3 goal = rig.pivot + (d - along) + (n > deadZone ? along * (1.0f - deadZone / n) : xm::Vec3{0, 0, 0});
         rig.pivot = rig.pivot + (goal - rig.pivot) * blend(dt, params.posHalfLife);
         // The up follows Mario's gently.  While he runs round a small planet
         // away from the player it trails behind, and the eye (placed from the
@@ -149,14 +203,20 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
         // Catching up never turns the world faster than maxCatchUpRate.
         float step = acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(rig.up, nextUp))));
         float maxStep = fmaxf(params.maxCatchUpRate * dt, acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(rig.up, xm::normalize(rig.up + (up - rig.up) * blend(dt, params.rotHalfLife)))))));
+        // Following the camera in a transit and handing back after it turn
+        // the world gently: 1.5 and 1.2 rad/s at most.
+        if (rig.settle || transit) {
+            maxStep = (rig.settle ? 1.2f : 1.5f) * dt;
+            catchUp = true;
+        }
         if (catchUp && step > maxStep && step > 1e-6f) {
             nextUp = turn(rig.up, xm::normalize(xm::cross(rig.up, nextUp)), maxStep);
         }
-        rig.up = nextUp;
+        if (transit || smoothGravity) rig.up = nextUp;  // else it holds still (gravity_turns)
         // The yaw goes along with the up as it turns; it follows the game
         // camera only in the old way (turn_with_camera).
         xm::Vec3 f = xm::rotate(rotationBetween(prevUp, rig.up), rig.forward);
-        if (params.turnWithCamera) {
+        if (params.turnWithCamera || transit) {
             f = f + (fwd - f) * blend(dt, params.rotHalfLife);
         }
         f = flatten(f, rig.up);
@@ -178,17 +238,47 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
     // The stick's tilt: the world tipped about Mario, within limits (the
     // eye's elevation over his horizon, from the anchor, stays under 88 deg).
     {
-        float prevPitch = rig.pitch;
+        float prevPitch = rig.pitch + rig.transitPitch;
         float baseElevation = atan2f(-params.anchor.y, -params.anchor.z);
         float top = fminf(params.maxPitch, 1.5359f - baseElevation);
-        if (rig.tiltOn) {
+        if (rig.resetTilt) {
+            rig.resetTilt = false;
+            rig.resetT = 0.0f;
+            rig.resetFrom = rig.pitch;
+        }
+        if (rig.stickTilt != 0.0f || !rig.tiltOn) rig.resetT = -1.0f;
+        if (rig.resetT >= 0.0f) {
+            // Half a second, eased at both ends.
+            rig.resetT += dt / 0.5f;
+            float t = fminf(1.0f, rig.resetT);
+            rig.pitch = rig.resetFrom * (1.0f - t * t * (3.0f - 2.0f * t));
+            if (t >= 1.0f) rig.resetT = -1.0f;
+        } else if (rig.tiltOn) {
             rig.pitch += rig.stickTilt * dt;
+            // A scene that looked up at Mario from below leaves the view
+            // there; for two seconds it rises (20 degrees a second, unless the
+            // stick tilts) until the eye is above his horizon again.
+            if (rig.floorLeft > 0.0f) {
+                rig.floorLeft -= dt;
+                const float lo = params.minEyeElevation - baseElevation;
+                if (rig.stickTilt == 0.0f && rig.pitch < lo) rig.pitch += fminf(lo - rig.pitch, 0.35f * dt);
+            }
         } else {
             float step = 1.0472f * dt;  // back to level at 60 deg/s
             rig.pitch = fabsf(rig.pitch) <= step ? 0.0f : rig.pitch - (rig.pitch > 0.0f ? step : -step);
         }
         rig.pitch = fminf(top, fmaxf(params.minPitch, rig.pitch));
-        if (dt > 0.0f) rig.turnRate = fmaxf(rig.turnRate, fabsf(rig.pitch - prevPitch) / dt);
+        // A transit tips the world to the height the game camera looks from
+        // (its elevation over the horizon against the diorama's own), and
+        // back to nothing afterwards.
+        float wantTilt = 0.0f;
+        if (transit) {
+            float camElevation = asinf(fminf(1.0f, fmaxf(-1.0f, xm::dot(camBack, rig.up))));
+            wantTilt = camElevation - baseElevation;
+        }
+        rig.transitPitch += (wantTilt - rig.transitPitch) * blend(dt, transit ? params.rotHalfLife : 2.0f * params.rotHalfLife);  // back more gently
+        rig.transitPitch = fminf(top, fmaxf(params.minPitch, rig.pitch + rig.transitPitch)) - rig.pitch;
+        if (dt > 0.0f) rig.turnRate = fmaxf(rig.turnRate, fabsf(rig.pitch + rig.transitPitch - prevPitch) / dt);
     }
 
     // Stage-from-world: world axes (right, up, back) -> stage X, Y, Z, scaled,
@@ -222,8 +312,9 @@ static void rigAxes(const RigState& rig, xm::Vec3* r, xm::Vec3* u, xm::Vec3* b, 
     *r = xm::normalize(xm::cross(rig.forward, rig.up));
     *u = rig.up;
     *b = rig.forward * -1.0f;
-    if (tilted && rig.pitch != 0.0f) {
-        float c = cosf(rig.pitch), s = sinf(rig.pitch);
+    float pitch = rig.pitch + rig.transitPitch;
+    if (tilted && pitch != 0.0f) {
+        float c = cosf(pitch), s = sinf(pitch);
         xm::Vec3 up = *u * c - *b * s;
         *b = *b * c + *u * s;
         *u = up;

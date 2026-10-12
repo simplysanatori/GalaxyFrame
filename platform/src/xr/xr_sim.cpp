@@ -188,6 +188,19 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
             }
             vr::dioramaAdjust(grip > 0.5f ? held : 0.0f, grip > 0.5f ? heldY : 0.0f);
         }
+        // PETARI_XRSIM_TILTRESET="t;...": the right stick's click at t s after boot.
+        if (const char* spec = getenv("PETARI_XRSIM_TILTRESET")) {
+            const char* t0env = getenv("PETARI_T0_MS");
+            double now = (port_host_time_ns() / 1000000 - (t0env ? atoll(t0env) : 0)) / 1000.0;
+            static double sClicked = -1.0;
+            for (const char* p = spec; p && *p; p = strchr(p, ';') ? strchr(p, ';') + 1 : nullptr) {
+                double t = atof(p);
+                if (now >= t && sClicked < t) {
+                    sClicked = t;
+                    vr::resetTilt();
+                }
+            }
+        }
         int64_t t0 = 0, t1 = 0;
         if (sTiming) {
             gfx.finish();
