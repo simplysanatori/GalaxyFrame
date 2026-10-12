@@ -29,6 +29,8 @@
 #include "Game/System/GalaxyMapController.hpp"
 #include "Game/System/GameSequenceFunction.hpp"
 #include "Game/Camera/CameraDirector.hpp"
+#include "Game/Demo/DemoDirector.hpp"
+#include "Game/Demo/DemoFunction.hpp"
 #ifdef TARGET_PC
 #include "Game/Camera/CameraHolder.hpp"
 #include "Game/Camera/CameraManEvent.hpp"
@@ -644,13 +646,159 @@ bool GameScene::isPlayMovie() const {
 }
 
 #ifdef TARGET_PC
-// diorama_transitions (vr_game.cpp).  Declared here, not in port/compat.h:
-// every decomp file includes that header, so a change there rebuilds it all.
+// diorama_transitions and the cutscene_* settings (vr_game.cpp).  Declared
+// here, not in port/compat.h: every decomp file includes that header, so a
+// change there rebuilds it all.
 extern "C" int port_vr_diorama_transitions(void);
-// The camera hint "a transit or arrival kept in the diorama".  It continues
-// the PORT_GX_CAMERA_* list in port/compat.h (1, 2, 4, 8, 16, 32 are taken)
-// and must equal PORT_GX_CAMERA_TRANSIT in platform/src/xr/vr_renderer.h.
+extern "C" int port_vr_cutscene_diorama(int type);
+// The camera hint "a transit, arrival or cutscene kept in the diorama".  It
+// continues the PORT_GX_CAMERA_* list in port/compat.h (1, 2, 4, 8, 16, 32
+// are taken) and must equal kCameraTransit in platform/src/xr/vr_rig.h.
 static const u32 kCameraTransit = 64;
+
+// The kinds of cutscene the VR settings tell apart (cutscene_* in
+// petari_vr.ini, in this order in vr_game.cpp's table).  A demo's kind comes
+// from its name (DemoDirector::getCurrentDemoName, Shift-JIS): the words
+// below, the first group that has one deciding.  Scenes that are no demo:
+// kCutsceneEventCamera, the camera showing something far from Mario.
+enum {
+    kCutsceneStars,
+    kCutsceneBosses,
+    kCutsceneObservatory,
+    kCutsceneStorybook,
+    kCutsceneFriends,
+    kCutsceneMario,
+    kCutsceneOther,
+    kCutsceneEventCamera,
+    kCutsceneKinds
+};
+static const char* const kCutsceneNames[kCutsceneKinds] = {"stars", "bosses", "observatory", "storybook", "friends", "mario", "other", "event camera"};
+
+// Word lists (Shift-JIS): Rosalina's storybook; bosses and enemies (Dino
+// Piranha, Bowser, Kamella, Gobblegut, the Tomb Spider, ...: introductions,
+// damage, defeats); Power Stars and Grand Stars appearing and returning;
+// the Comet Observatory (Rosalina, the Toad Brigade captain, domes,
+// Luigi, launching); Mario's transformations; Lumas, rabbits, penguins and
+// other characters.  Anything else is a scene in the level (doors, cages,
+// things appearing).
+static const char* const kStoryBook[] = {
+    "\x8a\x47\x96\x7b",
+    "\x98\x4e\x93\xc7",
+    nullptr};
+static const char* const kBossWords[] = {
+    "\x83\x7b\x83\x58",
+    "\x83\x68\x83\x68\x83\x8a\x83\x85\x83\x45",
+    "\x83\x66\x83\x42\x83\x6d\x83\x70\x83\x62\x83\x4e\x83\x93",
+    "\x83\x4e\x83\x62\x83\x70",
+    "\x83\x81\x83\x89\x83\x4c\x83\x93",
+    "\x83\x4a\x83\x81\x83\x62\x83\x4e",
+    "\x83\x67\x83\x44\x81\x5b\x83\x80\x83\x58\x83\x70\x83\x43\x83\x5f\x81\x5b",
+    "\x83\x60\x83\x83\x83\x93\x83\x58",
+    "\x83\x5f\x83\x81\x81\x5b\x83\x57",
+    "\x93\x7b\x82\xe8",
+    "\x83\x70\x83\x8f\x81\x5b\x83\x41\x83\x62\x83\x76",
+    "\x8a\x4b\x92\x69\x82\xcc\x90\xed\x82\xa2",
+    "\x83\x41\x83\x43\x83\x72\x81\x5b\x83\x7d\x81\x5b",
+    "\x83\x49\x83\x49\x83\x80\x83\x43\x83\x80\x83\x43",
+    "\x90\xf9\x89\xf4",
+    "\x8e\x80\x96\x53",
+    "\x89\xf1\x90\xed\x8f\x49\x97\xb9",
+    "\x83\x51\x81\x5b\x83\x67\x83\x49\x81\x5b\x83\x76\x83\x93",
+    "\x8a\xae\x91\x53\x94\x6a\x89\xf3",
+    "\x83\x4a\x83\x76\x83\x5a\x83\x8b\x94\x6a\x89\xf3",
+    nullptr};
+static const char* const kStarWords[] = {
+    "\x83\x70\x83\x8f\x81\x5b\x83\x58\x83\x5e\x81\x5b",
+    "\x83\x4f\x83\x89\x83\x93\x83\x68\x83\x58\x83\x5e\x81\x5b",
+    "\x83\x58\x83\x5e\x81\x5b\x8f\x6f\x8c\xbb",
+    "\x83\x58\x83\x5e\x81\x5b\x8b\x41\x8a\xd2",
+    "\x83\x58\x83\x5e\x81\x5b\x95\x9c\x8a\x88",
+    "\x83\x7e\x83\x6a\x91\xbe\x97\x7a",
+    nullptr};
+static const char* const kObservatoryWords[] = {
+    "\x83\x8d\x83\x5b\x83\x62\x83\x5e",
+    "\x83\x68\x81\x5b\x83\x80",
+    "\x8f\xf3\x8b\xb5\x90\xe0\x96\xbe",
+    "\x89\xf0\x90\xe0",
+    "\x83\x8c\x83\x4e\x83\x60\x83\x83\x81\x5b",
+    "\x83\x6f\x83\x67\x83\x89\x81\x5b",
+    "\x83\x8b\x83\x43\x81\x5b\x83\x57",
+    "\x83\x47\x83\x73\x83\x8d\x81\x5b\x83\x4f",
+    "\x93\x56\x95\xb6",
+    "\x83\x4d\x83\x83\x83\x89\x83\x4e\x83\x56\x81\x5b\x88\xda\x93\xae",
+    "\x83\x7d\x83\x62\x83\x76\x95\x5c\x8e\xa6",
+    "\x8d\x82\x98\x4f",
+    "\x83\x5a\x81\x5b\x83\x75",
+    "\x83\x58\x83\x73\x83\x93\x83\x68\x83\x89\x83\x43\x83\x6f",
+    "\x94\xf2\x82\xd1\x8f\x6f",
+    "\x83\x4c\x83\x83\x83\x58\x83\x67\x93\xfc\x82\xea\x8a\xb7\x82\xa6",
+    nullptr};
+static const char* const kMarioWords[] = {
+    "\x83\x7d\x83\x8a\x83\x49",
+    nullptr};
+static const char* const kFriendWords[] = {
+    "\x83\x60\x83\x52",
+    "\x83\x45\x83\x54\x83\x4d",
+    "\x83\x79\x83\x93\x83\x4d\x83\x93",
+    "\x89\xef\x98\x62",
+    "\x82\xda\x82\xe2\x82\xab",
+    "\x89\x79\x8c\xa9",
+    "\x8d\xc4\x92\xa7\x90\xed",
+    "\x83\x8c\x81\x5b\x83\x58",
+    "\x95\xdf\x82\xdc\x82\xe8",
+    "\x93\xa6\x91\x96",
+    "\x95\xcf\x90\x67",
+    "\x8f\x89\x8f\x6f\x95\x5c\x8e\xa6",
+    "\x83\x53\x83\x7e\x91\x7c\x8f\x9c",
+    "\x83\x58\x83\x73\x83\x93\x83\x51\x83\x62\x83\x67",
+    "\x83\x4c\x83\x6d\x83\x73\x83\x49",
+    nullptr};
+
+static bool sjisContains(const char* text, const char* word) {
+    size_t n = strlen(word);
+    for (const char* p = text; *p; ) {
+        if (strncmp(p, word, n) == 0) {
+            return true;
+        }
+        u8 c = (u8)*p;
+        p += ((c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC)) && p[1] ? 2 : 1;  // whole characters only
+    }
+    return false;
+}
+
+static bool sjisContainsAny(const char* text, const char* const* words) {
+    for (int i = 0; words[i]; i++) {
+        if (sjisContains(text, words[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int classifyDemo(const char* name) {
+    if (name == nullptr) {
+        return kCutsceneOther;
+    }
+    if (sjisContainsAny(name, kStoryBook)) {
+        return kCutsceneStorybook;
+    }
+    if (sjisContainsAny(name, kBossWords)) {
+        return kCutsceneBosses;
+    }
+    if (sjisContainsAny(name, kStarWords)) {
+        return kCutsceneStars;
+    }
+    if (sjisContainsAny(name, kObservatoryWords)) {
+        return kCutsceneObservatory;
+    }
+    if (sjisContainsAny(name, kMarioWords)) {
+        return kCutsceneMario;
+    }
+    if (sjisContainsAny(name, kFriendWords)) {
+        return kCutsceneFriends;
+    }
+    return kCutsceneOther;
+}
 #endif
 
 void GameScene::draw3D() const {
@@ -707,14 +855,41 @@ void GameScene::draw3D() const {
         // work too: shown on the screen, the diorama flew the whole world
         // around the player.
         bool arriving = isNerve(GET_NERVE(GameScene, GameSceneScenarioOpeningCamera)) || isNerve(GET_NERVE(GameScene, GameSceneScenarioStarter));
-        // With diorama_transitions the transit and the arrival stay in the
-        // diorama (kCameraTransit): it follows the game camera's
-        // framing instead of centring Mario.  Cutscenes, the file select, the
-        // dome and first person stay flat.
-        bool keepTransit = (transit || arriving) && port_vr_diorama_transitions() != 0;
-        if (!MR::isStageFileSelect() && !MR::isDemoActive() && !domeSelect && !MR::isFirstPersonCamera() && ((!transit && !arriving) || keepTransit)) {
+        // The game camera shows something far from Mario (a door opening
+        // elsewhere): an event camera watching a point far from him.
+        static bool sShowingElsewhere = false;
+        if (MR::isExistMario()) {
+            CameraDirector* director = MR::getCameraDirector();
+            bool eventCamera = director->getCurrentCameraMan() == director->mCameraManEvent;
+            f32 watchDistance = pose->mWatchPos.distance(*MR::getPlayerCenterPos());
+            sShowingElsewhere = eventCamera && watchDistance > (sShowingElsewhere ? 1500.0f : 2500.0f);
+        }
+        // What the game shows now, and whether the diorama keeps it: a transit
+        // or an arrival (diorama_transitions), a cutscene of the demo system
+        // (cutscene_* by its kind), or the camera elsewhere.  Kept, the
+        // diorama follows the game camera (kCameraTransit): its angles and
+        // framing, the world swinging with it, and afterwards it carries on
+        // from the view the scene left.  Not kept: the flat screen.  Movies
+        // (THP) never get here (isPlayMovie), the file select, the dome's
+        // galaxy choice and first person stay flat.
+        const bool demo = MR::isDemoActive();
+        int cutsceneKind = -1;
+        bool keep = true, scripted = false;
+        if (transit || arriving) {
+            scripted = true;
+            keep = port_vr_diorama_transitions() != 0;
+        } else if (demo) {
+            cutsceneKind = classifyDemo(DemoFunction::getDemoDirector()->getCurrentDemoName());
+            scripted = true;
+            keep = port_vr_cutscene_diorama(cutsceneKind) != 0;
+        } else if (sShowingElsewhere) {
+            cutsceneKind = kCutsceneEventCamera;
+            scripted = true;
+            keep = port_vr_cutscene_diorama(cutsceneKind) != 0;
+        }
+        if (!MR::isStageFileSelect() && !domeSelect && !MR::isFirstPersonCamera() && keep) {
             flags |= PORT_GX_CAMERA_DIORAMA;
-            if (keepTransit) {
+            if (scripted) {
                 flags |= kCameraTransit;
             }
         }
@@ -743,11 +918,6 @@ void GameScene::draw3D() const {
             // watching a point far from him (a door opening elsewhere).  An
             // event camera near him, like the one on the Dino Piranha after
             // each hit, still centres him: the diorama shows that anyway.
-            static bool sShowingElsewhere = false;
-            CameraDirector* director = MR::getCameraDirector();
-            bool eventCamera = director->getCurrentCameraMan() == director->mCameraManEvent;
-            f32 watchDistance = pose->mWatchPos.distance(*player);
-            sShowingElsewhere = eventCamera && watchDistance > (sShowingElsewhere ? 1500.0f : 2500.0f);
             if (!sShowingElsewhere && !isNerve(GET_NERVE(GameScene, GameSceneScenarioOpeningCamera)) && !(flags & kCameraTransit)) {
                 flags |= PORT_GX_CAMERA_CENTRE_PLAYER;
             }
@@ -777,11 +947,12 @@ void GameScene::draw3D() const {
         port_gx_camera(cam);
         // The presentation hints as they change, for the log.
         static s32 sLoggedHints = -1;
-        s32 hints = (flags & (PORT_GX_CAMERA_DIORAMA | PORT_GX_CAMERA_POINTER_UI)) | (MR::isDemoActive() ? 0x10000 : 0);
+        s32 hints = (flags & (PORT_GX_CAMERA_DIORAMA | PORT_GX_CAMERA_POINTER_UI)) | (MR::isDemoActive() ? 0x10000 : 0) | ((cutsceneKind + 1) << 20);
         if (hints != sLoggedHints) {
             sLoggedHints = hints;
-            port_log("vr hints: %s, pointer %s (mode %d)%s", (flags & PORT_GX_CAMERA_DIORAMA) ? "diorama" : "flat screen",
-                     (flags & PORT_GX_CAMERA_POINTER_UI) ? "on menus" : "in the world", (int)pointerMode, MR::isDemoActive() ? ", cutscene" : "");
+            port_log("vr hints: %s, pointer %s (mode %d)%s%s%s", (flags & PORT_GX_CAMERA_DIORAMA) ? "diorama" : "flat screen",
+                     (flags & PORT_GX_CAMERA_POINTER_UI) ? "on menus" : "in the world", (int)pointerMode, MR::isDemoActive() ? ", cutscene" : "",
+                     cutsceneKind >= 0 ? ", " : "", cutsceneKind >= 0 ? kCutsceneNames[cutsceneKind] : "");
         }
     }
 #endif

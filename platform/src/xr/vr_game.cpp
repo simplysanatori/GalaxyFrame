@@ -91,7 +91,10 @@ vr::RigParams sRigParams;
 bool sCutawayTest = false;
 // Comfort settings (see vr::loadSettings).
 bool sCutawayOn = true;
-float sVignetteStrength = 1.0f;
+// How dark the vignette gets (0..1, of the 0.85 the picture is darkened by at
+// most): at the slowest smooth movement and at full speed (1 rad/s), with the
+// comfort vignette on; with it off, `fast` is the strength of the old curve.
+float sVignetteSlow = 0.45f, sVignetteFast = 1.0f;
 #ifdef __ANDROID__
 float sResolution = 1.6f;     // largest eye size, relative to the headset's recommended one
 #else
@@ -122,6 +125,10 @@ float sStereoSize = 0.8f;     // each picture's size relative to the screen's si
 float sSkipHold = 1.0f;       // seconds A is held to skip a cutscene (skip_hold)
 bool sInvertCamera = true;    // the right stick's turns swapped (invert_camera)
 bool sComfortVignette = true;  // a gentle vignette for every smooth movement of the view (comfort_vignette)
+// Which kinds of cutscene stay in the diorama (cutscene_*): in the order of
+// the kinds in GameScene.cpp (stars, bosses, observatory, storybook, friends,
+// mario, other, event camera).
+bool sCutsceneDiorama[8] = {true, true, true, true, true, true, true, true};
 bool sDioramaTransitions = true;  // launch stars, pipes and arrivals stay in the diorama (diorama_transitions)
 bool sSmoothTurn = true;      // the right stick turns the diorama smoothly, not in steps (smooth_turn)
 // The stick's smooth turn (rad/s) and when it was set (host ns): input comes
@@ -511,6 +518,8 @@ extern "C" void port_vr_transit_end(const void* host) {
 extern "C" const void* port_vr_transit_host(void) { return sTransitHost.load(); }
 
 extern "C" int port_vr_diorama_transitions(void) { return sDioramaTransitions ? 1 : 0; }
+// 1 when that kind of cutscene (GameScene.cpp's list) stays in the diorama.
+extern "C" int port_vr_cutscene_diorama(int type) { return type >= 0 && type < 8 ? (sCutsceneDiorama[type] ? 1 : 0) : 1; }
 
 extern "C" void port_vr_pointer_touched(unsigned long long id) {
     int64_t now = port_host_time_ns();
@@ -575,7 +584,8 @@ vr::Setting sSettings[] = {
     {"diorama_distance", 0.2f, 20.0f, 0.0f, [] { return -sRigParams.anchor.z; }, [](float x) { sRigParams.anchor.z = -x; }},
     {"follow_smoothing", 0.0f, 10.0f, 0.0f, NUMBER(sRigParams.posHalfLife)},
     {"turn_smoothing", 0.0f, 10.0f, 0.0f, NUMBER(sRigParams.rotHalfLife)},
-    {"vignette", 0.0f, 1.0f, 0.0f, NUMBER(sVignetteStrength)},
+    {"vignette_slow", 0.0f, 1.0f, 0.0f, NUMBER(sVignetteSlow)},
+    {"vignette_fast", 0.0f, 1.0f, 0.0f, NUMBER(sVignetteFast)},
     {"comfort_vignette", 0.0f, 1.0f, 0.0f, FLAG(sComfortVignette)},
     {"cutaway", 0.0f, 1.0f, 0.0f, FLAG(sCutawayOn)},
     {"turn_with_camera", 0.0f, 1.0f, 0.0f, FLAG(sRigParams.turnWithCamera)},
@@ -587,6 +597,14 @@ vr::Setting sSettings[] = {
          port_skip_set_hold_seconds(x);
      }},
     {"diorama_transitions", 0.0f, 1.0f, 0.0f, FLAG(sDioramaTransitions)},
+    {"cutscene_stars", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[0])},
+    {"cutscene_bosses", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[1])},
+    {"cutscene_observatory", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[2])},
+    {"cutscene_storybook", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[3])},
+    {"cutscene_friends", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[4])},
+    {"cutscene_mario", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[5])},
+    {"cutscene_other", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[6])},
+    {"cutscene_camera", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[7])},
     {"smooth_turn", 0.0f, 1.0f, 0.0f, FLAG(sSmoothTurn)},
     {"turn_speed", 20.0f, 360.0f, 0.0f, NUMBER(sTurnSpeed)},
     {"tilt_speed", 10.0f, 180.0f, 0.0f, NUMBER(sTiltSpeed)},
@@ -597,7 +615,7 @@ vr::Setting sSettings[] = {
          port_input_set_camera_inverted(sInvertCamera);
      }},
     {"resolution", 0.5f, 2.0f, 0.0f, NUMBER(sResolution)},
-    {"min_resolution", 0.5f, 1.25f, 0.0f, NUMBER(sMinScale)},
+    {"min_resolution", 0.5f, 2.0f, 0.0f, NUMBER(sMinScale)},
     {"refresh_rate", 60.0f, 144.0f, 0.0f, NUMBER(sRefreshRate)},
     {"foveation", 0.0f, 4.0f, 0.0f, NUMBER(sFoveation)},
     {"foveation_radius", 10.0f, 60.0f, 0.0f, NUMBER(sFoveaRadiusPct)},
@@ -648,6 +666,7 @@ void loadSettings(const char* path) {
         return;
     }
     char line[1280];
+    bool fastInFile = false;
     while (fgets(line, sizeof(line), f)) {
         char key[64];
         float value;
@@ -686,6 +705,12 @@ void loadSettings(const char* path) {
         }
         if (line[0] == '#' || sscanf(line, " %63[a-z_] = %f", key, &value) != 2) {
             continue;
+        }
+        // `vignette` is the old name of vignette_fast; the new key wins when both are there.
+        if (!strcmp(key, "vignette_fast")) fastInFile = true;
+        if (!strcmp(key, "vignette")) {
+            if (fastInFile) continue;
+            strcpy(key, "vignette_fast");
         }
         const Setting* setting = findSetting(key);
         if (!setting) {
@@ -1293,17 +1318,17 @@ void beginFrame(const FrameInfo& frame) {
         // Comfort vignette while the view moves.  The rate is how fast it
         // turns (rad/s): the rig's, or what the stick asks for (so that it
         // shows whatever the rig measured), or the equivalent of the height /
-        // size adjust's deflection, or a floor while a transit's camera
-        // drives it.  comfort_vignette: clearly there at the slowest turn
-        // (0.45 of the way) and full at 1 rad/s; off: only from 0.35 rad/s
-        // on, full at 1.5.
+        // size adjust's deflection (a transit or cutscene camera is the
+        // rig's own motion; a still shot has no vignette).  comfort_vignette:
+        // vignette_slow at the slowest turn, growing to vignette_fast at
+        // 1 rad/s; off: only from 0.35 rad/s on, full (vignette_fast) at 1.5.
         float rate = sRig.turnRate;
         if (stickFresh) rate = fmaxf(rate, fmaxf(fabsf(sRig.stickTurn), fabsf(sRig.stickTilt)));
         if (port_host_time_ns() - sAdjustAt.load() < 250000000) rate = fmaxf(rate, 1.5f * sAdjustAmount.load());
-        if (sRig.inTransit) rate = fmaxf(rate, 0.1f);
-        float amount = sComfortVignette ? (rate > 0.02f ? 0.45f + 0.55f * fminf(1.0f, rate / 1.0f) : 0.0f)
-                                        : fminf(1.0f, fmaxf(0.0f, (rate - 0.35f) / 1.15f));
-        float target = amount * 0.85f * sVignetteStrength;
+        float t = fminf(1.0f, rate / 1.0f);
+        float amount = sComfortVignette ? (rate > 0.02f ? sVignetteSlow + (sVignetteFast - sVignetteSlow) * t : 0.0f)
+                                        : sVignetteFast * fminf(1.0f, fmaxf(0.0f, (rate - 0.35f) / 1.15f));
+        float target = amount * 0.85f;
         sVignette += (target - sVignette) * fminf(1.0f, dt * (target > sVignette ? 12.0f : 4.0f));
         static const bool sVigLog = getenv("PETARI_RIGLOG") != nullptr;
         static int sVigLogged = 0;

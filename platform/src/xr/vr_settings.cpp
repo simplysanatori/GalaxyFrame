@@ -70,6 +70,9 @@ struct Item {
     float (*get)();
     void (*set)(float value);
     void (*fileText)(char* out, size_t size);
+    // A second setting that takes this row's value (and its line in the
+    // file): "Other scenes" also sets the camera shots, "Resolution" the lowest.
+    const char* alsoKey;
 };
 
 bool setting(const char* key) {
@@ -148,6 +151,7 @@ void skipText(float value, char* out, size_t size) {
     }
 }
 
+void percentText(float value, char* out, size_t size) { snprintf(out, size, "%.0f %%", value * 100.0f); }
 bool smoothGravityOn() {
     const vr::Setting* s = vr::findSetting("gravity_turns");
     return !s || s->get() < 0.5f;
@@ -172,49 +176,77 @@ void hintGravity(char* out, size_t size) {
                                           : "Never turns; click the right stick");
 }
 
+bool comfortOn() { return setting("comfort_vignette"); }
+
+// What applies on the Steam Frame only (the Linux build) is left out there:
+// the headset's own passthrough, SpaceWarp, Super Resolution and clock
+// levels, and the refresh rate (fixed at 120 Hz; their ini keys still work).
+// The Quest build lists them.
+const Item kDioramaItems[] = {
+    {"diorama_distance", "Distance", nullptr, kSlider, 0.6f, 4.0f, 0.1f, "%.1f m", nullptr, hintDiorama},
+    {"diorama_height", "Height", "How far below your eyes Mario stands", kStepper, 0.0f, 1.6f, 0.05f, "%.2f m"},
+    {"diorama_scale", "World size", "1.0 is the usual size", kStepper, 0.5f, 3.0f, 0.1f, "%.1f"},
+    {"follow_smoothing", "Follow smoothing", "How gently the world follows Mario", kStepper, 0.0f, 0.5f, 0.02f, "%.2f s"},
+    {"cutaway", "See through scenery", "Fade what hides Mario from you", kSwitch},
+    {"turn_with_camera", "Turn with the camera", "The world swings with the game camera", kSwitch},
+};
 const Item kScreenItems[] = {
     {"giant_screen", "Giant screen", "Play on a big screen, no diorama", kSwitch},
     {"screen_distance", "Screen distance", "How far away the giant screen is", kSlider, 2.5f, 10.0f, 0.5f, "%.1f m", giantOn},
+#ifdef __ANDROID__
     {"passthrough", "Passthrough", nullptr, kSwitch, 0, 0, 0, nullptr, passthroughUsable, hintPassthrough},
+#endif
     {"stereo_screen", "Stereoscopic 3D", nullptr, kSwitch, 0, 0, 0, nullptr, giantOn, hintStereo},
     {"stereo_depth", "3D depth", "More brings the world out of the screen", kStepper, 0.25f, 3.0f, 0.25f, "%.2f", stereoOn},
     {"stereo_far", "3D far depth", "How far behind the screen the sky is", kStepper, 0.5f, 1.0f, 0.05f, "%.2f", stereoOn},
     {"stereo_resolution", "3D resolution", "Size of each eye's picture", kStepper, 0.5f, 1.0f, 0.05f, "%.2f", stereoOn},
 };
-const Item kDioramaItems[] = {
-    {"diorama_distance", "Diorama distance", nullptr, kSlider, 0.6f, 4.0f, 0.1f, "%.1f m", nullptr, hintDiorama},
-    {"diorama_height", "Height", "Mario below your eyes", kStepper, 0.0f, 1.6f, 0.05f, "%.2f m"},
-    {"diorama_scale", "World size", "1.0 is the usual size", kStepper, 0.5f, 3.0f, 0.1f, "%.1f"},
-    {"follow_smoothing", "Follow smoothing", "How gently the world follows Mario", kStepper, 0.0f, 0.5f, 0.02f, "%.2f s"},
-    {"cutaway", "See through scenery", "Fade what hides Mario from you", kSwitch},
-    {"diorama_transitions", "Diorama in flights", "Launch stars, pipes and arrivals stay in the diorama", kSwitch, 0, 0, 0, nullptr, giantOff},
+// Dimmed with the giant screen: a cutscene there is on the flat screen anyway.
+const Item kCutsceneItems[] = {
+    {"diorama_transitions", "Diorama in flights", "Launch stars, pipes and arrivals", kSwitch, 0, 0, 0, nullptr, giantOff},
+    {"cutscene_stars", "Power Stars", "Stars appearing and returning", kSwitch, 0, 0, 0, nullptr, giantOff},
+    {"cutscene_bosses", "Bosses and enemies", "Introductions, hits and defeats", kSwitch, 0, 0, 0, nullptr, giantOff},
+    {"cutscene_observatory", "Comet Observatory", "Rosalina, Toad Brigade, the domes", kSwitch, 0, 0, 0, nullptr, giantOff},
+    {"cutscene_storybook", "Storybook", "Rosalina's pictures and her reading", kSwitch, 0, 0, 0, nullptr, giantOff},
+    {"cutscene_friends", "Lumas and friends", "Meetings, chases and talks", kSwitch, 0, 0, 0, nullptr, giantOff},
+    {"cutscene_mario", "Mario's changes", "Transformations and power-ups", kSwitch, 0, 0, 0, nullptr, giantOff},
+    {"cutscene_other", "Other scenes", "Doors, cages, a camera far off", kSwitch, 0, 0, 0, nullptr, giantOff, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+     "cutscene_camera"},
+    {"skip_hold", "Hold A to skip", "Cutscenes and dialogues", kStepper, 0.0f, 3.0f, 0.25f, nullptr, nullptr, nullptr, nullptr, skipText},
+};
+const Item kControlItems[] = {
+    {"smooth_turn", "Smooth turning", "The stick turns the diorama smoothly", kSwitch},
+    {"turn_speed", "Turn speed", "Top speed of the stick's turn", kSlider, 30.0f, 240.0f, 10.0f, "%.0f deg/s", smoothOn},
+    {"tilt_speed", "Tilt speed", "Top speed of the stick's tilt", kSlider, 15.0f, 120.0f, 5.0f, "%.0f deg/s", smoothOn},
+    {"invert_camera", "Invert camera", nullptr, kSwitch, 0, 0, 0, nullptr, nullptr, hintInvert},
+    {"left_handed", "Left-handed", "The left controller points; sticks swap", kSwitch},
 };
 const Item kComfortItems[] = {
-    {"gravity_turns", "Gravity turns", nullptr, kStepper, 0, 0, 0, nullptr, nullptr, hintGravity, gravityOptions, gravityText, nullptr, nullptr, gravityFile},
-    {"turn_smoothing", "Turn smoothing", "How gently it turns with gravity", kStepper, 0.0f, 1.5f, 0.05f, "%.2f s", smoothGravityOn},
+    {"gravity_turns", "Planet turns", nullptr, kStepper, 0, 0, 0, nullptr, nullptr, hintGravity, gravityOptions, gravityText, nullptr, nullptr, gravityFile},
+    {"turn_smoothing", "Turn smoothing", "How gently the world turns with Mario", kStepper, 0.0f, 1.5f, 0.05f, "%.2f s", smoothGravityOn},
     {"comfort_vignette", "Comfort vignette", "Darker edges whenever the view moves", kSwitch},
-    {"vignette", "Vignette strength", "How dark the edges get", kStepper, 0.0f, 1.0f, 0.1f, "%.1f"},
-    {"turn_with_camera", "Turn with the camera", "The world swings with the game camera", kSwitch},
+    {"vignette_slow", "Vignette at slow movement", "How dark the edges get at the slowest turn", kSlider, 0.0f, 1.0f, 0.05f, nullptr, comfortOn, nullptr, nullptr,
+     percentText},
+    {"vignette_fast", "Vignette at fast movement", "How dark the edges get at full speed", kSlider, 0.0f, 1.0f, 0.05f, nullptr, nullptr, nullptr, nullptr,
+     percentText},
 };
-const Item kPictureItems[] = {
-    {"space_warp", "Smooth motion", "SpaceWarp: 120 frames a second", kSwitch},
-    {"super_resolution", "Super resolution", "Sharper upscaling by the headset", kSwitch},
-    {"sharpening", "FidelityFX CAS", "Contrast adaptive sharpening", kSwitch},
-    {"sharpening_strength", "CAS strength", "From 0 (least) to 1 (most)", kStepper, 0.0f, 1.0f, 0.1f, "%.1f", sharpenOn},
+const Item kDisplayItems[] = {
+#ifdef __ANDROID__
     {"min_resolution", "Lowest resolution", nullptr, kStepper, 0.5f, 1.25f, 0.05f, "%.2f", nullptr, hintScale},
     {"resolution", "Highest resolution", "Used while the GPU has time to spare", kStepper, 0.5f, 2.0f, 0.05f, "%.2f"},
+    {"space_warp", "Smooth motion", "SpaceWarp: 120 frames a second", kSwitch},
+    {"super_resolution", "Super resolution", "Sharper upscaling by the headset", kSwitch},
+#else
+    {"resolution", "Resolution", nullptr, kStepper, 0.5f, 2.0f, 0.05f, "%.2f", nullptr, hintScale, nullptr, nullptr, nullptr, nullptr, nullptr, "min_resolution"},
+#endif
+    {"sharpening", "Sharpening", "A sharper picture (FidelityFX CAS)", kSwitch},
+    {"sharpening_strength", "Sharpening strength", "From 0 (least) to 1 (most)", kStepper, 0.0f, 1.0f, 0.1f, "%.1f", sharpenOn},
+#ifdef __ANDROID__
     {"refresh_rate", "Refresh rate", "120 fits the game's 60 frames a second", kStepper, 0, 0, 0, "%.0f Hz", nullptr, nullptr, refreshOptions},
     {"high_clocks", "High clocks", "Faster CPU and GPU; from the next start", kSwitch},
-};
-const Item kGameItems[] = {
-    {"language", "Language", nullptr, kStepper, 0, 0, 0, nullptr, severalLanguages, hintLanguage, languageOptions, languageText, languageGet,
-     languageSet, languageFile},
-    {"smooth_turn", "Smooth turning", "Turn the diorama smoothly with the stick instead of in steps", kSwitch},
-    {"turn_speed", "Turn speed", "Top speed of the stick's turn", kSlider, 30.0f, 240.0f, 10.0f, "%.0f deg/s", smoothOn},
-    {"tilt_speed", "Tilt speed", "Top speed of the stick's tilt, up and down", kSlider, 15.0f, 120.0f, 5.0f, "%.0f deg/s", smoothOn},
-    {"invert_camera", "Invert camera", nullptr, kSwitch, 0, 0, 0, nullptr, nullptr, hintInvert},
-    {"skip_hold", "Hold A to skip", "Cutscenes and dialogues", kStepper, 0.0f, 3.0f, 0.25f, nullptr, nullptr, nullptr, nullptr, skipText},
-    {"left_handed", "Left-handed", "The left controller points; sticks, triggers, grips swap", kSwitch},
+#endif
+    {"language", "Language", nullptr, kStepper, 0, 0, 0, nullptr, severalLanguages, hintLanguage, languageOptions, languageText, languageGet, languageSet,
+     languageFile},
 };
 
 struct Tab {
@@ -222,18 +254,22 @@ struct Tab {
     const Item* items;
     int count;
 };
-const int kMaxItems = 8;  // on a tab
+const int kMaxItems = 9;  // on a tab (a slider counts as two rows in the layout; 9 rows fit)
 #define TAB(name, items) {name, items, (int)(sizeof(items) / sizeof(items[0]))}
 #define FITS(items) static_assert(sizeof(items) / sizeof(items[0]) <= kMaxItems, "too many settings on a tab")
-const Tab kTabs[] = {TAB("Screen", kScreenItems), TAB("Diorama", kDioramaItems), TAB("Comfort", kComfortItems), TAB("Picture", kPictureItems), TAB("Game", kGameItems)};
-FITS(kScreenItems);
+// Two rows of three.
+const Tab kTabs[] = {TAB("Diorama", kDioramaItems),   TAB("Screen", kScreenItems),   TAB("Cutscenes", kCutsceneItems),
+                     TAB("Controls", kControlItems), TAB("Comfort", kComfortItems), TAB("Display", kDisplayItems)};
 FITS(kDioramaItems);
+FITS(kScreenItems);
+FITS(kCutsceneItems);
+FITS(kControlItems);
 FITS(kComfortItems);
-FITS(kPictureItems);
-FITS(kGameItems);
+FITS(kDisplayItems);
 #undef TAB
 #undef FITS
 const int kTabCount = (int)(sizeof(kTabs) / sizeof(kTabs[0]));
+const int kTabDiorama = 0, kTabScreen = 1;  // their places in kTabs
 
 float itemValue(const Item& item) {
     if (item.get) return item.get();
@@ -274,8 +310,14 @@ const xm::Vec3 kCenter{0.60f, -0.12f, -0.88f};
 // Layout, in texture pixels (top-down rows).  Under the title, the tabs;
 // under them the tab's settings, one row each (a slider takes two).
 const float kDefaultsX0 = 448.0f, kDefaultsX1 = 608.0f, kDefaultsY0 = 24.0f, kDefaultsY1 = 70.0f;
-const float kTabsY0 = 92.0f, kTabsY1 = 148.0f, kTabsX0 = 24.0f, kTabW = (kTexW - 48.0f) / kTabCount;
-const float kRowsTop = 172.0f, kRowH = 124.0f;
+// The tabs: three to a row, in as many rows as that takes.
+const int kTabsPerRow = 3;
+const int kTabRows = (kTabCount + kTabsPerRow - 1) / kTabsPerRow;
+const float kTabsY0 = 92.0f, kTabH = 48.0f, kTabRowStep = 54.0f, kTabsX0 = 24.0f, kTabW = (kTexW - 48.0f) / kTabsPerRow;
+const float kTabsY1 = kTabsY0 + kTabH + kTabRowStep * (kTabRows - 1);  // the bottom of the last row
+const float kRowsTop = kTabsY1 + 20.0f, kRowH = 118.0f;
+float tabX0(int t) { return kTabsX0 + kTabW * (t % kTabsPerRow); }
+float tabY0(int t) { return kTabsY0 + kTabRowStep * (t / kTabsPerRow); }
 const float kControlY = 42.0f;  // a row's control, below the row's top
 const float kButtonR = 30.0f;
 const float kStepMinusX = 388.0f, kStepPlusX = 580.0f;
@@ -385,11 +427,11 @@ void drawPanel() {
 
     // Tabs.
     for (int t = 0; t < kTabCount; t++) {
-        float x0 = kTabsX0 + kTabW * t + 3.0f, x1 = kTabsX0 + kTabW * (t + 1) - 3.0f;
+        float x0 = tabX0(t) + 3.0f, x1 = tabX0(t) + kTabW - 3.0f, y0 = tabY0(t);
         Hit h{kTabButton, t};
         Color back = t == sTab ? accent : sPressed == h || sHover == h ? rgb(84, 93, 116) : rgb(44, 49, 62);
-        c.roundRect(x0, kTabsY0, x1, kTabsY1, 20.0f, back);
-        c.text((x0 + x1) * 0.5f, kTabsY0 + 38.0f, kFontSmall, kTabs[t].name, t == sTab ? white : bright, 1);
+        c.roundRect(x0, y0, x1, y0 + kTabH, 20.0f, back);
+        c.text((x0 + x1) * 0.5f, y0 + 34.0f, kFontSmall, kTabs[t].name, t == sTab ? white : bright, 1);
     }
 
     // A round - or + button.
@@ -540,6 +582,10 @@ void save() {
                 snprintf(text, sizeof(text), "%g", itemValue(item));
             }
             lines.emplace_back(item.key, text);
+            if (const vr::Setting* also = item.alsoKey ? vr::findSetting(item.alsoKey) : nullptr) {
+                snprintf(text, sizeof(text), "%g", also->get());
+                lines.emplace_back(item.alsoKey, text);
+            }
         }
     }
     writeSettingsLater(lines);
@@ -557,6 +603,9 @@ void setItem(int index, float value) {
         item.set(value);
     } else if (const vr::Setting* s = vr::findSetting(item.key)) {
         s->set(fminf(s->max, fmaxf(s->min, value)));
+    }
+    if (const vr::Setting* also = item.alsoKey ? vr::findSetting(item.alsoKey) : nullptr) {
+        also->set(fminf(also->max, fmaxf(also->min, value)));
     }
     char text[64];
     itemText(item, itemValue(item), text, sizeof(text));
@@ -627,8 +676,9 @@ void describe(const Hit& h, char* out, size_t size) {
 Hit hitAt(float x, float y) {
     auto near = [](float x, float y, float cx, float cy, float r) { return (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r; };
     if (x >= kDefaultsX0 - 8 && x <= kDefaultsX1 + 8 && y >= kDefaultsY0 - 8 && y <= kDefaultsY1 + 8) return {kDefaults, 0};
-    if (y >= kTabsY0 - 6 && y <= kTabsY1 + 6 && x >= kTabsX0 && x < kTabsX0 + kTabW * kTabCount) {
-        return {kTabButton, (int)((x - kTabsX0) / kTabW)};
+    if (y >= kTabsY0 - 6 && y <= kTabsY1 + 6 && x >= kTabsX0 && x < kTabsX0 + kTabW * kTabsPerRow) {
+        int row = (int)((y - (kTabsY0 - 3.0f)) / kTabRowStep), t = row * kTabsPerRow + (int)((x - kTabsX0) / kTabW);
+        if (row >= 0 && row < kTabRows && t < kTabCount && y <= tabY0(t) + kTabH + 3.0f) return {kTabButton, t};
     }
     const Tab& tab = kTabs[sTab];
     for (int i = 0; i < tab.count; i++) {
@@ -665,7 +715,7 @@ void logControls() {
     log("any", "Defaults", (kDefaultsX0 + kDefaultsX1) * 0.5f, (kDefaultsY0 + kDefaultsY1) * 0.5f);
     int tabWas = sTab;
     for (int t = 0; t < kTabCount; t++) {
-        log("any", kTabs[t].name, kTabsX0 + kTabW * (t + 0.5f), (kTabsY0 + kTabsY1) * 0.5f);
+        log("any", kTabs[t].name, tabX0(t) + kTabW * 0.5f, tabY0(t) + kTabH * 0.5f);
         sTab = t;
         for (int i = 0; i < kTabs[t].count; i++) {
             const Item& item = kTabs[t].items[i];
@@ -712,7 +762,8 @@ void settingsInit(const char* iniPath) {
     sCanvas.init(kTexW, kTexH);
     // The texture is made with its first upload (vrdraw::Draw::uploadCanvas).
     // The panel opens on the tab of the way the game is shown.
-    sTab = giantOn() ? 0 : 1;
+    sTab = giantOn() ? kTabScreen : kTabDiorama;
+    if (getenv("PETARI_PANELTAB")) sTab = atoi(getenv("PETARI_PANELTAB"));  // captures
     if (getenv("PETARI_PANELLOG")) {
         logControls();
     }
