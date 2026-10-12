@@ -1640,11 +1640,13 @@ void renderPair(App& a, int s, const vr::FrameInfo& frame, const XrView views[2]
 // refresh) and the eyes are rendered on every refresh, from that refresh's
 // head pose and the newest game frame ("every refresh"), while the GPU keeps
 // up: a pair costs 4.5 to 8 ms on the headset (H2) beside the compositor's
-// 1 ms, against 8.3 ms.  When more than a tenth of the sets of the last
-// 2 s were not finished a refresh after their submission, only the refresh
-// that picks up a game frame renders, and the one in between shows its set
-// again for the compositor to reproject ("every second refresh"); back to
-// every refresh after 10 s with at most 1 % of the sets late.
+// 1 ms, against 8.3 ms.  When more than 5 % of the sets of the last 2 s
+// missed their display (went out with a later display time than they were
+// rendered for), or both eyes took over 85 % of a refresh on the GPU, only
+// the refresh that picks up a game frame renders, and the one in between
+// shows its set again for the compositor to reproject ("every second
+// refresh"); back to every refresh after 10 s with at most 1 % of the sets
+// missed and the eyes under 75 % of a refresh.
 // PETARI_VKPACE=every|second fixes either.  At other refresh rates every
 // refresh renders, and the game keeps its own clock.
 // ---------------------------------------------------------------------------
@@ -1723,16 +1725,15 @@ void releaseUiVk(App& a, bool* list) {
     }
 }
 
-// A set counts as late for the pacing when the GPU had not finished it
-// this long after the next refresh's own set was recorded: a short wait
-// there still leaves the refresh time for xrEndFrame (T1: sets "not
-// finished" at the start of the refresh by a few ms, without a refresh
-// missed).
-const int64_t kLateWaitNs = 1500000;
 
 // The pending set (and the UI layer images recorded with it) released once
-// the GPU has finished it, and on show from this refresh.  `due`: its
-// display time has come (the second refresh of a game frame), so a GPU not
+// the GPU has finished it, and on show from this refresh.  Returns whether
+// the set missed its display: it goes out with a later display time than the
+// one it was rendered for (the frame loop lost a refresh on the way).  A wait
+// for the GPU here or while recording is no miss as long as the refresh
+// still makes its display (T5: sets waited 1.5 ms and more in a quarter of
+// the refreshes while the compositor reused 0.8 % of the frames).
+// `due`: its display time has come (the second refresh of a game frame), so a GPU not
 // done by now counts as a set not finished when due.
 // The pending set (and the UI layer images recorded with it) released once
 // the GPU has finished it, and on show from this refresh.  `due`: its
@@ -1786,7 +1787,8 @@ bool showPendingVk(App& a, XrTime displayTime, bool due) {
         a.waitRefreshes++;
         a.waitNs += waited;
     }
-    return waited + stall > kLateWaitNs;
+    float refreshMs = a.displayHz > 0.0f ? 1000.0f / a.displayHz : 8.33f;
+    return due && (double)(displayTime - p.time) > refreshMs * 0.5e6;
 }
 
 // Every refresh or every second refresh at 120 Hz (see above), from the sets
@@ -1820,8 +1822,8 @@ void updatePaceVk(App& a, bool late) {
         int eyes = 0;
         float pair = 2.0f * vr::recentEyeGpuMs(&eyes);
         bool gpuFull = eyes >= 60 && pair > 0.85f * refreshMs;
-        if (a.vkWinLate > 24 || gpuFull) {
-            port_log("vr: Vulkan pacing: new eyes every second refresh (60 Hz): %d of the last %d sets late, both eyes %.1f ms of GPU a refresh "
+        if (a.vkWinLate > 12 || gpuFull) {
+            port_log("vr: Vulkan pacing: new eyes every second refresh (60 Hz): %d of the last %d sets missed their display, both eyes %.1f ms of GPU a refresh "
                      "(%.1f ms the limit)",
                      a.vkWinLate, a.vkWinSets, pair, 0.85f * refreshMs);
             a.vkEvery = false;
@@ -1832,7 +1834,7 @@ void updatePaceVk(App& a, bool late) {
         int eyes = 0;
         float pair = 2.0f * vr::recentEyeGpuMs(&eyes);
         if (a.vkWinLate <= 6 && (eyes < 60 || pair < 0.75f * refreshMs) && now - a.vkModeAt >= 10000000000ll) {
-            port_log("vr: Vulkan pacing: new eyes every refresh again: %d of the last %d sets late, both eyes %.1f ms of GPU", a.vkWinLate, a.vkWinSets,
+            port_log("vr: Vulkan pacing: new eyes every refresh again: %d of the last %d sets missed their display, both eyes %.1f ms of GPU", a.vkWinLate, a.vkWinSets,
                      pair);
             a.vkEvery = true;
             a.vkModeAt = now;
