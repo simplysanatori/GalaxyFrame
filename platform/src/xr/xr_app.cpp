@@ -1531,8 +1531,11 @@ void notePoses(App& a, const App::VkSet& set, XrTime displayTime) {
         double d = sqrt((p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y) + (p.z - q.z) * (p.z - q.z)) * 1000.0;
         const XrQuaternionf& r = set.pose[e].orientation;
         const XrQuaternionf& s = now[e].pose.orientation;
-        double dot = fabs(r.x * s.x + r.y * s.y + r.z * s.z + r.w * s.w);
-        double ang = 2.0 * acos(fmin(1.0, dot)) * 57.29578;
+        // The angle between them from the chord (|r - s| = 2 sin(angle / 4)),
+        // exact for small angles where acos of the dot product is not.
+        double sg = r.x * s.x + r.y * s.y + r.z * s.z + r.w * s.w < 0.0 ? -1.0 : 1.0;
+        double cx = r.x - sg * s.x, cy = r.y - sg * s.y, cz = r.z - sg * s.z, cw = r.w - sg * s.w;
+        double ang = 4.0 * asin(fmin(1.0, 0.5 * sqrt(cx * cx + cy * cy + cz * cz + cw * cw))) * 57.29578;
         a.posePosSum[e] += d;
         a.posePosMax[e] = fmax(a.posePosMax[e], d);
         a.poseAngSum[e] += ang;
@@ -1590,7 +1593,9 @@ void showPendingVk(App& a, XrTime displayTime, bool due) {
         a.fenceGapNs += t0 - a.renderedFenceAt;
         a.fenceChecks++;
     }
-    if (!gfx.waitFence(a.renderedFence, 0)) {
+    // PETARI_NO_GPU_WAIT=1: released unfinished (a test of tools/xrmock's check).
+    static const bool noWait = getenv("PETARI_NO_GPU_WAIT") != nullptr;
+    if (!gfx.waitFence(a.renderedFence, 0) && !noWait) {
         gfx.waitFence(a.renderedFence, 1000000000);
         if (due) {
             a.fenceWaits++;

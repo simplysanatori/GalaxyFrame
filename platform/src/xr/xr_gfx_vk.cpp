@@ -16,6 +16,7 @@
 #include "../gx/vk_mem.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "xr_gfx.h"
@@ -243,7 +244,8 @@ public:
                 transitionImage(a.handle, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, kColorStage, kColorAccess);
                 a.value = gpu::vk::submit();
             }
-            if (completedValue() < a.value) {
+            static const bool noWait = getenv("PETARI_NO_GPU_WAIT") != nullptr;  // test of the mock's check
+            if (completedValue() < a.value && !noWait) {
                 // The frame loop waits before it releases; this is the safety net.
                 int64_t t0 = port_host_time_ns();
                 waitValue(a.value);
