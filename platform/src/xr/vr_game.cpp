@@ -105,11 +105,12 @@ float sVignetteSlow = 0.3f, sVignetteFast = 0.5f;
 #ifdef __ANDROID__
 float sResolution = 1.6f;     // largest eye size, relative to the headset's recommended one
 #else
-// Steam Frame: the eyes cost the GPU about the same at any size (per-frame
-// overhead, not pixels), the GPU is shared with SteamVR's compositor, and
-// each step of the dynamic resolution was a visible change in sharpness:
-// held at 0.8 by default (min_resolution = resolution), where it has room.
-float sResolution = 0.8f;
+// Steam Frame: held at one size for the session (min_resolution =
+// resolution), since each step of the dynamic resolution was a visible
+// change in sharpness.  1.0 (SteamVR's recommended size) renders both eyes
+// every refresh at 120 Hz; the pacing drops to every second refresh in a
+// scene the GPU cannot keep up with and comes back on its own.
+float sResolution = 1.0f;
 #endif
 float sRefreshRate = 120.0f;  // requested display refresh rate, Hz
 // Foveation of the eye renders round the eye-tracked gaze (foveation,
@@ -123,7 +124,11 @@ bool sSpaceWarp = true;       // Application SpaceWarp at 120 Hz
 bool sSuperRes = true;        // Meta Quest Super Resolution (eye at render size)
 bool sSharpen = false;        // AMD FidelityFX CAS in the composite
 float sSharpness = 0.5f;      // its strength, 0..1
+#ifdef __ANDROID__
 float sMinScale = 0.8f;       // lowest render scale (min_resolution)
+#else
+float sMinScale = 1.0f;       // lowest render scale (min_resolution): the Frame holds one size
+#endif
 bool sGiantScreen = true;     // gameplay on the giant virtual screen (giant_screen; the default at first start)
 bool sStereoScreen = false;   // the giant screen's picture as a stereo pair (stereo_screen)
 float sStereoDepth = 1.75f;   // how far before the farthest things Mario is drawn, in eye distances (stereo_depth)
