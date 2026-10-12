@@ -57,6 +57,12 @@ else
   exit 1
 fi
 cp "$HERE/galaxyquest.sh" "$DEST/galaxyquest.sh"
+# The compositor timing logger galaxyquest.sh runs beside the game.
+if [ -f "$HERE/../tools/vrtiming.py" ]; then
+  cp "$HERE/../tools/vrtiming.py" "$DEST/vrtiming.py"
+elif [ -n "$TARBALL" ]; then
+  tar -xzf "$TARBALL" -C "$DEST" vrtiming.py 2> /dev/null || true
+fi
 chmod +x "$DEST/galaxyquest" "$DEST/galaxyquest.sh"
 
 APPID=none
