@@ -101,7 +101,7 @@ void hintScale(char* out, size_t size) {
     if (giantOn()) {
         snprintf(out, size, "The screen's picture is at %.2f now", roundf(vr::screenPictureScale() * 100.0f) / 100.0f);
     } else {
-        snprintf(out, size, "Now %.2f; 1.00 is Meta's standard", roundf(vr::renderScale() * 100.0f) / 100.0f);
+        snprintf(out, size, "Now %.2f; 1.00 is the Frame's default", roundf(vr::renderScale() * 100.0f) / 100.0f);
     }
 }
 void hintInvert(char* out, size_t size) {
