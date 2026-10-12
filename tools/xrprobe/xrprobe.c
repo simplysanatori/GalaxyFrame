@@ -55,6 +55,7 @@
 
 #include <vulkan/vulkan.h>
 #define XR_USE_GRAPHICS_API_VULKAN
+#define XR_USE_TIMESPEC
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
@@ -185,6 +186,17 @@ static void logf_(int toStdout, const char* fmt, ...) {
 #define FLOG(...) logf_(0, __VA_ARGS__)
 
 static XrInstance g_instance = XR_NULL_HANDLE;
+static PFN_xrConvertTimespecTimeToTimeKHR toXrTime;
+
+// The host time as an XrTime (0 without XR_KHR_convert_timespec_time).
+static XrTime xrNow(void) {
+    if (!toXrTime) return 0;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    XrTime t = 0;
+    if (XR_FAILED(toXrTime(g_instance, &ts, &t))) return 0;
+    return t;
+}
 
 static const char* xrStr(XrResult r) {
     static char buf[XR_MAX_RESULT_STRING_SIZE];
@@ -322,6 +334,7 @@ static ExtWant g_exts[] = {
     {"XR_EXT_frame_synthesis", 0, 0},          // enabled for --synth only
     {"XR_KHR_composition_layer_depth", 0, 0},  // enabled for --depth-only only
     {"XR_FB_space_warp", 0, 0},                // enabled for --spacewarp / --sequence-sw only
+    {"XR_KHR_convert_timespec_time", 0, 1},    // the --fps cap's clock (display times in host time)
 };
 #define N_EXTS (sizeof(g_exts) / sizeof(g_exts[0]))
 
@@ -1199,6 +1212,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    if (hasExt("XR_KHR_convert_timespec_time"))
+        xrGetInstanceProcAddr(g_instance, "xrConvertTimespecTimeToTimeKHR", (PFN_xrVoidFunction*)&toXrTime);
     XrInstanceProperties ip = {XR_TYPE_INSTANCE_PROPERTIES};
     XR_CHECK(xrGetInstanceProperties(g_instance, &ip));
     LOG("runtime: %s %u.%u.%u", ip.runtimeName, XR_VERSION_MAJOR(ip.runtimeVersion),
@@ -1428,6 +1443,7 @@ int main(int argc, char** argv) {
     double started = nowSec(), windowStart = started, lastWaitReturn = 0, lastPeriodSec = 1.0 / 90.0;
     uint64_t winFrames = 0, winRendered = 0, endFailures = 0;
     XrTime prevDisplayTime = 0;
+    XrTime lastPdt = 0, leadNs = 0;  // the --fps cap's display time clock
     XrView prevViews[2];
     int havePrev = 0;
     // adaptive load: keep the measured GPU time near the target during the run
@@ -1485,6 +1501,7 @@ int main(int argc, char** argv) {
             case XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB: {
                 XrEventDataDisplayRefreshRateChangedFB* r = (XrEventDataDisplayRefreshRateChangedFB*)&ev;
                 LOG("display refresh rate now %.2f Hz (was %.2f)", r->toDisplayRefreshRate, r->fromDisplayRefreshRate);
+                rate = r->toDisplayRefreshRate;
                 break;
             }
             case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING:
@@ -1523,17 +1540,38 @@ int main(int argc, char** argv) {
         rec.n = frameIdx++;
         rec.iterations = iterations;
 
-        // --fps: start the next frame no earlier than 1/fps after the last
-        // xrWaitFrame return, less half a refresh so xrWaitFrame lands on the
-        // right slot.
+        // --fps: a whole number of display refreshes per frame.  SteamVR's
+        // xrWaitFrame blocks only when called before the start of the next
+        // frame; called later it returns at once with the earliest display
+        // time still reachable (H1c: a wall-clock sleep after the last
+        // return gave a mix of 1 and 2 refresh steps, 89 fps).  So the loop
+        // aims at display times: it sleeps until the deadline of the display
+        // time one refresh after the last frame's has passed, half a refresh
+        // before the one it wants, with the deadline taken from a blocking
+        // xrWaitFrame (its display time minus the host time it returned at).
+        // The refresh is the display's own (xrGetDisplayRefreshRateFB), not
+        // the predicted period, which SteamVR reports as 16.7 ms for some
+        // frames of a 120 Hz loop.  Without XR_KHR_convert_timespec_time: a
+        // sleep from the last return (the mock).
         if (fps > 0 && lastWaitReturn > 0) {
-            double target = lastWaitReturn + 1.0 / fps - 0.5 * lastPeriodSec;
-            double now = nowSec();
-            if (target > now) {
-                double s = target - now;
-                struct timespec ts = {(time_t)s, (long)((s - (time_t)s) * 1e9)};
+            if (getRate) getRate(session, &rate);  // SteamVR switches the rate after the session starts
+            double refresh = rate > 0 ? 1.0 / rate : lastPeriodSec;
+            long nRefresh = lround(1.0 / fps / refresh);
+            if (nRefresh < 1) nRefresh = 1;
+            double s_ = 0;
+            if (toXrTime && leadNs > 0 && lastPdt) {
+                XrTime want = lastPdt + (XrTime)((nRefresh - 0.5) * refresh * 1e9) - leadNs;
+                XrTime now = xrNow();
+                if (now && want > now) s_ = (want - now) * 1e-9;
+            } else {
+                double target = lastWaitReturn + nRefresh * refresh - 0.3 * refresh;
+                double now = nowSec();
+                if (target > now) s_ = target - now;
+            }
+            if (s_ > 0) {
+                struct timespec ts = {(time_t)s_, (long)((s_ - (time_t)s_) * 1e9)};
                 nanosleep(&ts, NULL);
-                rec.sleepMs = s * 1e3;
+                rec.sleepMs = s_ * 1e3;
             }
         }
 
@@ -1542,6 +1580,17 @@ int main(int argc, char** argv) {
         XR_CHECK(xrWaitFrame(session, NULL, &fs));
         double w1 = nowSec();
         rec.waitMs = (w1 - w0) * 1e3;
+        // The deadline of a display time: how long before it a blocking
+        // xrWaitFrame returns.
+        if (toXrTime && rec.waitMs > 0.5) {
+            XrTime now = xrNow();
+            if (now && fs.predictedDisplayTime > now) {
+                XrTime lead = fs.predictedDisplayTime - now;
+                if (!leadNs) LOG("display time lead of a blocking xrWaitFrame: %.2f ms", lead * 1e-6);
+                leadNs = lead;
+            }
+        }
+        lastPdt = fs.predictedDisplayTime;
         rec.gapMs = lastWaitReturn > 0 ? (w1 - lastWaitReturn) * 1e3 : 0;
         if (lastWaitReturn > 0 && fs.shouldRender &&
             (sessionState == XR_SESSION_STATE_VISIBLE || sessionState == XR_SESSION_STATE_FOCUSED)) {
@@ -1920,6 +1969,7 @@ int main(int argc, char** argv) {
             adaptSum = 0;
             adaptCount = 0;
             lastWaitReturn = 0; // no throttle carry-over into the next case
+            lastPdt = 0;
         }
     }
 
