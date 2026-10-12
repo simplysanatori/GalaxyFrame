@@ -99,6 +99,7 @@ namespace vk {
     X(vkCreateImage)                       \
     X(vkDestroyImage)                      \
     X(vkGetImageMemoryRequirements)        \
+    X(vkGetImageSubresourceLayout)         \
     X(vkBindImageMemory)                   \
     X(vkCreateImageView)                   \
     X(vkDestroyImageView)                  \
@@ -203,6 +204,8 @@ struct Device {
     bool topologyUnrestricted = false; // any topology with any pipeline (EDS3 property)
     bool lineBresenham = false;        // VK_EXT_line_rasterization Bresenham lines (as zink draws GL lines)
     bool memoryBudget = false;         // VK_EXT_memory_budget
+    bool fragmentDensityMap = false;   // VK_EXT_fragment_density_map (foveation; PETARI_VKFDM=0 turns it off)
+    VkExtent2D fdmTexelMin{}, fdmTexelMax{};
     bool debugUtils = false;           // VK_EXT_debug_utils on the instance
     bool validation = false;           // VK_LAYER_KHRONOS_validation on the instance
     bool ownsInstance = false, ownsDevice = false;
@@ -253,8 +256,9 @@ struct DeviceSetup {
     VkPhysicalDeviceDepthClipControlFeaturesEXT clipControl{};
     VkPhysicalDeviceHostImageCopyFeaturesEXT hostCopy{};
     VkPhysicalDeviceLineRasterizationFeaturesEXT lines{};
+    VkPhysicalDeviceFragmentDensityMapFeaturesEXT fdm{};
     // What fillDeviceSetup found (copied into device() by adoptDevice).
-    bool hostImageCopy = false, lineBresenham = false, memoryBudget = false, topologyUnrestricted = false;
+    bool hostImageCopy = false, lineBresenham = false, memoryBudget = false, topologyUnrestricted = false, fragmentDensityMap = false;
 };
 bool fillDeviceSetup(VkPhysicalDevice phys, DeviceSetup* s);
 // Takes a device made from such a create info: loads the device functions,

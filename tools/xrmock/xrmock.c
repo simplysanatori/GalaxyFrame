@@ -130,6 +130,9 @@ static XrResult XRAPI_CALL mGetSystemProps(XrInstance i, XrSystemId s, XrSystemP
     (void)s;
     strcpy(p->systemName, "mock frame");
     for (XrBaseOutStructure* n = (XrBaseOutStructure*)p->next; n; n = n->next) {
+        if (n->type == XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT) {
+            ((XrSystemEyeGazeInteractionPropertiesEXT*)n)->supportsEyeGazeInteraction = XR_TRUE;
+        }
         if (n->type == XR_TYPE_SYSTEM_SPACE_WARP_PROPERTIES_FB) {
             XrSystemSpaceWarpPropertiesFB* w = (XrSystemSpaceWarpPropertiesFB*)n;
             w->recommendedMotionVectorImageRectWidth = 420;
@@ -629,7 +632,7 @@ static void init(void) {
         free(copy);
     } else {
         const char* exts[] = {"XR_KHR_opengl_es_enable", "XR_MNDX_egl_enable", "XR_KHR_vulkan_enable2", "XR_FB_display_refresh_rate",
-                              "XR_EXT_performance_settings", "XR_VALVE_frame_controller_interaction", "XR_KHR_composition_layer_depth"};
+                              "XR_EXT_performance_settings", "XR_VALVE_frame_controller_interaction", "XR_KHR_composition_layer_depth", "XR_EXT_eye_gaze_interaction"};
         for (unsigned i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) strcpy(gExtNames[gExtCount++], exts[i]);
         if (getenv("MOCK_XR_SPACEWARP")) strcpy(gExtNames[gExtCount++], "XR_FB_space_warp");
     }
