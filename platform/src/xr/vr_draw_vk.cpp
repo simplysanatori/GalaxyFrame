@@ -22,6 +22,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <algorithm>
@@ -164,6 +165,24 @@ vec3 sourceColor() {
     float mx = max(max(max(d.g, e.g), max(f.g, b.g)), h.g);
     mn += min(min(min(mn, a.g), min(c.g, g.g)), i.g);
     mx += max(max(max(mx, a.g), max(c.g, g.g)), i.g);
+    float amp = sqrt(clamp(min(mn, 2.0 - mx) / max(mx, 1e-4), 0.0, 1.0));
+    float w = amp * uCasPeak;
+    return clamp((b * w + d * w + f * w + h * w + e) / (1.0 + 4.0 * w), 0.0, 1.0);
+}
+)";
+
+// Experiment (PETARI_CASTAPS=5): the cross only, its min and max doubled
+// in place of the 9-tap soft min and max.  Not the same picture.
+const char* kBlitCas1Cross = R"(
+vec3 sourceColor() {
+    vec2 uv = (vec2(ivec2(FRAG_GL)) + 0.5) / vec2(textureSize(uTex, 0));
+    vec3 b = textureLodOffset(uTex, uv, 0.0, ivec2(0, -1)).rgb;
+    vec3 d = textureLodOffset(uTex, uv, 0.0, ivec2(-1, 0)).rgb;
+    vec3 e = textureLod(uTex, uv, 0.0).rgb;
+    vec3 f = textureLodOffset(uTex, uv, 0.0, ivec2(1, 0)).rgb;
+    vec3 h = textureLodOffset(uTex, uv, 0.0, ivec2(0, 1)).rgb;
+    float mn = 2.0 * min(min(min(d.g, e.g), min(f.g, b.g)), h.g);
+    float mx = 2.0 * max(max(max(d.g, e.g), max(f.g, b.g)), h.g);
     float amp = sqrt(clamp(min(mn, 2.0 - mx) / max(mx, 1e-4), 0.0, 1.0));
     float w = amp * uCasPeak;
     return clamp((b * w + d * w + f * w + h * w + e) / (1.0 + 4.0 * w), 0.0, 1.0);
@@ -392,7 +411,8 @@ public:
         std::string blitFs = std::string(kBlitFsHead) + kCommon;
         mVs[kCompPlain] = mVs[kCompCas1] = mVs[kCompCasScaled] = module(gpu::SpirvStage::Vertex, kBlitVs, "blit vs");
         mFs[kCompPlain] = module(gpu::SpirvStage::Fragment, blitFs + kBlitPlain + kBlitFsMain, "composite fs");
-        mFs[kCompCas1] = module(gpu::SpirvStage::Fragment, blitFs + (gpu::vkLegacy() ? kBlitCas1 : kBlitCas1Hw) + kBlitFsMain, "composite CAS fs");
+        static const bool sCross = getenv("PETARI_CASTAPS") && atoi(getenv("PETARI_CASTAPS")) == 5;
+        mFs[kCompCas1] = module(gpu::SpirvStage::Fragment, blitFs + (gpu::vkLegacy() ? kBlitCas1 : sCross ? kBlitCas1Cross : kBlitCas1Hw) + kBlitFsMain, "composite CAS fs");
         mFs[kCompCasScaled] = module(gpu::SpirvStage::Fragment, blitFs + kBlitCasScaled + kBlitFsMain, "composite scaling CAS fs");
         mVs[kQuadOpaque] = mVs[kQuadBlend] = mVs[kLayer] = module(gpu::SpirvStage::Vertex, kQuadVs, "quad vs");
         mFs[kQuadOpaque] = mFs[kQuadBlend] = module(gpu::SpirvStage::Fragment, withCommon(kQuadFs), "quad fs");
