@@ -94,21 +94,21 @@ The game sees a Wii Remote with a Nunchuk. The Frame controllers are mapped onto
 | Flick the right controller | Shake the Remote | Spin |
 | Flick the left controller | Shake the Nunchuk | Spin |
 | Left trigger | Z | Crouch, ground pound, long jump and backflip (with A) |
-| Left grip or left bumper | C | Put the game camera behind Mario |
+| Left grip or left bumper | C | Put the game camera behind Mario. In the diorama the left grip is the modifier below instead; the bumper stays C |
 | **Menu** (right) | Plus (+) | Pause menu, with the VR settings panel beside it |
 | **View** (left) | Minus (-) | Pause menu, as Menu does |
 | D-pad (left) | D-pad | The Wii D-pad. In the diorama, left and right turn it round Mario (smoothly, or 45 degrees at a time with *Smooth turning* off) |
 | Right stick left / right | D-pad left / right | In the diorama, turn it smoothly round Mario, faster the further you push (up to 120 degrees a second by default; *Turn speed* in the VR settings). With *Smooth turning* off: 45 degree steps behind a short blink. On the giant screen, turn the game camera where the level allows it |
 | Right stick up / down | Nothing (with *Smooth turning*); D-pad up / down (off, and in menu lists) | In the diorama, tilt the view round Mario: up sees him from higher (up to 60 degrees a second by default; *Tilt speed*), from -60 to about +60 degrees. Page up / down in lists |
-| Right grip held, right stick up / down | None | Smoothly lower or raise the diorama (*Height*), saved to the settings file |
-| Right grip held, right stick left / right | None | Smoothly make the diorama smaller or bigger (*World size*), saved the same way |
+| Left grip held, D-pad up / down | None | In the diorama, smoothly raise or lower it (*Height*), saved to the settings file. Works with *Smooth turning* on or off; the D-pad reaches nothing else meanwhile |
+| Left grip held, D-pad left / right | None | In the diorama, smoothly make it smaller or bigger (*World size*), saved the same way |
 | D-pad up (left) | D-pad up | First-person look. With *Smooth turning* off the right stick up does it too |
 | Right stick click | D-pad up | First-person look |
 | Right stick down (smooth turning off) | D-pad down | Page down in lists |
 | Right controller aim | Pointer | Collect star bits, grab Pull Stars, point at menus and the VR settings panel |
 | Right controller tilt | Remote tilt | Steer the Star Ball and the Ray |
 
-The left stick click is not used. *Left-handed* (VR settings, Game tab, or `left_handed = 1`) points with the left controller and swaps the hands' sticks, triggers, grips and bumpers; the buttons, Menu, View and the D-pad stay where they are.
+The left stick click is not used. *Left-handed* (VR settings, Game tab, or `left_handed = 1`) points with the left controller and swaps the hands' sticks, triggers, grips and bumpers; the buttons, Menu, View and the D-pad stay where they are. The left grip stays the height and size modifier (the right grip is C then).
 
 **Haptics.** When the game rumbles the Wii Remote, both controllers buzz, in short pulses for as long as the game keeps the motor on. A light tick marks the pointer reaching a new target or a control of the VR settings panel. Both are on by default. `haptics = 0` in `petari_vr.ini` turns them off. The first pulse's result from SteamVR is logged once in `petari_log.txt` as `haptics: first pulse result N`.
 

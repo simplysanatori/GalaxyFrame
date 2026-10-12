@@ -161,7 +161,8 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
     for (int i = 0; i < frames; i++) {
         // PETARI_XRSIM_STICK="t0-t1:x[,y[,g]];...": the view stick held at x, y
         // (-1..1) from t0 to t1 s after boot, for smooth turning and tilting
-        // (smooth_turn), with the grip held when g is 1 (height and size).
+        // (smooth_turn); with g 1 it is the left D-pad with the left grip
+        // instead: height and size.
         if (const char* spec = getenv("PETARI_XRSIM_STICK")) {
             const char* t0env = getenv("PETARI_T0_MS");
             double now = (port_host_time_ns() / 1000000 - (t0env ? atoll(t0env) : 0)) / 1000.0;
@@ -172,8 +173,8 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
             }
             if (vr::smoothTurning()) {
                 vr::smoothTurn(grip > 0.5f ? 0.0f : held, vr::smoothTilting() && grip <= 0.5f ? heldY : 0.0f);
-                vr::dioramaAdjust(grip > 0.5f ? held : 0.0f, grip > 0.5f ? heldY : 0.0f);
             }
+            vr::dioramaAdjust(grip > 0.5f ? held : 0.0f, grip > 0.5f ? heldY : 0.0f);
         }
         int64_t t0 = 0, t1 = 0;
         if (sTiming) {

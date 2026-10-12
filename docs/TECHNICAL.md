@@ -495,7 +495,7 @@ controlled with environment variables:
 | `PETARI_FIXED_SCALE="t:scale;..."` | Hold the VR render scale at each value from t s after boot on (instead of the dynamic resolution), to time the eyes at each scale; also read from `petari_debug.env` |
 | `PETARI_XRSIM_LAYERS=1` | In `PETARI_XRSIM`, send the HUD and settings panels out as UI layers as the headset does, and composite their images into the captures in the compositor's stead |
 | `PETARI_XRSIM_TURN="t:dir;..."` | In `PETARI_XRSIM`, snap-turn the diorama t s after boot (the right stick in the headset; dir 1 right, -1 left) |
-| `PETARI_XRSIM_STICK="t0-t1:x[,y[,g]];..."` | In `PETARI_XRSIM`, hold the view stick at x, y (-1..1) from t0 to t1 s after boot, with the grip when g is 1: the smooth turn and tilt (`smooth_turn`), the diorama's height and size with the grip; `PETARI_RIGLOG=1` shows the turn rate and the tilt |
+| `PETARI_XRSIM_STICK="t0-t1:x[,y[,g]];..."` | In `PETARI_XRSIM`, hold the view stick at x, y (-1..1) from t0 to t1 s after boot, the smooth turn and tilt (`smooth_turn`); with g 1 it is the left D-pad with the left grip instead (diorama height and size); `PETARI_RIGLOG=1` shows the turn rate and the tilt |
 | `PETARI_XRSIM_STEPS=n`, `PETARI_XRSIM_SMALL=1`, `PETARI_RIGLOG=1` | Display frames simulated per `PETARI_XRSIM` capture (default 40; 1 with `PETARI_XRSIM_FPS` for a continuous sequence); save only the left eye at half size; log diorama rig jumps and fast turns |
 | `PETARI_ASYNC=1`, `PETARI_NOCOPY=1` | Use the worker-thread renderer path; perf experiments |
 | `PETARI_DLCHECK=1`, `PETARI_NODLCACHE=1` | Decode every draw the display list cache supplies as well and log any difference; turn the cache off |

@@ -214,6 +214,7 @@ struct App {
     XrAction wiiBAction = XR_NULL_HANDLE;  // the B button as the Wii Remote's B (shoot, back), as the game's prompts say
     uint32_t padDpad = 0;        // D-pad direction held on the left controller's D-pad
     bool padDpadTurned = false;  // that press was a snap turn of the diorama, not the D-pad
+    bool padDpadSwallowed = false;  // that press began under the left grip (diorama height and size)
     XrPath handPath[2];
     XrSpace aimSpace[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};
 
@@ -894,13 +895,19 @@ void updateInput(App& a, XrTime time) {
     pad.stickY = move.y;
     // Button layout (see docs/CONTROLS.md):
     //   A = jump, right trigger = shoot star bits (B), B, Y or controller shake = spin,
-    //   left trigger = crouch (Z), left grip = camera centre (C), menu = pause (+),
+    //   left trigger = crouch (Z), left grip = camera centre (C; the diorama's modifier on the Frame), menu = pause (+),
     //   X = minus, right stick = D-pad (smooth turning: turns and tilts the diorama), stick click = first-person look (D-pad up).
     if (getBool(a, a.aAction)) pad.buttons |= W_A;
     if (getFloat(a, a.triggerAction, a.handPath[hm]) > 0.5f) pad.buttons |= W_B;
     if (a.wiiBAction != XR_NULL_HANDLE && getBool(a, a.wiiBAction)) pad.buttons |= W_B;
     if (getFloat(a, a.triggerAction, a.handPath[ho]) > 0.5f) pad.buttons |= W_Z;
-    if (getFloat(a, a.gripAction, a.handPath[ho]) > 0.6f) pad.buttons |= W_C;
+    // The left grip is a modifier in the diorama where there is a D-pad (the
+    // Frame's, on the left controller): with it the D-pad sets the diorama's
+    // height and size and reaches no further, and the grip is not C (the
+    // left bumper still is).  Left-handed, C is the right grip and the left
+    // grip is free for it.
+    const bool gripMod = a.dpadUpAction != XR_NULL_HANDLE && vr::dioramaShown() && getFloat(a, a.gripAction, a.handPath[0]) > 0.6f;
+    if (getFloat(a, a.gripAction, a.handPath[ho]) > 0.6f && !(gripMod && ho == 0)) pad.buttons |= W_C;
     // Menu and X are + and -; a press of either also asks for the pause
     // menu (port_input_set), which the game opens at once or as soon as it
     // allows it: on the Wii + or - had to be held for 12 frames, with no A,
@@ -918,14 +925,11 @@ void updateInput(App& a, XrTime time) {
     // With smooth turning (smooth_turn) the stick turns and tilts the diorama
     // in proportion to its deflection instead (vr::smoothTurn), and is no
     // D-pad there (up and down stay the D-pad on a menu's list); first person
-    // is then the Frame's D-pad up or the stick's click.  With the grip of
-    // the same hand held it sets the diorama's height (up and down) and size
-    // (left and right) instead (vr::dioramaAdjust).
+    // is then the Frame's D-pad up or the stick's click.
     XrVector2f look = getVec2(a, a.lookAction, a.handPath[hm]);
     float lx = fabsf(look.x), ly = fabsf(look.y);
     const bool smooth = vr::smoothTurning();
     const bool tilt = vr::smoothTilting();
-    const bool grip = smooth && getFloat(a, a.gripAction, a.handPath[hm]) > 0.6f;
     float turnX = 0.0f, tiltY = 0.0f;
     if (a.dpad == 0) {
         if (lx > 0.7f && lx >= ly) {
@@ -933,7 +937,7 @@ void updateInput(App& a, XrTime time) {
                 a.dpad = look.x < 0.0f ? W_LEFT : W_RIGHT;
                 a.dpadTurned = vr::snapTurn((look.x < 0.0f ? -1 : 1) * (vr::invertCamera() ? -1 : 1));
             }
-        } else if (ly > 0.7f && !tilt && !grip) {
+        } else if (ly > 0.7f && !tilt) {
             a.dpad = look.y > 0.0f ? W_UP : W_DOWN;
         }
     } else if (fmaxf(lx, ly) < 0.4f) {
@@ -941,28 +945,40 @@ void updateInput(App& a, XrTime time) {
         a.dpadTurned = false;
     }
     if (!a.dpadTurned) pad.buttons |= a.dpad;
-    if (smooth && !grip && a.dpad != W_UP && a.dpad != W_DOWN) turnX = look.x;
-    if (tilt && !grip) tiltY = look.y;
+    if (smooth && a.dpad != W_UP && a.dpad != W_DOWN) turnX = look.x;
+    if (tilt) tiltY = look.y;
+    float adjX = 0.0f, adjY = 0.0f;
     // The Steam Frame's D-pad: the Wii Remote's, left and right turning the
     // diorama like the right stick.  Bumpers: left centres the camera (C),
     // right spins (below).
     if (a.dpadUpAction != XR_NULL_HANDLE) {
         uint32_t held = getBool(a, a.dpadUpAction) ? W_UP : getBool(a, a.dpadDownAction) ? W_DOWN
                         : getBool(a, a.dpadLeftAction) ? W_LEFT : getBool(a, a.dpadRightAction) ? W_RIGHT : 0;
-        if (held != a.padDpad) {
-            a.padDpadTurned = (held == W_LEFT || held == W_RIGHT) &&
-                              (smooth || vr::snapTurn((held == W_LEFT ? -1 : 1) * (vr::invertCamera() ? -1 : 1)));
+        if (gripMod) {
+            // Height (up, down) and size (right, left); nothing goes on to
+            // the game, and what is still held when the grip lets go stays
+            // swallowed until it is let go too.
+            adjX = held == W_RIGHT ? 1.0f : held == W_LEFT ? -1.0f : 0.0f;
+            adjY = held == W_UP ? 1.0f : held == W_DOWN ? -1.0f : 0.0f;
             a.padDpad = held;
+            a.padDpadTurned = true;
+            a.padDpadSwallowed = held != 0;
+        } else {
+            if (held == 0) a.padDpadSwallowed = false;
+            if (held != a.padDpad) {
+                a.padDpadSwallowed = false;
+                a.padDpadTurned = (held == W_LEFT || held == W_RIGHT) &&
+                                  (smooth || vr::snapTurn((held == W_LEFT ? -1 : 1) * (vr::invertCamera() ? -1 : 1)));
+                a.padDpad = held;
+            }
+            if (!a.padDpadTurned) pad.buttons |= held;
         }
-        if (!a.padDpadTurned) pad.buttons |= held;
         // Held, left and right turn at a steady 0.7 of the stick's deflection (about 60 degrees a second).
-        if (smooth && a.padDpadTurned && turnX == 0.0f) turnX = held == W_LEFT ? -0.7f : held == W_RIGHT ? 0.7f : 0.0f;
+        if (smooth && a.padDpadTurned && !a.padDpadSwallowed && !gripMod && turnX == 0.0f) turnX = held == W_LEFT ? -0.7f : held == W_RIGHT ? 0.7f : 0.0f;
         if (getBool(a, a.bumperAction, a.handPath[ho])) pad.buttons |= W_C;
     }
-    if (smooth) {
-        vr::smoothTurn(turnX, tiltY);
-        vr::dioramaAdjust(grip ? look.x : 0.0f, grip ? look.y : 0.0f);
-    }
+    if (smooth) vr::smoothTurn(turnX, tiltY);
+    vr::dioramaAdjust(adjX, adjY);
 
     // Spin: B or Y, or flicking the right controller like a Wii Remote,
     // produces the acceleration spike the game reads as a remote shake (some
