@@ -35,7 +35,8 @@ struct ShaderUid {
     uint32_t efbHasAlpha;
     uint32_t hud;         // drawn into the HUD layer (no VR transform)
     uint32_t zTex;        // BP 0xF5: Z texture type (bits 0-1) and op (bits 2-3)
-    uint32_t cutaway;     // VR cutaway variant (see gpu::EyeView); has a discard
+    uint32_t cutaway;     // bit 0: VR cutaway variant (see gpu::EyeView), has a discard; bit 1 (Vulkan): the
+                          // pixel state from each vertex record, for a batch of many pixel states drawn whole
     uint32_t screenTexGens;  // bit n: texgen n maps positions to their screen position (VR: the eye's)
 
     bool operator==(const ShaderUid& o) const { return memcmp(this, &o, sizeof(*this)) == 0; }
@@ -54,6 +55,14 @@ struct ShaderUidHash {
 
 // Builds the UID from the current BP/XF register state and the draw's
 // vertex layout.
+// PETARI_VKLEGACY=1: the Vulkan replay as before the perf work (A/B timing,
+// and a fallback): every optimisation below is off.
+bool vkLegacy();
+// Vulkan: the fragment shader reads the pixel state at the draw's push
+// constant (kVkPushPixBase) rather than a flat varying from the draw record
+// (each batch is drawn per run of one pixel state, Item::pixRunFirst).
+bool vkPixelStatePushed();
+
 ShaderUid makeShaderUid(const uint32_t* bp, const uint32_t* xfRegs, uint32_t vtxFlags, bool hud);
 
 // Which GLSL the generator writes.  GLES is what the GL renderer compiles
@@ -108,6 +117,7 @@ enum : uint32_t {
     kVkPushSize = 32,
     kVkPushFirstOrdinal = 0,
     kVkPushCopyMode = 4,
+    kVkPushPixBase = 8,  // draws: the pixel state's base in st[] (fragment shader)
     kVkPushCopyRect = 16,
 };
 

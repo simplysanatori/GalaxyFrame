@@ -22,7 +22,7 @@ namespace {
 
 bool sInit = false;
 gpu::EfbTarget sEyeImage[2];  // the eye images, like the swapchain's
-const int kRecW = 1680, kRecH = 1760;  // Quest 3 recommended eye size
+int kRecW = 1680, kRecH = 1760;  // Quest 3 recommended eye size (PETARI_XRSIM_REC=WxH: another, e.g. the Frame's 1728x1728)
 int kW = kRecW, kH = kRecH;            // swapchain stand-ins (vr::swapchainScale())
 double sTime = 1.0;
 // PETARI_XRSIM_MV=1: SpaceWarp's motion vectors and depth too, at a quarter
@@ -69,6 +69,7 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
         // PETARI_XRSIM_SWAPSCALE=<s>: swapchain images at that size instead
         // (relative to the recommended one), e.g. larger than the render
         // size so the composite scales.
+        if (const char* rec = getenv("PETARI_XRSIM_REC")) sscanf(rec, "%dx%d", &kRecW, &kRecH);
         float swapScale = getenv("PETARI_XRSIM_SWAPSCALE") ? (float)atof(getenv("PETARI_XRSIM_SWAPSCALE")) : vr::swapchainScale();
         kW = (int)lroundf(kRecW * swapScale);
         kH = (int)lroundf(kRecH * swapScale);
@@ -226,6 +227,7 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
             eyesMs += (t1 - t0) / 1e6;
         }
         bool drewLayer = false;
+        vrdraw::draw().profileMark("uilayers");
         if (sLayers) {
             for (int k : vr::kUiLayerOrder) {
                 vr::UiLayer l = vr::uiLayer(k);
@@ -268,6 +270,10 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
         port_log("xrsim timing (%s): eyes %.2f ms a frame with the GPU's work, %.2f ms CPU to record; UI layers drawn in %d frames: %.2f ms, %.2f ms CPU",
                  vk ? "Vulkan" : "GLES", eyesMs / frames, eyesCpuMs / frames, layerFrames, layerFrames ? layersMs / layerFrames : 0.0,
                  layerFrames ? layersCpuMs / layerFrames : 0.0);
+    }
+    if (frames > 0 && getenv("PETARI_VKPROF")) {
+        xrgfx::gfx().finish();
+        vrdraw::draw().profileReport("xrsim frame", frames);
     }
     if (!path) {
         int64_t t0 = port_host_time_ns();
