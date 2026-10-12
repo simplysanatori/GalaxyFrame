@@ -103,6 +103,7 @@ float sResolution = 0.8f;
 #endif
 float sRefreshRate = 120.0f;  // requested display refresh rate, Hz
 bool sHighClocks = true;      // ask for Meta's SustainedHigh CPU/GPU levels
+bool sHaptics = true;         // controller haptics: rumble and pointer ticks (haptics)
 bool sSpaceWarp = true;       // Application SpaceWarp at 120 Hz
 bool sSuperRes = true;        // Meta Quest Super Resolution (eye at render size)
 bool sSharpen = false;        // AMD FidelityFX CAS in the composite
@@ -549,6 +550,7 @@ vr::Setting sSettings[] = {
     {"min_resolution", 0.5f, 1.25f, 0.0f, NUMBER(sMinScale)},
     {"refresh_rate", 60.0f, 144.0f, 0.0f, NUMBER(sRefreshRate)},
     {"high_clocks", 0.0f, 1.0f, 0.0f, FLAG(sHighClocks)},
+    {"haptics", 0.0f, 1.0f, 0.0f, FLAG(sHaptics)},
     {"space_warp", 0.0f, 1.0f, 0.0f, FLAG(sSpaceWarp)},
     {"super_resolution", 0.0f, 1.0f, 0.0f, FLAG(sSuperRes)},
     {"sharpening", 0.0f, 1.0f, 0.0f, FLAG(sSharpen)},
@@ -659,6 +661,7 @@ bool passthroughAvailable() { return sPassAvailable; }
 void setPassthroughAvailable(bool available) { sPassAvailable = available; }
 bool highClocks() { return sHighClocks; }
 bool spaceWarp() { return sSpaceWarp; }
+bool haptics() { return sHaptics; }
 bool superResolution() { return sSuperRes; }
 bool snapTurn(int dir) {
     if (!sVrMode || !sRig.valid || sRigParams.turnWithCamera || dir == 0) return false;
