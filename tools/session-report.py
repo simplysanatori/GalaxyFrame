@@ -215,7 +215,7 @@ def main(argv):
         while i < len(argv):
             lp = argv[i]
             vp = None
-            if i + 1 < len(argv) and os.path.basename(argv[i + 1]).startswith("vrtiming"):
+            if i + 1 < len(argv) and "vrt" in os.path.basename(argv[i + 1]):
                 vp = argv[i + 1]
                 i += 1
             sessions.append((os.path.basename(lp), lp, vp))
