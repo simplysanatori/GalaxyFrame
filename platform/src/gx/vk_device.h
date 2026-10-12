@@ -308,5 +308,42 @@ void endTimer(int tag);
 // debug utils).
 void setName(VkObjectType type, uint64_t handle, const char* name);
 
+// ---------------------------------------------------------------------------
+// The renderer's images (vk_renderer.cpp), for the XR presentation.
+// gpu::Target::color / depth and Renderer::xfbTexture() are handles of this
+// table.  The renderer records which layout every image is in as it records
+// commands; work recorded by others on these images goes through
+// transitionImage() (or assumeImageLayout() after an outside transition, such
+// as an XR runtime handing back a swapchain image).
+//
+// After render(): the target's color (and the HUD target's) is in
+// SHADER_READ_ONLY_OPTIMAL, written by color attachment output and visible to
+// fragment shader reads recorded after it; its depth is undefined unless
+// setKeepDepth(true); EyeView::depthSnapshot targets are SHADER_READ_ONLY_OPTIMAL.
+// ---------------------------------------------------------------------------
+struct ImageInfo {
+    VkImage image = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;     // sampled (depth formats: the depth aspect)
+    VkImageView attView = VK_NULL_HANDLE;  // attachment (depth formats: depth and stencil)
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    uint32_t width = 0, height = 0;
+    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;  // as recorded so far
+};
+bool imageInfo(uint32_t handle, ImageInfo* out);
+// Records a barrier into the open command buffer: from the image's last
+// recorded use to `layout`, for `stages` / `access` (sync2 flags).
+void transitionImage(uint32_t handle, VkImageLayout layout, VkPipelineStageFlags2 stages, VkAccessFlags2 access);
+// The image is now in `layout` (changed outside the renderer's commands).
+void assumeImageLayout(uint32_t handle, VkImageLayout layout);
+// An image made elsewhere (an XR swapchain image) as a handle: a Target's
+// color must be kColorFormat (R8G8B8A8_UNORM), its depth D24_UNORM_S8_UINT.
+// The renderer never destroys it; unregister before destroying it.
+uint32_t registerImage(VkImage image, VkImageView view, VkImageView attView, VkFormat format, uint32_t width, uint32_t height, VkImageLayout layout);
+void unregisterImage(uint32_t handle);
+// Keeps each render's depth (and stencil) in its target, for a depth layer
+// or frame synthesis (default: not stored, which saves the tiler the
+// write-back).
+void setKeepDepth(bool keep);
+
 }  // namespace vk
 }  // namespace gpu

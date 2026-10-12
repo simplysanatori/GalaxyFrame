@@ -99,6 +99,7 @@ private:
 };
 
 ImageTable sImages;
+bool sKeepDepth = false;  // store the depth at the end of a render (vk::setKeepDepth)
 
 u32 newImage(u32 w, u32 h, u32 levels, VkFormat format, VkImageUsageFlags usage, ImgKind kind, MemCat cat, const char* name) {
     VkDevice dev = device().device;
@@ -412,7 +413,6 @@ struct VkImpl {
     bool efbNeedsClear = false, hudNeedsClear = false;
     VkClearValue efbClear[2], hudClear[2];
     int lastBreak = -1;     // index of the last item that ends a rendering instance early
-    bool keepDepth = false; // store the depth at the end of a render (for a presentation that needs it)
     bool snapshotTaken = false;
     int hudDraws = 0;
     bool dumpingCopies = false;
@@ -971,7 +971,7 @@ void VkImpl::ensurePass(Target& t, size_t index) {
     // Nothing reads the depth after the last rendering instance of a render
     // (the next one starts by clearing it; SpaceWarp's snapshot is taken on
     // the way): the tiler need not write it back (GLES: glInvalidateFramebuffer).
-    bool finalPass = (int)index > lastBreak && !keepDepth;
+    bool finalPass = (int)index > lastBreak && !sKeepDepth;
     VkRenderingAttachmentInfoKHR da{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR};
     da.imageView = d.attView;
     da.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
@@ -1818,4 +1818,65 @@ Renderer* createVulkanRenderer() {
     return new VulkanRenderer();
 }
 
+}  // namespace gpu
+
+// ---------------------------------------------------------------------------
+// The renderer's images for the XR presentation (vk_device.h)
+// ---------------------------------------------------------------------------
+namespace gpu {
+namespace vk {
+
+bool imageInfo(uint32_t handle, ImageInfo* out) {
+    if (!sImages.valid(handle)) return false;
+    Img& im = sImages[handle];
+    out->image = im.image;
+    out->view = im.view;
+    out->attView = im.attView;
+    out->format = im.format;
+    out->width = im.width;
+    out->height = im.height;
+    out->layout = im.layout;
+    return true;
+}
+
+void transitionImage(uint32_t handle, VkImageLayout layout, VkPipelineStageFlags2 stages, VkAccessFlags2 access) {
+    if (!sImages.valid(handle)) return;
+    Barriers b;
+    b.use(sImages[handle], layout, stages, access);
+    b.flush();
+}
+
+void assumeImageLayout(uint32_t handle, VkImageLayout layout) {
+    if (!sImages.valid(handle)) return;
+    Img& im = sImages[handle];
+    im.layout = layout;
+    im.stages = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    im.access = VK_ACCESS_2_MEMORY_WRITE_BIT;
+}
+
+uint32_t registerImage(VkImage image, VkImageView view, VkImageView attView, VkFormat format, uint32_t width, uint32_t height, VkImageLayout layout) {
+    u32 h = sImages.alloc();
+    if (!h) return 0;
+    Img& im = sImages[h];
+    im.image = image;
+    im.view = view;
+    im.attView = attView ? attView : view;
+    im.format = format;
+    im.width = width;
+    im.height = height;
+    im.levels = 1;
+    im.kind = ImgKind::External;
+    im.layout = layout;
+    im.stages = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    im.access = VK_ACCESS_2_MEMORY_WRITE_BIT;
+    return h;
+}
+
+void unregisterImage(uint32_t handle) {
+    if (sImages.valid(handle) && sImages[handle].kind == ImgKind::External) sImages.release(handle);
+}
+
+void setKeepDepth(bool keep) { sKeepDepth = keep; }
+
+}  // namespace vk
 }  // namespace gpu
