@@ -1790,13 +1790,14 @@ void updatePaceVk(App& a, bool late) {
 }
 
 // The laser between the game's input updates: the controller's aim pose at
-// the display time the eyes are rendered for (as updateInput locates it).
+// the display time the eyes are rendered for (as updateInput locates it), from
+// the pointing hand.
 void updateAimVk(App& a, XrTime time) {
     static const bool scripted = getenv("PETARI_VRAIM") != nullptr;
     if (scripted) return;
     XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
     const XrSpaceLocationFlags need = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT;
-    if (XR_FAILED(xrLocateSpace(a.aimSpace[1], a.appSpace, time, &loc)) || (loc.locationFlags & need) != need) return;
+    if (XR_FAILED(xrLocateSpace(a.aimSpace[vr::leftHanded() ? 0 : 1], a.appSpace, time, &loc)) || (loc.locationFlags & need) != need) return;
     xm::Quat q{loc.pose.orientation.x, loc.pose.orientation.y, loc.pose.orientation.z, loc.pose.orientation.w};
     vr::updateAimPose({loc.pose.position.x, loc.pose.position.y, loc.pose.position.z}, xm::rotate(q, {0, 0, -1}));
 }
