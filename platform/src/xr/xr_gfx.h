@@ -103,8 +103,8 @@ public:
     virtual gpu::EfbTarget createImage(ImageKind kind, int width, int height, uint32_t mips) = 0;
 };
 
-// The API to use: PETARI_GFX (vk | vulkan | gles | gl), else GLES.  (Once the
-// renderer backend is chosen from the ini file too, it decides.)
+// The API to use: the one the renderer backend runs on (gpu::renderer().api(),
+// chosen by PETARI_GFX or the ini file, see gpu::selectRenderer).
 Api wantedApi();
 // Creates the implementation for `wanted` (Vulkan without an implementation
 // in the build falls back to GLES, logged).  Call once, before gfx().
