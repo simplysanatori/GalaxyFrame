@@ -149,6 +149,12 @@ int main(int argc, char** argv) {
     if (toStderr) {
         *toStderr = 1;
     }
+    // petari_headless --spirv-from-gles-cache <shaders.bin> <spirv.bin>: compile
+    // every program of a warmed GLES cache to SPIR-V for the Vulkan backend.
+    if (argc == 4 && !strcmp(argv[1], "--spirv-from-gles-cache")) {
+        int (*conv)(const char*, const char*) = (int (*)(const char*, const char*))dlsym(lib, "port_spirv_from_gles_cache");
+        return conv ? conv(argv[2], argv[3]) : 1;
+    }
     void (*setWindow)(uintptr_t, size_t) = (void (*)(uintptr_t, size_t))dlsym(lib, "port_mem_set_reserved_window");
     void (*boot)(const char*, const char*) = (void (*)(const char*, const char*))dlsym(lib, "port_boot");
     if (!setWindow || !boot) {
