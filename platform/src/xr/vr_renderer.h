@@ -53,7 +53,7 @@ void init();
 //   follow_smoothing  half-life of the world following Mario, s (0.12)
 //   turn_smoothing    half-life of the world turning with the camera, s (0.35)
 //   vignette_slow     how dark the vignette gets (0..1) at the slowest smooth
-//                     movement (0.45) and vignette_fast at full speed, 1
+//                     movement (0.6) and vignette_fast at full speed, 1
 //                     rad/s (1; with comfort_vignette 0, the strength of the
 //                     old curve); an old `vignette` line is read as the fast one
 //   comfort_vignette  1 (default) darkens the sides slightly at once whenever

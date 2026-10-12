@@ -37,6 +37,7 @@ precision mediump float;
 uniform sampler2D uTex;
 uniform float uBrightness;
 uniform float uVignette;  // 0 = off .. 1 = strong
+uniform vec4 uVigMap;     // image position to the tangent of the view angle
 uniform vec4 uWipe;       // closed (0..1), kind (0 fade, 1 ring), ring centre uv
 uniform vec4 uWipeColor;  // linear colour, w = width / height of the eye
 in vec2 vUv;
@@ -45,9 +46,11 @@ out vec4 oColor;
 %s
 void main() {
     vec2 d = vUv * 2.0 - 1.0;
-    float edge = smoothstep(0.35, 1.05, length(d));
-    float v = 1.0 - uVignette * edge;
-    vec3 c = toLinear(sourceColor()) * v;
+    // The comfort vignette, by the angle from the view's axis (see vr_draw.h).
+    float ang = atan(length(vec2(d.x * uVigMap.x + uVigMap.y, d.y * uVigMap.z + uVigMap.w)));
+    float clearTo = 0.96 - 0.36 * uVignette;
+    float v = 1.0 - uVignette * smoothstep(clearTo, clearTo + 0.52, ang);
+    vec3 c = toLinear(sourceColor()) * (uVignette > 0.0 ? pow(v, 2.2) : 1.0);
     if (uWipe.y < 0.5) {
         c = mix(c, uWipeColor.rgb, uWipe.x);
     } else {
@@ -322,7 +325,7 @@ void main() {
 // Composite programs: plain, CAS at 1:1, CAS scaling.
 struct BlitProgram {
     GLuint program = 0;
-    GLint tex = 0, brightness = 0, vignette = 0, wipe = 0, wipeColor = 0, casPeak = 0, casScale = 0;
+    GLint tex = 0, brightness = 0, vignette = 0, vigMap = 0, wipe = 0, wipeColor = 0, casPeak = 0, casScale = 0;
 };
 
 GLuint compile(GLenum type, const char* fmt, bool withCommon) {
@@ -364,6 +367,7 @@ BlitProgram linkBlit(const char* source) {
     b.tex = glGetUniformLocation(b.program, "uTex");
     b.brightness = glGetUniformLocation(b.program, "uBrightness");
     b.vignette = glGetUniformLocation(b.program, "uVignette");
+    b.vigMap = glGetUniformLocation(b.program, "uVigMap");
     b.wipe = glGetUniformLocation(b.program, "uWipe");
     b.wipeColor = glGetUniformLocation(b.program, "uWipeColor");
     b.casPeak = glGetUniformLocation(b.program, "uCasPeak");
@@ -445,6 +449,7 @@ public:
         glUniform1i(blit.tex, 0);
         glUniform1f(blit.brightness, c.brightness);
         glUniform1f(blit.vignette, c.vignette);
+        glUniform4f(blit.vigMap, c.vigMap[0], c.vigMap[1], c.vigMap[2], c.vigMap[3]);
         if (c.kind != CompositeKind::Plain) {
             glUniform1f(blit.casPeak, c.casPeak);
             glUniform2f(blit.casScale, (float)c.srcW / c.usedW, (float)c.srcH / c.usedH);

@@ -97,10 +97,11 @@ vr::RigParams sRigParams;
 bool sCutawayTest = false;
 // Comfort settings (see vr::loadSettings).
 bool sCutawayOn = true;
-// How dark the vignette gets (0..1, of the 0.85 the picture is darkened by at
-// most): at the slowest smooth movement and at full speed (1 rad/s), with the
-// comfort vignette on; with it off, `fast` is the strength of the old curve.
-float sVignetteSlow = 0.45f, sVignetteFast = 1.0f;
+// How dark the vignette gets (0..1, see vr_draw.h: it also closes in as it
+// grows): at the slowest smooth movement and at full speed (1 rad/s), with
+// the comfort vignette on; with it off, `fast` is the strength of the old
+// speed curve.
+float sVignetteSlow = 0.6f, sVignetteFast = 1.0f;
 #ifdef __ANDROID__
 float sResolution = 1.6f;     // largest eye size, relative to the headset's recommended one
 #else
@@ -1335,7 +1336,7 @@ void beginFrame(const FrameInfo& frame) {
         float t = fminf(1.0f, rate / 1.0f);
         float amount = sComfortVignette ? (rate > 0.02f ? sVignetteSlow + (sVignetteFast - sVignetteSlow) * t : 0.0f)
                                         : sVignetteFast * fminf(1.0f, fmaxf(0.0f, (rate - 0.35f) / 1.15f));
-        float target = amount * 0.85f;
+        float target = amount;  // of the full vignette (vr_draw.h)
         sVignette += (target - sVignette) * fminf(1.0f, dt * (target > sVignette ? 12.0f : 4.0f));
         static const bool sVigLog = getenv("PETARI_RIGLOG") != nullptr;
         static int sVigLogged = 0;
@@ -1515,6 +1516,19 @@ Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int
         comp.usedH = used.height;
         comp.brightness = (1.0f - sFade) * (1.0f - sSkipDim);
         comp.vignette = sVignette;
+        {
+            // Image position -> tangent of the angle from the view's axis (see vr_draw.h).
+            const xm::Mat4& pr = ei.proj;
+            comp.vigMap[0] = 1.0f / pr.m[0];
+            comp.vigMap[1] = pr.m[8] / pr.m[0];
+            comp.vigMap[2] = 1.0f / pr.m[5];
+            comp.vigMap[3] = pr.m[9] / pr.m[5];
+        }
+        static const bool sCompLog = getenv("PETARI_RIGLOG") != nullptr;
+        static int sCompLogged = 0;
+        if (sCompLog && sVignette > 0.01f && sCompLogged++ % 240 == 0) {
+            port_log("vr: eye %d composite with vignette %.2f (rig turn %.2f rad/s)", eye, sVignette, sRig.turnRate);
+        }
         if (sSharpen) {
             comp.casPeak = -1.0f / (8.0f + (5.0f - 8.0f) * sSharpness);
         }

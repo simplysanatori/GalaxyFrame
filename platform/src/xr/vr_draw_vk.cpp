@@ -67,6 +67,7 @@ layout(push_constant) uniform PC {
     vec4 wipe;       // closed (0..1), kind (0 fade, 1 ring), ring centre uv
     vec4 wipeColor;  // linear colour, w = width / height of the eye
     vec4 casScale;   // xy: diorama pixels per eye image pixel
+    vec4 vigMap;     // image position to the tangent of the view angle
 } pc;
 #define uBrightness pc.params.x
 #define uVignette pc.params.y
@@ -74,6 +75,7 @@ layout(push_constant) uniform PC {
 #define uWipe pc.wipe
 #define uWipeColor pc.wipeColor
 #define uCasScale pc.casScale.xy
+#define uVigMap pc.vigMap
 #define FRAG_GL vec2(gl_FragCoord.x, pc.params.w - gl_FragCoord.y)
 layout(location = 0) in vec2 vUv;
 layout(location = 0) out vec4 oColor;
@@ -82,9 +84,11 @@ layout(location = 0) out vec4 oColor;
 const char* kBlitFsMain = R"(
 void main() {
     vec2 d = vUv * 2.0 - 1.0;
-    float edge = smoothstep(0.35, 1.05, length(d));
-    float v = 1.0 - uVignette * edge;
-    vec3 c = toLinear(sourceColor()) * v;
+    // The comfort vignette, by the angle from the view's axis (see vr_draw.h).
+    float ang = atan(length(vec2(d.x * uVigMap.x + uVigMap.y, d.y * uVigMap.z + uVigMap.w)));
+    float clearTo = 0.96 - 0.36 * uVignette;
+    float v = 1.0 - uVignette * smoothstep(clearTo, clearTo + 0.52, ang);
+    vec3 c = toLinear(sourceColor()) * (uVignette > 0.0 ? pow(v, 2.2) : 1.0);
     if (uWipe.y < 0.5) {
         c = mix(c, uWipeColor.rgb, uWipe.x);
     } else {
@@ -309,6 +313,7 @@ struct BlitPush {
     float wipe[4];
     float wipeColor[4];
     float casScale[4];
+    float vigMap[4];
 };
 struct QuadPush {
     float mvp[16];
@@ -415,6 +420,7 @@ public:
         pc.params[1] = c.vignette;
         pc.params[2] = c.casPeak;
         pc.params[3] = (float)mH;
+        memcpy(pc.vigMap, c.vigMap, sizeof(pc.vigMap));
         memcpy(pc.wipe, c.wipe, sizeof(pc.wipe));
         memcpy(pc.wipeColor, c.wipeColor, sizeof(pc.wipeColor));
         if (c.kind != CompositeKind::Plain) {
