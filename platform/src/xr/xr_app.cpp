@@ -1650,6 +1650,10 @@ void updatePaceVk(App& a, bool late) {
         port_log("vr: Vulkan pacing: new eyes every refresh while the GPU keeps up, else every second refresh");
         a.vkPaceLogged = true;
     }
+    // PETARI_VKTEST_LATE=<s>: for that many seconds after boot every set
+    // counts as late (a test of the switch to every second refresh and back).
+    static const double testLate = getenv("PETARI_VKTEST_LATE") ? atof(getenv("PETARI_VKTEST_LATE")) : 0.0;
+    if (testLate > 0.0 && port_host_time_ns() - gBootNs < (int64_t)(testLate * 1e9)) late = true;
     a.vkWinSets++;
     a.vkWinLate += late;
     int64_t now = port_host_time_ns();

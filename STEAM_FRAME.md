@@ -95,6 +95,7 @@ mkdir -p /tmp/gq/nand && EGL_PLATFORM=surfaceless SDL_AUDIODRIVER=dummy PETARI_S
 - Of `XR_META_performance_metrics`, only the app GPU counter answers. `XR_FB_space_warp` offers no GLES formats.
 - `/usr/lib/libopenxr_loader.a` on SteamOS is an empty stub. The working loader is SteamVR's.
 - A session may hold 16 swapchains. The game makes 9.
+- SteamVR accepts a Vulkan swapchain with mip levels but allocates the images' memory for level 0 only (a 2048x1152 swapchain of 12 levels: 9.47 MB). Writing the other levels corrupts other images, so the Vulkan side makes single-level swapchains.
 - The game's shutdown with `exit()` hung on a static destructor while game threads still ran. The Linux build leaves with `_exit()` after the session has ended.
 - `ptrace` attach is not permitted for user processes here. Debug with `gdb --args` from the start, or read `/proc/<pid>/task/*/wchan`.
 
