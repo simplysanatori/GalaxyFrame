@@ -1,16 +1,19 @@
 // Offscreen rendering for bring-up: renders the latest recorded frame with
-// the GL renderer into a pbuffer-backed context and writes it as a PNG.
+// the renderer in use (GLES: in a pbuffer-backed context) and writes it as a
+// PNG.
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include <GLES3/gl32.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
 
+#include <string>
 #include <vector>
 
-#include "gl_renderer.h"
+#include "gpu_renderer.h"
 #include "../xr/vr_rig.h"
 #include "gpu.h"
 #include "port/port.h"
@@ -20,12 +23,11 @@ namespace {
 EGLDisplay sDisplay = EGL_NO_DISPLAY;
 EGLContext sContext = EGL_NO_CONTEXT;
 EGLSurface sSurface = EGL_NO_SURFACE;
-gpu::EfbTarget sTarget;
+gpu::Target sTarget;
+bool sStarted = false;  // a backend without a context of ours (Vulkan) was initialized
 
-bool initContext() {
-    if (sContext != EGL_NO_CONTEXT) {
-        return true;
-    }
+// A GLES 3.2 context for the GLES backend.
+bool initEgl() {
     sDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (!eglInitialize(sDisplay, nullptr, nullptr)) {
         port_log("headless: eglInitialize failed");
@@ -58,8 +60,26 @@ bool initContext() {
             }
         },
         nullptr);
+    return true;
+}
+
+bool initContext() {
+    gpu::Renderer& r = gpu::renderer();
+    if (r.api() == gpu::Api::Gles) {
+        if (sContext != EGL_NO_CONTEXT) {
+            return true;
+        }
+        if (!initEgl()) {
+            return false;
+        }
+    } else {
+        if (sStarted) {
+            return true;
+        }
+        sStarted = true;
+    }
     gpu::setShaderCachePath(getenv("PETARI_SHADER_CACHE") ? getenv("PETARI_SHADER_CACHE") : "/data/local/tmp/petari/shaders.bin");
-    return gpu::renderer().init();
+    return r.init();
 }
 
 // Minimal PNG writer (stored deflate blocks).
@@ -264,16 +284,34 @@ extern "C" void port_headless_dump(const char* prefix) {
     }
 }
 
-// Renders the latest recorded frame at `scale` x the native EFB size and
-// writes `path` (PNG).  Returns the frame number, or 0 if nothing was drawn.
-extern "C" unsigned long long port_headless_render(const char* path, int scale) {
-    if (!initContext()) {
-        return 0;
+// The VR camera of PETARI_VRTEST for a w x h eye: through the VR rig, from
+// a head at the stage origin (PETARI_VRHEAD="x,y,z,yawDeg,pitchDeg").
+// Returns the rig's stage <- view transform.
+static xm::Mat4 testEye(gpu::Renderer& r, int w, int h, gpu::EyeView& ev) {
+    vr::RigState rig;
+    vr::RigParams params;
+    xm::Mat4 stageFromView = vr::updateRig(rig, params, r.camera(), 0.0f);
+    float hx = 0, hy = 0, hz = 0, yaw = 0, pitch = 0;
+    if (const char* hp = gpu::debugEnv("PETARI_VRHEAD")) {
+        sscanf(hp, "%f,%f,%f,%f,%f", &hx, &hy, &hz, &yaw, &pitch);
     }
-    auto frame = gpu::frameQueue().latest();
-    if (!frame) {
-        return 0;
-    }
+    float cy = cosf(yaw * 0.5f * 3.14159265f / 180.0f), sy = sinf(yaw * 0.5f * 3.14159265f / 180.0f);
+    float cp = cosf(pitch * 0.5f * 3.14159265f / 180.0f), sp = sinf(pitch * 0.5f * 3.14159265f / 180.0f);
+    xm::Quat qy{0, sy, 0, cy}, qp{sp, 0, 0, cp};
+    xm::Quat q{qy.w * qp.x, qy.y * qp.w, -qy.y * qp.x, qy.w * qp.w};  // yaw * pitch
+    xm::Mat4 eyeFromStage = xm::inversePose(q, {hx, hy, hz});
+    float tv = (float)h / (float)w;
+    xm::Mat4 proj = xm::projectionFov(-0.7853982f, 0.7853982f, atanf(tv), -atanf(tv), 0.05f, 1000.0f);
+    vr::toRowMajor(eyeFromStage * stageFromView, ev.view);
+    vr::toRowMajor(proj, ev.proj);
+    bool cutTest = gpu::debugEnv("PETARI_CUTTEST") != nullptr;
+    vr::setCutaway(ev, eyeFromStage * stageFromView, r.camera(), cutTest || (r.camera().flags & PORT_GX_CAMERA_OCCLUDED) ? 1.0f : 0.0f,
+                   cutTest ? 3.0f : 1.0f);
+    return stageFromView;
+}
+
+// Renders `frame` at `scale` x the native EFB size and writes `path` (PNG).
+static unsigned long long renderShots(std::shared_ptr<const gpu::Frame> frame, const char* path, int scale) {
     gpu::Renderer& r = gpu::renderer();
     auto msSince = [](const timespec& a) {
         timespec b;
@@ -290,7 +328,7 @@ extern "C" unsigned long long port_headless_render(const char* path, int scale) 
     } else {
         r.setFrame(frame);
     }
-    glFinish();
+    r.finish();
     double prepMs = msSince(t0);
     int w = 640 * scale, h = 456 * scale;
     if (sTarget.width != w || sTarget.height != h) {
@@ -306,8 +344,7 @@ extern "C" unsigned long long port_headless_render(const char* path, int scale) 
             int n = atoi(p);
             gpu::gDebugStopAfterDraws = n;
             r.render(sTarget, nullptr, nullptr);
-            glBindFramebuffer(GL_FRAMEBUFFER, sTarget.fbo);
-            glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, sp.data());
+            r.readPixels(sTarget, sp.data());
             for (size_t i = 3; i < sp.size(); i += 4) sp[i] = 255;
             std::string sp_path = std::string(path).substr(0, strlen(path) - 4) + "_s" + std::to_string(n) + ".png";
             writePng(sp_path.c_str(), sp.data(), w, h);
@@ -319,26 +356,8 @@ extern "C" unsigned long long port_headless_render(const char* path, int scale) 
     // PETARI_VRTEST: also render <path>_vr.png through the VR rig, from a
     // head at the stage origin (PETARI_VRHEAD="x,y,z,yawDeg,pitchDeg").
     if (gpu::debugEnv("PETARI_VRTEST") && r.camera().valid) {
-        vr::RigState rig;
-        vr::RigParams params;
-        xm::Mat4 stageFromView = vr::updateRig(rig, params, r.camera(), 0.0f);
-        float hx = 0, hy = 0, hz = 0, yaw = 0, pitch = 0;
-        if (const char* hp = gpu::debugEnv("PETARI_VRHEAD")) {
-            sscanf(hp, "%f,%f,%f,%f,%f", &hx, &hy, &hz, &yaw, &pitch);
-        }
-        float cy = cosf(yaw * 0.5f * 3.14159265f / 180.0f), sy = sinf(yaw * 0.5f * 3.14159265f / 180.0f);
-        float cp = cosf(pitch * 0.5f * 3.14159265f / 180.0f), sp = sinf(pitch * 0.5f * 3.14159265f / 180.0f);
-        xm::Quat qy{0, sy, 0, cy}, qp{sp, 0, 0, cp};
-        xm::Quat q{qy.w * qp.x, qy.y * qp.w, -qy.y * qp.x, qy.w * qp.w};  // yaw * pitch
-        xm::Mat4 eyeFromStage = xm::inversePose(q, {hx, hy, hz});
-        float tv = (float)h / (float)w;
-        xm::Mat4 proj = xm::projectionFov(-0.7853982f, 0.7853982f, atanf(tv), -atanf(tv), 0.05f, 1000.0f);
         gpu::EyeView ev;
-        vr::toRowMajor(eyeFromStage * stageFromView, ev.view);
-        vr::toRowMajor(proj, ev.proj);
-        bool cutTest = gpu::debugEnv("PETARI_CUTTEST") != nullptr;
-        vr::setCutaway(ev, eyeFromStage * stageFromView, r.camera(), cutTest || (r.camera().flags & PORT_GX_CAMERA_OCCLUDED) ? 1.0f : 0.0f,
-                       cutTest ? 3.0f : 1.0f);
+        xm::Mat4 stageFromView = testEye(r, w, h, ev);
         // PETARI_VRSIZE=WxH[,WxH...]: time the eye render at headset
         // resolutions; PETARI_FOVEATE=gain[,gain...] also times each size
         // with fixed foveation at those gains (0 = none).
@@ -346,7 +365,7 @@ extern "C" unsigned long long port_headless_render(const char* path, int scale) 
             struct Timed {
                 int w, h;
                 float gain;
-                gpu::EfbTarget t;
+                gpu::Target t;
             };
             static std::vector<Timed> sEyeTs;
             std::vector<float> gains;
@@ -378,11 +397,11 @@ extern "C" unsigned long long port_headless_render(const char* path, int scale) 
                         }
                     }
                     r.render(tm->t, &ev, nullptr, gpu::HudMode::Skip);
-                    glFinish();
+                    r.finish();
                     timespec ta;
                     clock_gettime(CLOCK_MONOTONIC, &ta);
                     for (int i = 0; i < 4; i++) r.render(tm->t, &ev, nullptr, gpu::HudMode::Skip);
-                    glFinish();
+                    r.finish();
                     long clk = 0;
                     if (FILE* g = fopen("/sys/class/kgsl/kgsl-3d0/gpuclk", "r")) {
                         if (fscanf(g, "%ld", &clk) != 1) clk = 0;
@@ -399,8 +418,7 @@ extern "C" unsigned long long port_headless_render(const char* path, int scale) 
                 int n = atoi(p);
                 gpu::gDebugStopAfterDraws = n;
                 r.render(sTarget, &ev, nullptr, gpu::HudMode::Skip);
-                glBindFramebuffer(GL_FRAMEBUFFER, sTarget.fbo);
-                glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, sp.data());
+                r.readPixels(sTarget, sp.data());
                 for (size_t i = 3; i < sp.size(); i += 4) sp[i] = 255;
                 std::string sp_path = std::string(path).substr(0, strlen(path) - 4) + "_vr_s" + std::to_string(n) + ".png";
                 writePng(sp_path.c_str(), sp.data(), w, h);
@@ -411,8 +429,7 @@ extern "C" unsigned long long port_headless_render(const char* path, int scale) 
         }
         r.render(sTarget, &ev, nullptr, gpu::HudMode::Skip);
         std::vector<unsigned char> vp((size_t)w * h * 4);
-        glBindFramebuffer(GL_FRAMEBUFFER, sTarget.fbo);
-        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, vp.data());
+        r.readPixels(sTarget, vp.data());
         for (size_t i = 3; i < vp.size(); i += 4) vp[i] = 255;
         std::string vpath = std::string(path).substr(0, strlen(path) - 4) + "_vr.png";
         writePng(vpath.c_str(), vp.data(), w, h);
@@ -431,20 +448,34 @@ extern "C" unsigned long long port_headless_render(const char* path, int scale) 
     for (int i = 0; i < 3; i++) {
         r.render(sTarget, nullptr, nullptr);
     }
-    glFinish();
+    r.finish();
     double renderMs = msSince(t0) / 3.0;
     port_log("headless: prepare %.2f ms, replay %.2f ms", prepMs, renderMs);
-    GLenum err = glGetError();
-    if (err != GL_NO_ERROR) {
-        port_log("headless: GL error 0x%x after render", err);
+    if (r.api() == gpu::Api::Gles) {
+        GLenum err = glGetError();
+        if (err != GL_NO_ERROR) {
+            port_log("headless: GL error 0x%x after render", err);
+        }
     }
     std::vector<unsigned char> px((size_t)w * h * 4);
-    glBindFramebuffer(GL_FRAMEBUFFER, sTarget.fbo);
-    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    r.readPixels(sTarget, px.data());
     for (size_t i = 3; i < px.size(); i += 4) {
         px[i] = 255;  // the EFB alpha channel is not part of the image
     }
     writePng(path, px.data(), w, h);
     port_log("headless: frame %llu (%u draws, %zu textures) -> %s", (unsigned long long)frame->number, frame->draws, frame->textures.size(), path);
     return frame->number;
+}
+
+// Renders the latest recorded frame at `scale` x the native EFB size and
+// writes `path` (PNG).  Returns the frame number, or 0 if nothing was drawn.
+extern "C" unsigned long long port_headless_render(const char* path, int scale) {
+    if (!initContext()) {
+        return 0;
+    }
+    auto frame = gpu::frameQueue().latest();
+    if (!frame) {
+        return 0;
+    }
+    return renderShots(frame, path, scale);
 }
