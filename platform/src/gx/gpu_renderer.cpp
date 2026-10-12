@@ -50,7 +50,7 @@ Renderer* createRenderer() {
             port_log("gpu: Vulkan renderer (%s = %s)", from, want);
             return r;
         }
-        port_log("gpu: %s = %s, but this build has no Vulkan renderer; using GLES", from, want);
+        port_log("gpu: %s = %s, but the Vulkan renderer cannot run here (the line above says why); using GLES", from, want);
     } else if (want && !isGles(want)) {
         port_log("gpu: unknown renderer \"%s\" (%s); using GLES", want, from);
     } else if (want) {
