@@ -23,7 +23,8 @@ if [ -f build-linux/libgq_glsl.so ]; then
 else
   echo "note: build-linux/libgq_glsl.so is missing: the release has no Vulkan shader library (GLES only)" >&2
 fi
-cp steam-frame/galaxyquest.sh "$STAGE/"
+cp steam-frame/galaxyquest.sh tools/vrtiming.py "$STAGE/"
+FILES="$FILES vrtiming.py"
 OUT=steam-frame/release/GalaxyQuest-steam-frame-$VERSION.tar.gz
 tar -czf "$OUT" -C "$STAGE" $FILES
 rm -rf "$STAGE"
