@@ -128,7 +128,7 @@ Press Menu or View in the game. The pause menu opens, with the VR settings panel
 
 Two settings matter most:
 
-- **Resolution** (Display tab). 1.00 is the eye size SteamVR's own resolution setting gives the game (1728 pixels per eye at SteamVR's 100 % on the Frame); the panel shows the pixels. The game renders both eyes on every refresh at 1.00. If the GPU falls behind in a heavy scene, it renders new eyes every second refresh until the scene is lighter again, and the log says when. 0.80 holds every refresh with room to spare.
+- **Resolution** (Display tab), 1.00 by default. 1.00 is the eye size SteamVR's own resolution setting gives the game (1728 pixels per eye at SteamVR's 100 % on the Frame); the panel shows the pixels. The game renders both eyes on every refresh at 1.00. If the GPU falls behind in a heavy scene, it renders new eyes every second refresh until the scene is lighter again, and the log says when. 0.80 holds every refresh with room to spare.
 - **Comfort vignette** (Comfort tab). It darkens the edges of the view whenever it moves: a clear circle around where you look, closing in with speed. The two sliders set how dark it gets at the slowest and at the fastest movement. 0 turns it off.
 
 ## Performance
