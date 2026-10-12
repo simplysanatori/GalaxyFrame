@@ -88,8 +88,12 @@ void main() {
     vec2 d = vUv * 2.0 - 1.0;
     // The comfort vignette, by the angle from the view's axis (see vr_draw.h).
     float ang = atan(length(vec2(d.x * uVigMap.x + uVigMap.y, d.y * uVigMap.z + uVigMap.w)));
-    float clearTo = 0.96 - 0.36 * uVignette;
-    float v = 1.0 - uVignette * smoothstep(clearTo, clearTo + 0.52, ang);
+    // uVignette 0..0.3: the edges darken more and the clear circle closes in
+    // (55 to 34 degrees); 0.3..1: a tighter tunnel (to 13 degrees, black 17
+    // degrees further out).
+    float s = min(uVignette / 0.3, 1.0), tight = clamp((uVignette - 0.3) / 0.7, 0.0, 1.0);
+    float clearTo = mix(0.96 - 0.36 * s, 0.227, tight);
+    float v = 1.0 - s * smoothstep(clearTo, clearTo + mix(0.52, 0.30, tight), ang);
     vec3 c = toLinear(sourceColor()) * (uVignette > 0.0 ? pow(v, 2.2) : 1.0);
     if (uWipe.y < 0.5) {
         c = mix(c, uWipeColor.rgb, uWipe.x);

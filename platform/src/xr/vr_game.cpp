@@ -97,11 +97,11 @@ vr::RigParams sRigParams;
 bool sCutawayTest = false;
 // Comfort settings (see vr::loadSettings).
 bool sCutawayOn = true;
-// How dark the vignette gets (0..1, see vr_draw.h: it also closes in as it
-// grows): at the slowest smooth movement and at full speed (1 rad/s), with
-// the comfort vignette on; with it off, `fast` is the strength of the old
-// speed curve.
-float sVignetteSlow = 0.6f, sVignetteFast = 1.0f;
+// How strong the vignette is (0..1, see vr_draw.h: from 0.3 a tighter tunnel
+// as it grows): at the slowest smooth movement and at full speed (1 rad/s),
+// with the comfort vignette on; with it off, `fast` is the strength of the
+// old speed curve.
+float sVignetteSlow = 0.3f, sVignetteFast = 0.5f;
 #ifdef __ANDROID__
 float sResolution = 1.6f;     // largest eye size, relative to the headset's recommended one
 #else
@@ -676,6 +676,15 @@ void loadSettings(const char* path) {
     }
     char line[1280];
     bool fastInFile = false;
+    // The vignette's scale changed (a file without `vignette_scale = 2` has
+    // the old one: its values are multiplied by 0.3, where 1.0 was what 0.3
+    // is now); the panel writes the marker with the values.
+    bool newVignetteScale = false;
+    while (fgets(line, sizeof(line), f)) {
+        float scale;
+        if (sscanf(line, " vignette_scale = %f", &scale) == 1 && scale >= 2.0f) newVignetteScale = true;
+    }
+    rewind(f);
     while (fgets(line, sizeof(line), f)) {
         char key[64];
         float value;
@@ -715,6 +724,8 @@ void loadSettings(const char* path) {
         if (line[0] == '#' || sscanf(line, " %63[a-z_] = %f", key, &value) != 2) {
             continue;
         }
+        if (!strcmp(key, "vignette_scale")) continue;
+        if (!newVignetteScale && (!strcmp(key, "vignette") || !strcmp(key, "vignette_slow") || !strcmp(key, "vignette_fast"))) value *= 0.3f;
         // `vignette` is the old name of vignette_fast; the new key wins when both are there.
         if (!strcmp(key, "vignette_fast")) fastInFile = true;
         if (!strcmp(key, "vignette")) {
