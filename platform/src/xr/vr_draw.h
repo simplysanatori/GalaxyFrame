@@ -45,7 +45,15 @@ struct Composite {
     int usedW = 0, usedH = 0;  // the part of the eye image written (from its lower left corner)
     CompositeKind kind = CompositeKind::Plain;
     float brightness = 1.0f;
-    float vignette = 0.0f;   // 0 = off .. 1 = strong
+    // The comfort vignette: 0 = off .. 1 = strong.  Its shape is in the angle
+    // from the view's axis, so it does not depend on how wide the eye image
+    // is: clear in the middle (to 55 degrees at 0, to 34 at 1: Mario, 25 to 30
+    // degrees below the axis, stays clear), darkening
+    // to `vignette` of the brightness (as displayed) 30 degrees further out.
+    // vigMap turns a position of the image (-1..1) into the tangent of that
+    // angle: tan x = x * vigMap[0] + vigMap[1], tan y = y * vigMap[2] + vigMap[3].
+    float vignette = 0.0f;
+    float vigMap[4] = {1.0f, 0.0f, 1.0f, 0.0f};
     float casPeak = 0.0f;    // CAS: -1 / mix(8, 5, sharpness)
     float wipe[4] = {};      // closed (0..1), kind (0 fade, 1 ring), ring centre uv
     float wipeColor[4] = {};  // linear colour, w = width / height of the eye

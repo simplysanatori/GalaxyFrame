@@ -1000,6 +1000,15 @@ void updateInput(App& a, XrTime time) {
     // D-pad there (up and down stay the D-pad on a menu's list); first person
     // is then the Frame's D-pad up.
     XrVector2f look = getVec2(a, a.lookAction, a.handPath[hm]);
+    // PETARI_VRSTICK="t0-t1:x,y;...": the view stick held at x, y from t0 to t1
+    // s after boot (a test of the real frame loop against the mock runtime).
+    if (const char* spec = getenv("PETARI_VRSTICK")) {
+        double now = (gBootNs ? (port_host_time_ns() - gBootNs) : 0) / 1e9;
+        for (const char* p = spec; p && *p; p = strchr(p, ';') ? strchr(p, ';') + 1 : nullptr) {
+            float t0, t1, x, y = 0.0f;
+            if (sscanf(p, "%f-%f:%f,%f", &t0, &t1, &x, &y) >= 3 && now >= t0 && now < t1) look = {x, y};
+        }
+    }
     float lx = fabsf(look.x), ly = fabsf(look.y);
     const bool smooth = vr::smoothTurning();
     const bool tilt = vr::smoothTilting();
