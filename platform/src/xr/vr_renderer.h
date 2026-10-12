@@ -52,7 +52,12 @@ void init();
 //   diorama_distance  Mario's distance in front, metres (default 1.5)
 //   follow_smoothing  half-life of the world following Mario, s (0.12)
 //   turn_smoothing    half-life of the world turning with the camera, s (0.35)
-//   vignette          strength of the vignette while turning, 0..1 (1)
+//   vignette          strength of the vignette while the view moves, 0..1 (1)
+//   comfort_vignette  1 (default) darkens the sides slightly at once whenever
+//                     the view moves smoothly (the stick's turn and tilt, the
+//                     height and size adjust, a transit's camera) and more
+//                     the faster it moves; 0 only for turns faster than
+//                     about 20 deg/s, full at 85 deg/s, as before
 //   cutaway           1 to see Mario through walls, 0 to turn it off (1)
 //   skip_hold         seconds A is held to skip a cutscene, 0 = never (1)
 //   resolution        largest eye size relative to the headset's recommended
@@ -121,6 +126,16 @@ void init();
 //   tilt_speed        the stick's top tilt speed, degrees a second (60)
 //   left_handed       1 to point with the left controller and swap the
 //                     sticks, triggers, grips and bumpers (0, default)
+//   diorama_transitions  1 (default) keeps the diorama through launch stars,
+//                     pipes and a galaxy's arrival, following the game
+//                     camera as the screen shows it (the world swings with
+//                     it, smoothed, with the turn vignette); 0 shows them on
+//                     the flat screen, as early versions did
+//   gravity_turns     smooth (default): the world turns with Mario's up round a
+//                     round planet; steps: it holds still and re-levels in one
+//                     step behind a blink once his up is 35 degrees away; off:
+//                     only on the right stick's click and after a transit
+//                     that landed on another planet
 //   turn_with_camera  1 to have the diorama turn with the game camera as it
 //                     swings round Mario (0: the world keeps its facing; the
 //                     right stick turns it, see smooth_turn)
@@ -200,6 +215,10 @@ bool smoothTurning();
 // Likewise for the tilt: not on a menu's list (pointer UI), where the stick's
 // up and down are still the D-pad's.
 bool smoothTilting();
+// The right stick's click in the diorama (not on a menu): eases the stick's
+// tilt back to level and, with gravity_turns steps or off, re-levels the
+// world to Mario's up.  Not the first-person look: that is the D-pad's up.
+void resetTilt();
 // The diorama is shown (any smooth_turn).
 bool dioramaShown();
 // x turns the diorama (invert_camera honoured, turn_speed at the stop), y

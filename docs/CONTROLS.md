@@ -20,12 +20,15 @@ controllers are mapped onto them like this. The mapping lives in
 | X | − | Pause menu (one press) |
 | Right stick left / right | D-pad left / right | In the diorama: turn it smoothly round Mario, faster the further you push (a dead zone of 15%, then up to 120° a second, with the edges of the view darkened while it turns); with *Smooth turning* off, a step (45°) at a time behind a short blink. On the giant screen: turn the game camera around Mario in steps, where the level allows it. Pushing the stick right turns the view to the right; with *Invert camera* off (see the VR settings) it moves the camera to the right instead, as the Wii's D-pad did |
 | Right stick up / down | D-pad up / down, with *Smooth turning* off and in a menu's lists | With *Smooth turning* on, in the diorama: tilt the view round Mario, up to see him from higher (a dead zone of 15%, then up to 60° a second; the same curve as the turn; the tilt is kept within -60° and +60°, never past straight down) |
-| Right stick click | D-pad up | First-person look (shown on the virtual screen) |
+| Right stick click | None | In the diorama: level the tilt (back to the usual height over half a second); with *Gravity turns* Steps or Off, also level the world to Mario's up behind a blink |
 
 With *Smooth turning* off, the right stick up is the D-pad up (first-person
 look) and the stick down is the D-pad down, as before. On the Steam Frame
 controllers the left D-pad's up is the Wii D-pad up too (first-person look)
-in either case.
+in either case. The stick click used to be first person as well; it is the
+tilt reset now (it does nothing outside the diorama or on a menu), so on the
+Touch Plus controllers, which have no D-pad, first person needs *Smooth
+turning* off.
 
 **Steam Frame: diorama height and size.** In the diorama, with *Smooth
 turning* on or off, hold the left grip and use the left D-pad: up and down
@@ -40,7 +43,7 @@ controllers have no D-pad, so they have none of this.
 **Left-handed** (Game tab of the VR settings, or `left_handed = 1`): the
 left controller is the Remote (laser, pointer, settings panel clicks, the
 tick when it touches a target, shoot trigger, spin bumper, tilt for the Star
-Ball and the Ray, flick to spin, stick click for first person, and the
+Ball and the Ray, flick to spin, stick click to level the tilt, and the
 stick that turns and tilts the diorama), and the right controller is the
 Nunchuk (its stick moves Mario, its trigger crouches, its grip or bumper is
 C). The face buttons, Menu, View and the D-pad stay where they are. The
@@ -141,7 +144,7 @@ come back during play, the game's pause menu is open.
 While the pause menu is open (press the Menu button or X), a VR settings
 panel appears to the right of its buttons, slightly turned towards you. Aim
 the right controller at it and press A or pull the trigger. It holds every
-setting of `petari_vr.ini` (see below) on four tabs: click a tab's name at
+setting of `petari_vr.ini` (see below) on five tabs: click a tab's name at
 the top to open it. **−** and **+** change a value by a step (hold to
 repeat), a switch turns with a click anywhere on its row, and **Defaults**
 puts the settings of the open tab back to their defaults. A setting that
@@ -190,13 +193,46 @@ has no effect as things are (the 3D depth while the 3D is off) is dimmed.
 - **Height**: how far below your eyes he stands, 0.8 m by default.
 - **World size**: the size of the world, 1.0 by default (1.5 is half as big
   again).
-- **Follow smoothing** and **Turn smoothing**: how gently the world follows
-  Mario and turns with his gravity (the seconds it takes to close half the
-  gap; more is gentler), 0.12 s and 0.35 s by default.
-- **Turn vignette**: how much the edges of the view darken while the world
-  turns, from 0 (not at all) to 1 (the default).
+- **Follow smoothing**: how gently the world follows Mario (the seconds it
+  takes to close half the gap; more is gentler), 0.12 s by default.
 - **See through scenery** (on by default): scenery that hides Mario from
   you fades away between you and him.
+- **Diorama in flights** (on by default): launch stars, pipes and other
+  transits that carry Mario, and the flight into a galaxy, stay in the
+  diorama instead of going back to the flat screen. The world follows the
+  game camera as the screen would show it: its up, the point it watches,
+  its facing and how high it looks from, smoothed (the pivot follows within
+  about 0.12 s, the facing and tilt with the *Turn smoothing* time), with the
+  edges of the view darkened while it swings, and the scenery between you
+  and Mario fading as usual. When it ends, the view eases back to the
+  normal diorama without a blink (*Gravity turns* smooth; with Steps or Off,
+  one step behind a blink if he landed on another planet). Cutscenes, the
+  file select, the observatory domes' galaxy choice and the first-person
+  view stay on the flat screen. Off, the transits and the flight in are shown
+  on the flat screen as before. Dimmed while *Giant screen* is on.
+
+**Comfort**
+
+- **Gravity turns** (Smooth by default): what the world does when Mario's
+  up changes, as on a round planet. *Smooth*: it turns with him. *Steps*:
+  it holds still while he runs round, and once his up is 35 degrees away it
+  levels to it in one step behind a short blink (the same blink as a snap
+  turn), also when gravity jumps by that much. *Off*: it never turns by
+  itself; level it with a click of the right stick, and it levels itself
+  (behind a blink) when Mario lands on another planet after a transit. In
+  Steps and Off, Mario can be seen tilted away from upright until it
+  levels.
+- **Turn smoothing**: how gently the world turns with his gravity (Smooth),
+  and the game camera's facing in a transit: 0.35 s by default (dimmed
+  unless *Gravity turns* is Smooth).
+- **Comfort vignette** (on by default): the edges of the view darken a
+  little at once whenever the view moves smoothly, and more the faster it
+  moves: the right stick's turn and tilt, the left grip and D-pad's height
+  and size, the world following Mario's gravity, and the game camera in a
+  transit. Off, only turns faster than about 20 degrees a second darken the
+  edges, up to full at about 85 degrees a second, as before.
+- **Vignette strength**: how dark the edges get, from 0 (not at all) to 1
+  (the default); 0 turns every vignette off.
 - **Turn with the camera** (off by default): the world turns with the game
   camera as it swings round Mario, as early versions did; off, the world
   keeps its facing and the right stick turns it (see *Smooth turning*).
@@ -250,7 +286,7 @@ has no effect as things are (the 3D depth while the 3D is off) is dimmed.
   smoothly round Mario, in proportion to how far you push it (nothing
   within the first 15%, about 30 degrees a second at half, 120 degrees a
   second at the stop), with no blink. The edges of the view darken while it
-  turns (*Turn vignette*). The stick's up and down tilt the view round Mario
+  turns (*Comfort vignette*). The stick's up and down tilt the view round Mario
   (see the controls table). The left controller's D-pad left and right turn
   it at a steady 60 degrees a second. Off, each push turns it 45 degrees
   behind a short blink, and up and down are the D-pad's. It does not change
@@ -297,7 +333,7 @@ diorama_distance = 1.5
 # (seconds to close half the gap; larger is gentler)
 follow_smoothing = 0.12
 turn_smoothing = 0.35
-# Darkening at the edges while the world turns (0 = off, 1 = full)
+# Darkening at the edges while the view moves (0 = off, 1 = full)
 vignette = 1
 # Fade out scenery that hides Mario (0 = off)
 cutaway = 1
@@ -366,6 +402,17 @@ stereo_resolution = 0.8
 # early versions did); 0 keeps the world's facing, and the right stick
 # turns it (see smooth_turn).
 turn_with_camera = 0
+# smooth: the world turns with Mario's up round a planet; steps: it holds
+# still and levels in one step behind a blink once his up is 35 degrees
+# away; off: it never turns by itself (the right stick's click levels it,
+# and a transit that lands on another planet does). Also 0, 1, 2.
+gravity_turns = smooth
+# 1: launch stars, pipes and the flight into a galaxy stay in the diorama,
+# following the game camera; 0: they are shown on the flat screen
+diorama_transitions = 1
+# 1: the edges darken a little at once whenever the view moves smoothly
+# (more the faster); 0: only for turns faster than about 20 degrees a second
+comfort_vignette = 1
 # 1: the right stick turns the diorama smoothly, in proportion to its
 # deflection (up to 120 degrees a second, no blink); 0: in 45 degree steps
 # behind a short blink.
