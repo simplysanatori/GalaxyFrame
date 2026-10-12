@@ -290,12 +290,20 @@ bool probeDevice();
 // The renderer submits on its own only after 24 renders without a submit
 // (a safety net) and in finish() / readPixels() (headless).
 // ---------------------------------------------------------------------------
-const int kFramesInFlight = 3;
+// Eight: the XR frame loop submits up to three times a refresh (left eye,
+// right eye and the rest, UI layers) with two refreshes' sets in flight;
+// with three, opening a command buffer waited for the last set's GPU work in
+// the middle of recording the next (H3 at resolution 1.0: "both eyes"
+// taking 8-12 ms of CPU, refreshes missed).
+const int kFramesInFlight = 8;
 
 // The open command buffer, begun on first use after a submit (which may wait
 // for the GPU to finish the submission made kFramesInFlight submits ago).
+// Such a wait is counted (commandBufferWaits) for the frame loop's pacing.
 VkCommandBuffer commandBuffer();
 bool commandBufferOpen();
+// Time commandBuffer() spent waiting for the GPU since the last call (ns).
+int64_t takeCommandBufferWaitNs();
 // Semaphores and fence for a submission from the XR presentation.
 struct SubmitExtra {
     uint32_t waitCount = 0;
