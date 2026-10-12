@@ -144,6 +144,16 @@ void port_perf_record(int64_t ns);     // GX command recording, game thread
 void port_perf_prepare(int64_t ns);    // a frame prepared for the renderer
 void port_perf_render(int64_t cpuNs, int64_t uploadNs);  // a displayed frame
 void port_perf_gpu_wait(int64_t ns);   // GPU time after submission (simulation)
+// For the per-second "perf1s" line (perf.cpp has its format).
+void port_perf_tex_check(int64_t ns);                       // texture work on the game thread
+void port_perf_tex_decode(int64_t ns, uint64_t bytes);      // one texture decoded (bytes of RGBA8)
+void port_perf_tex_upload(int64_t ns, unsigned count, uint64_t bytes);  // a frame's texture uploads
+void port_perf_programs(unsigned missed, unsigned created);  // programs not ready / built
+
+// Scheduling priority (platform/src/port/thread_prio.cpp, PETARI_THREADPRIO).
+void port_boost_thread(void);           // high priority for the calling thread
+void port_boost_thread_realtime(void);  // ... and real-time with PETARI_THREADPRIO=rt
+void port_thread_prio_tick(void);       // each frame on a real-time thread
 
 #ifdef __cplusplus
 }

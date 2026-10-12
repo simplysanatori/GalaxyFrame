@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "port/port.h"
+#include "tex_decode.h"
 
 namespace gpu {
 
@@ -444,6 +445,11 @@ void Builder::appendIndices(u32 kind, u32 base, u32 count) {
 
 void Builder::build(std::shared_ptr<const Frame> frame, Prepared& out) {
     const Frame& f = *frame;
+    // Textures the decode thread has not got to yet are decoded here, off
+    // the game thread (tex_decode.h); the renderers read their pixels.
+    for (const auto& t : f.textures) {
+        ensureDecoded(*t);
+    }
     items.clear();
     uids.clear();
     uidIndex.clear();

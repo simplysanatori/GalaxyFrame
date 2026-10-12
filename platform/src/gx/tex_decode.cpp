@@ -2,7 +2,17 @@
 // depends on the texel size; all multi-byte values are big-endian.
 #include "tex_decode.h"
 
+#include <stdlib.h>
 #include <string.h>
+
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
+
+#include "gx_record.h"
+#include "port/heap_routing.h"
+#include "port/port.h"
 
 namespace gpu {
 
@@ -184,4 +194,133 @@ void decodeTexture(uint8_t* dstBytes, const uint8_t* src, uint32_t fmt, uint32_t
     }
 }
 
+// ---------------------------------------------------------------------------
+// Decoding off the game thread
+// ---------------------------------------------------------------------------
+namespace {
+
+// Raw buffers of decoded images, for new images (takeRawBuffer).
+std::mutex sPoolLock;
+std::vector<std::vector<uint8_t>, PortHostAllocator<std::vector<uint8_t>>> sPool;
+size_t sPoolBytes = 0;
+const size_t kPoolMaxBytes = 48u << 20;
+const size_t kPoolMaxBuffers = 512;
+
+void giveRawBuffer(std::vector<uint8_t>& raw) {
+    std::vector<uint8_t> v;
+    v.swap(raw);
+    if (v.capacity() < 4096) return;
+    std::lock_guard<std::mutex> lock(sPoolLock);
+    if (sPoolBytes + v.capacity() > kPoolMaxBytes || sPool.size() >= kPoolMaxBuffers) return;
+    sPoolBytes += v.capacity();
+    sPool.push_back(std::move(v));
+}
+
+void decodeRaw(TexImage& img) {
+    int64_t t0 = port_host_time_ns();
+    size_t texels = 0;
+    for (uint32_t l = 0, w = img.width, h = img.height; l < img.levels; l++, w = w > 1 ? w / 2 : 1, h = h > 1 ? h / 2 : 1) {
+        texels += (size_t)w * h;
+    }
+    img.rgba.resize(texels);
+    const uint16_t* tlut = (const uint16_t*)img.rawTlut.data();
+    uint32_t* dst = img.rgba.data();
+    const uint8_t* p = img.raw.data();
+    for (uint32_t l = 0, w = img.width, h = img.height; l < img.levels; l++, w = w > 1 ? w / 2 : 1, h = h > 1 ? h / 2 : 1) {
+        decodeTexture((uint8_t*)dst, p, img.rawFmt, w, h, tlut, img.rawTlutFmt);
+        dst += (size_t)w * h;
+        p += texLevelSize(img.rawFmt, w, h);
+    }
+    giveRawBuffer(img.raw);
+    std::vector<uint8_t>().swap(img.rawTlut);
+    port_perf_tex_decode(port_host_time_ns() - t0, texels * 4);
+}
+
+std::mutex sQueueLock;
+std::condition_variable sQueueCv;
+std::deque<std::shared_ptr<TexImage>, PortHostAllocator<std::shared_ptr<TexImage>>> sQueue;
+bool sThreadStarted = false;
+
+void decodeThreadMain() {
+    PortHostAllocScope hostAlloc;
+    for (;;) {
+        std::shared_ptr<TexImage> img;
+        {
+            std::unique_lock<std::mutex> lock(sQueueLock);
+            sQueueCv.wait(lock, [] { return !sQueue.empty(); });
+            img = std::move(sQueue.front());
+            sQueue.pop_front();
+        }
+        // Images nobody else holds any more (replaced before they were
+        // used) are dropped undecoded.
+        if (img.use_count() > 1) {
+            ensureDecoded(*img);
+        }
+    }
+}
+
+}  // namespace
+
+void takeRawBuffer(std::vector<uint8_t>& raw, size_t bytes) {
+    if (bytes >= 4096) {
+        std::lock_guard<std::mutex> lock(sPoolLock);
+        // The smallest that fits, and not more than twice the size.
+        size_t best = sPool.size();
+        for (size_t i = 0; i < sPool.size(); i++) {
+            size_t cap = sPool[i].capacity();
+            if (cap >= bytes && cap <= bytes * 2 && (best == sPool.size() || cap < sPool[best].capacity())) best = i;
+        }
+        if (best < sPool.size()) {
+            sPoolBytes -= sPool[best].capacity();
+            raw.swap(sPool[best]);
+            sPool[best].swap(sPool.back());
+            sPool.pop_back();
+        }
+    }
+    raw.clear();  // the capacity stays
+}
+
+bool decodeOnGameThread() {
+    auto set = [](const char* name) {
+        const char* v = getenv(name);
+        return v && *v ? v : nullptr;
+    };
+    static const bool sync = (set("PETARI_TEXDECODE") && !strcmp(set("PETARI_TEXDECODE"), "sync")) || set("PETARI_FRAMESAVE") || set("PETARI_DUMP");
+    return sync;
+}
+
+void queueDecode(const std::shared_ptr<TexImage>& img) {
+    PortHostAllocScope hostAlloc;
+    std::lock_guard<std::mutex> lock(sQueueLock);
+    if (!sThreadStarted) {
+        // Two: a new scene brings a few hundred textures in its first frame
+        // (25-45 ms of decoding), which the frame preparation would
+        // otherwise finish itself.
+        sThreadStarted = true;
+        for (int i = 0; i < 2; i++) {
+            std::thread(decodeThreadMain).detach();
+        }
+    }
+    sQueue.push_back(img);
+    sQueueCv.notify_one();
+}
+
+void ensureDecoded(TexImage& img) {
+    uint32_t s = img.decodeState.load(std::memory_order_acquire);
+    while (s != 0) {
+        if (s == 1) {
+            if (img.decodeState.compare_exchange_weak(s, 2, std::memory_order_acquire)) {
+                decodeRaw(img);
+                img.decodeState.store(0, std::memory_order_release);
+                img.decodeState.notify_all();
+                return;
+            }
+        } else {
+            img.decodeState.wait(s, std::memory_order_acquire);  // another thread is decoding it
+            s = img.decodeState.load(std::memory_order_acquire);
+        }
+    }
+}
+
 }  // namespace gpu
+
