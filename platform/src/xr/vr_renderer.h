@@ -52,10 +52,13 @@ void init();
 //   diorama_distance  Mario's distance in front, metres (default 1.5)
 //   follow_smoothing  half-life of the world following Mario, s (0.12)
 //   turn_smoothing    half-life of the world turning with the camera, s (0.35)
-//   vignette_slow     how dark the vignette gets (0..1) at the slowest smooth
-//                     movement (0.6) and vignette_fast at full speed, 1
-//                     rad/s (1; with comfort_vignette 0, the strength of the
-//                     old curve); an old `vignette` line is read as the fast one
+//   vignette_slow     how strong the vignette is (0..1; 0.3 a clear circle of
+//                     34 degrees, 1 a tunnel of 13) at the slowest smooth
+//                     movement (0.3) and vignette_fast at full speed, 1
+//                     rad/s (0.5; with comfort_vignette 0, the strength of
+//                     the old curve); vignette_scale = 2 marks them as being
+//                     on this scale (else they are multiplied by 0.3); an old
+//                     `vignette` line is read as the fast one
 //   comfort_vignette  1 (default) darkens the sides slightly at once whenever
 //                     the view moves smoothly (the stick's turn and tilt, the
 //                     height and size adjust, a transit's camera) and more
