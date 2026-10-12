@@ -1489,11 +1489,14 @@ void renderPair(App& a, int s, const vr::FrameInfo& frame, const XrView views[2]
 // ---------------------------------------------------------------------------
 // The frame loop on Vulkan.  SteamVR on the Frame shows a released image at
 // once, finished or not (H1b), so an image is released only after the GPU
-// has finished it.  A game frame's two eyes cost about 13 ms of GPU time
-// (6.5 ms each at 1344x1408, more than a 120 Hz refresh), and SteamVR's
-// xrWaitFrame returns about one refresh before the display time, so a set
-// rendered and waited for within one refresh would always miss it.  At
-// 120 Hz each game frame therefore takes two refreshes:
+// has finished it.  A game frame's two eyes (render and composite at
+// 1344x1408) cost 6.7 ms of GPU time on average in xr_sim and 10 to 13 ms in
+// heavy scenes, beside the compositor's own work on the same GPU; and
+// SteamVR's xrWaitFrame returns about one refresh before the display time
+// (H1b: one vsync from poses to photons for a fast app), so a set rendered
+// and waited for within the refresh it is shown in would miss it whenever
+// the GPU needs more than a few ms.  At 120 Hz each game frame therefore
+// takes two refreshes:
 //   first:  one xrLocateViews for the next refresh's display time, the
 //           game frame picked up, both eyes recorded into one command buffer
 //           from those views and submitted; the refresh itself shows the last
