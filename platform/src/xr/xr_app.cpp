@@ -94,6 +94,7 @@ struct App {
     bool focused = false;
     bool pausedInGameplay = false;  // focus was lost during ordinary gameplay
     uint32_t dpad = 0;              // D-pad direction held by the right stick
+    bool stickClickHeld = false;    // the right stick's click, for its edge
     bool dpadTurned = false;        // that flick was a snap turn of the diorama, not the D-pad
     bool aimTracked = true;         // the right controller's aim pose is known
     int lastRumble = 0;
@@ -957,7 +958,7 @@ void updateInput(App& a, XrTime time) {
     // Button layout (see docs/CONTROLS.md):
     //   A = jump, right trigger = shoot star bits (B), B, Y or controller shake = spin,
     //   left trigger = crouch (Z), left grip = camera centre (C; the diorama's modifier on the Frame), menu = pause (+),
-    //   X = minus, right stick = D-pad (smooth turning: turns and tilts the diorama), stick click = first-person look (D-pad up).
+    //   X = minus, right stick = D-pad (smooth turning: turns and tilts the diorama), stick click = level the diorama's tilt.
     if (getBool(a, a.aAction)) pad.buttons |= W_A;
     if (getFloat(a, a.triggerAction, a.handPath[hm]) > 0.5f) pad.buttons |= W_B;
     if (a.wiiBAction != XR_NULL_HANDLE && getBool(a, a.wiiBAction)) pad.buttons |= W_B;
@@ -975,7 +976,13 @@ void updateInput(App& a, XrTime time) {
     // B or shake.
     if (getBool(a, a.menuAction)) pad.buttons |= W_PLUS;
     if (getBool(a, a.xAction)) pad.buttons |= W_MINUS;
-    if (getBool(a, a.stickClickAction, a.handPath[hm])) pad.buttons |= W_UP;
+    // The stick's click levels the diorama's tilt (once per click); first
+    // person is the D-pad's up.
+    {
+        bool click = getBool(a, a.stickClickAction, a.handPath[hm]);
+        if (click && !a.stickClickHeld) vr::resetTilt();
+        a.stickClickHeld = click;
+    }
     // Right stick: the D-pad.  In the diorama left/right turn it in steps
     // round Mario (a snap turn behind a blink; its yaw no longer follows the
     // game camera); elsewhere they turn the game camera.  With the
@@ -986,7 +993,7 @@ void updateInput(App& a, XrTime time) {
     // With smooth turning (smooth_turn) the stick turns and tilts the diorama
     // in proportion to its deflection instead (vr::smoothTurn), and is no
     // D-pad there (up and down stay the D-pad on a menu's list); first person
-    // is then the Frame's D-pad up or the stick's click.
+    // is then the Frame's D-pad up.
     XrVector2f look = getVec2(a, a.lookAction, a.handPath[hm]);
     float lx = fabsf(look.x), ly = fabsf(look.y);
     const bool smooth = vr::smoothTurning();
