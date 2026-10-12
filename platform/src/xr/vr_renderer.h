@@ -52,7 +52,10 @@ void init();
 //   diorama_distance  Mario's distance in front, metres (default 1.5)
 //   follow_smoothing  half-life of the world following Mario, s (0.12)
 //   turn_smoothing    half-life of the world turning with the camera, s (0.35)
-//   vignette          strength of the vignette while the view moves, 0..1 (1)
+//   vignette_slow     how dark the vignette gets (0..1) at the slowest smooth
+//                     movement (0.45) and vignette_fast at full speed, 1
+//                     rad/s (1; with comfort_vignette 0, the strength of the
+//                     old curve); an old `vignette` line is read as the fast one
 //   comfort_vignette  1 (default) darkens the sides slightly at once whenever
 //                     the view moves smoothly (the stick's turn and tilt, the
 //                     height and size adjust, a transit's camera) and more
@@ -136,6 +139,11 @@ void init();
 //                     step behind a blink once his up is 35 degrees away; off:
 //                     only on the right stick's click and after a transit
 //                     that landed on another planet
+//   cutscene_stars, cutscene_bosses, cutscene_observatory,
+//   cutscene_storybook, cutscene_friends, cutscene_mario, cutscene_other,
+//   cutscene_camera   1 (default) keeps that kind of cutscene in the diorama,
+//                     following the cutscene's camera; 0 shows it on the flat
+//                     screen (kinds: GameScene.cpp)
 //   turn_with_camera  1 to have the diorama turn with the game camera as it
 //                     swings round Mario (0: the world keeps its facing; the
 //                     right stick turns it, see smooth_turn)
