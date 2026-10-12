@@ -28,8 +28,8 @@ CM="cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_C
 build() { # name extra-args...  (name "layers" builds $W/src)
   n=$1; shift
   s=$W/deps/$n; [ "$n" = layers ] && s=$W/src
-  $CM -S "$s" -B "$W/b-$n" "$@" >/dev/null
-  nice -n 10 ninja -j4 -C "$W/b-$n" install >/dev/null
+  { $CM -S "$s" -B "$W/b-$n" "$@" && nice -n 10 ninja -j4 -C "$W/b-$n" install; } > "$W/b-$n.log" 2>&1 \
+    || { tail -30 "$W/b-$n.log" >&2; echo "build of $n failed (log $W/b-$n.log)" >&2; exit 1; }
   echo "built $n"
 }
 build Vulkan-Headers
@@ -38,7 +38,8 @@ build SPIRV-Headers
 build SPIRV-Tools -DSPIRV-Headers_SOURCE_DIR="$W/deps/SPIRV-Headers" -DSPIRV_SKIP_TESTS=ON \
   -DSPIRV_SKIP_EXECUTABLES=ON -DSPIRV_WERROR=OFF -DSPIRV_TOOLS_BUILD_STATIC=ON -DBUILD_SHARED_LIBS=OFF
 build robin-hood-hashing -DRH_STANDALONE_PROJECT=OFF
-build layers -DBUILD_TESTS=OFF -DBUILD_WERROR=OFF -DUSE_ROBIN_HOOD_HASHING=ON
+# robin_hood 3.11.5 lacks <cstdint>, which newer libstdc++ no longer pulls in by itself
+build layers -DCMAKE_CXX_FLAGS="-include cstdint" -DBUILD_TESTS=OFF -DBUILD_WERROR=OFF -DUSE_ROBIN_HOOD_HASHING=ON
 cp "$P/lib/libVkLayer_khronos_validation.so" "$OUT/"
 sed 's#"library_path": *"[^"]*"#"library_path": "'"$OUT"'/libVkLayer_khronos_validation.so"#' \
   "$P/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json" > "$OUT/VkLayer_khronos_validation.json"
