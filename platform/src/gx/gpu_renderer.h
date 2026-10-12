@@ -139,6 +139,11 @@ public:
     virtual bool snapshotTaken() const = 0;
     // Draws the last render() sent to the HUD target (0: it stayed clear).
     virtual int hudDrawCount() const = 0;
+    // Whether the last render() with HudMode::Target left the HUD target as
+    // it was, because it already held this frame's HUD (the HUD's draws do
+    // not depend on the eye: a second refresh of a game frame need not draw
+    // it again).  hudDrawCount() is then that HUD's.
+    virtual bool hudReused() const { return false; }
 
     // Camera recorded in the current frame (valid = false if none).
     virtual const CameraInfo& camera() const = 0;

@@ -477,6 +477,7 @@ public:
     void render(Target& efb, const EyeView* eye, Target* hud, HudMode hudMode = HudMode::Inline) override;
     bool snapshotTaken() const override;
     int hudDrawCount() const override;
+    bool hudReused() const override;
     const CameraInfo& camera() const override;
     TexHandle xfbTexture() const override { return mXfbTex; }
     int xfbWidth() const override { return mXfbWidth; }
@@ -543,6 +544,17 @@ struct VkImpl {
     int lastBreak = -1;     // index of the last item that ends a rendering instance early
     bool snapshotTaken = false;
     int hudDraws = 0;
+    // The HUD target holding a frame's HUD (VulkanRenderer::render): drawn
+    // again only for another frame or target.
+    struct HudCache {
+        const VkPrepared* frame = nullptr;
+        u64 number = 0;
+        u32 color = 0;
+        int w = 0, h = 0, draws = 0;
+    } hudCache;
+    bool hudWasReused = false;
+    bool rendered = false;  // the last execute() recorded its render (its targets and frame data were there)
+    int lastSkipped = 0;    // batches the last execute() left out waiting for their pipelines
     bool dumpingCopies = false;
     u64 copyDumpFrame = ~0ull;
     u32 rendersInCmd = 0;
@@ -1595,12 +1607,14 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
     if (hudMode == HudMode::Target && !hud) {
         hudMode = HudMode::Inline;
     }
+    rendered = false;
     if (!sImages.valid(efb.color) || !sImages.valid(efb.depth) || !P.data || !P.data->buf.buffer ||
         (hudMode == HudMode::Target && (!sImages.valid(hud->color) || !sImages.valid(hud->depth)))) {
         snapshotTaken = false;
         hudDraws = 0;
         return;
     }
+    rendered = true;
     // Per-eye block.
     EyeBlock eb;
     fillEyeBlock(eye, eb);
@@ -2035,6 +2049,7 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
     st.maxBreaks = breaks > st.maxBreaks ? breaks : st.maxBreaks;
     st.copies += curCopies;
     st.skipped += skipped;
+    lastSkipped = skipped;
     static const bool perRender = debugEnv("PETARI_VKSTATS") != nullptr;
     if (perRender) {
         port_log("vk: render %d of frame %llu (%s): %d rendering instances (%d breaks), %d copy passes, %d batches skipped, CPU %.2f ms", serial,
@@ -2246,6 +2261,7 @@ Target VulkanRenderer::createDepthTarget(int width, int height) {
 }
 
 void VulkanRenderer::destroyTarget(Target& t) {
+    if (sImpl && t.color && sImpl->hudCache.color == t.color) sImpl->hudCache = VkImpl::HudCache();
     auto fdm = sFdm.find(t.color);
     if (fdm != sFdm.end()) {
         Fdm old = fdm->second;
@@ -2350,11 +2366,40 @@ void VulkanRenderer::render(Target& efb, const EyeView* eye, Target* hud, HudMod
         }
         return;
     }
-    sImpl->execute(efb, eye, hud, hudMode, *this);
+    VkImpl& im = *sImpl;
+    // The HUD (HudMode::Target) is a function of the frame and the HUD
+    // target's size: 2D draws, never with the eye's view.  A HUD target that
+    // holds this frame's HUD already (the second refresh of a game frame) is
+    // left as it is.  Not with copies in the HUD section (their textures),
+    // nor while debugging partial renders.
+    static const bool sReuse = !vkLegacy();
+    const VkPrepared* P = im.cur.get();
+    if (efb.color == im.hudCache.color) im.hudCache = VkImpl::HudCache();  // drawn into as an EFB
+    bool cacheable = false, reuse = false;
+    if (sReuse && hudMode == HudMode::Target && hud && gDebugStopAfterDraws < 0 && sImages.valid(hud->color)) {
+        bool hudCopies = false, h = false;
+        for (const Item& it : P->items) {
+            if (it.type == IT_MARKER && (it.marker == MARK_HUD_BEGIN || it.marker == MARK_HUD_END)) h = it.marker == MARK_HUD_BEGIN;
+            hudCopies |= h && it.type == IT_COPY;
+        }
+        const VkImpl::HudCache& c = im.hudCache;
+        cacheable = !hudCopies;
+        reuse = cacheable && c.frame == P && c.number == P->number && c.color == hud->color && c.w == hud->width && c.h == hud->height;
+    }
+    im.execute(efb, eye, hud, reuse ? HudMode::Skip : hudMode, *this);
+    im.hudWasReused = reuse;
+    if (reuse) {
+        im.hudDraws = im.hudCache.draws;
+    } else if (cacheable && im.rendered && im.lastSkipped == 0) {  // a HUD missing batches still compiling is not kept
+        im.hudCache = VkImpl::HudCache{P, P->number, hud->color, hud->width, hud->height, im.hudDraws};
+    } else if (hudMode == HudMode::Target && hud) {
+        im.hudCache = VkImpl::HudCache();
+    }
 }
 
 bool VulkanRenderer::snapshotTaken() const { return sImpl && sImpl->snapshotTaken; }
 int VulkanRenderer::hudDrawCount() const { return sImpl ? sImpl->hudDraws : 0; }
+bool VulkanRenderer::hudReused() const { return sImpl && sImpl->hudWasReused; }
 
 void VulkanRenderer::finish() {
     if (!sImpl || !sImpl->ready) return;
