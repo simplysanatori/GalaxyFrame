@@ -895,6 +895,10 @@ void takeEyeTime(float ms, const EyeTimer& t) {
     sLogCount++;
 }
 
+// Every eye timed since the last recentEyeGpuMs (the Vulkan pacing).
+double sRecentEyeMs = 0.0;
+int sRecentEyes = 0;
+
 void pollTimers() {
     uint32_t pending = 0;
     for (int i = 0; i < vrdraw::Draw::kTimerSlots; i++) {
@@ -906,7 +910,11 @@ void pollTimers() {
     for (int i = 0; i < vrdraw::Draw::kTimerSlots; i++) {
         if (!(done & (1u << i))) continue;
         sTimers[i].pending = false;
-        if (valid & (1u << i)) takeEyeTime(ms[i], sTimers[i]);
+        if (valid & (1u << i)) {
+            sRecentEyeMs += ms[i];
+            sRecentEyes++;
+            takeEyeTime(ms[i], sTimers[i]);
+        }
     }
 }
 
@@ -1322,6 +1330,14 @@ void beginFrame(const FrameInfo& frame) {
 }
 
 bool foveationWanted() { return lroundf(sFoveation) > 0; }
+
+float recentEyeGpuMs(int* count) {
+    float avg = sRecentEyes ? (float)(sRecentEyeMs / sRecentEyes) : 0.0f;
+    *count = sRecentEyes;
+    sRecentEyeMs = 0.0;
+    sRecentEyes = 0;
+    return avg;
+}
 
 // The foveation setting as the full-resolution radius (normalized device
 // coordinates: a fraction of the half field of view; 0 = off) and the

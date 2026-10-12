@@ -161,6 +161,7 @@ struct Slot {
 Slot sSlots[kFramesInFlight];
 int sNextSlot = 0;
 int sOpen = -1;             // slot whose command buffer is being recorded
+int64_t sCbWaitNs = 0;      // time commandBuffer() waited for a slot (takeCommandBufferWaitNs)
 uint64_t sNextValue = 1;    // value the next submission signals
 VkSemaphore sTimeline = VK_NULL_HANDLE;
 std::deque<std::pair<uint64_t, std::function<void()>>> sDeferred;
@@ -736,13 +737,21 @@ bool probeDevice() {
 // ---------------------------------------------------------------------------
 bool commandBufferOpen() { return sOpen >= 0; }
 
+int64_t takeCommandBufferWaitNs() {
+    int64_t ns = sCbWaitNs;
+    sCbWaitNs = 0;
+    return ns;
+}
+
 VkCommandBuffer commandBuffer() {
     if (sOpen >= 0) {
         return sSlots[sOpen].cmd;
     }
     Slot& s = sSlots[sNextSlot];
-    if (s.value) {
+    if (s.value && completedValue() < s.value) {
+        int64_t t0 = port_host_time_ns();
         waitValue(s.value);
+        sCbWaitNs += port_host_time_ns() - t0;
     }
     collectFinished();
     readTimers(s);
