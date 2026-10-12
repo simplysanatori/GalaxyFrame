@@ -266,10 +266,12 @@ void itemHint(const Item& item, char* out, size_t size) {
 // ---------------------------------------------------------------------------
 const int kTexW = 640, kTexH = 1300;
 const float kWidthM = 0.42f;  // metres; height from the texture's aspect
-// Beside the pause menu's buttons, in the space right of them on the HUD
-// panel (see kHudCenter in vr_game.cpp), a little in front of it and turned
-// towards the player.
-const xm::Vec3 kCenter{0.60f, -0.12f, -0.88f};
+// Right of the HUD panel (see kHudCenter in vr_game.cpp: 1.45 m wide, 1 m
+// away, the pause menu on it) and in front of it.  The panel is turned
+// towards the player, so its left edge is the far one; with its centre at
+// x 0.78 and z -0.72 that edge is still 0.12 m before the HUD plane, and the
+// two never intersect.
+const xm::Vec3 kCenter{0.78f, -0.12f, -0.72f};
 
 // Layout, in texture pixels (top-down rows).  Under the title, the tabs;
 // under them the tab's settings, one row each (a slider takes two).
