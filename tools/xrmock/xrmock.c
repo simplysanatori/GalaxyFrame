@@ -19,6 +19,8 @@
 //   MOCK_XR_SPACEWARP=1       offer XR_FB_space_warp (the app then renders
 //                             motion vectors and depth with each frame)
 //   MOCK_XR_EXTENSIONS=a,b    replace the list of extensions offered
+//   MOCK_XR_SKIP=1            a frame begun late loses refreshes (the display
+//                             times jump), as on a headset
 //   MOCK_XR_BUSY_MS=<ms>      Vulkan: a release that waits longer than this
 //                             for the app's queue to go idle is an error
 //                             (off unless set: the app submits its next set
@@ -376,8 +378,15 @@ static int gWaits = 0;
 static XrResult XRAPI_CALL mWaitFrame(XrSession s, const XrFrameWaitInfo* wi, XrFrameState* fs) {
     (void)s;
     (void)wi;
-    int64_t wake = gT0 + (int64_t)gWaits * gPeriod;
     int64_t now = nowNs();
+    // MOCK_XR_SKIP=1: a frame loop that falls behind loses refreshes, as on a
+    // headset (the next frame waits for the next refresh to come).
+    static int skip = -1;
+    if (skip < 0) skip = getenv("MOCK_XR_SKIP") != NULL;
+    if (skip && gT0 && now > gT0 + (int64_t)gWaits * gPeriod + gPeriod / 2) {
+        gWaits = (int)((now - gT0) / gPeriod) + 1;
+    }
+    int64_t wake = gT0 + (int64_t)gWaits * gPeriod;
     if (wake > now) {
         struct timespec ts = {(time_t)((wake - now) / 1000000000ll), (long)((wake - now) % 1000000000ll)};
         nanosleep(&ts, NULL);

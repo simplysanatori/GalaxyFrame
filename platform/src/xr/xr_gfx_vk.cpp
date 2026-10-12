@@ -324,6 +324,8 @@ public:
 
     void finish() override { finishAll(); }
 
+    int64_t takeRecordingStallNs() override { return takeCommandBufferWaitNs(); }
+
     gpu::EfbTarget createImage(ImageKind kind, int width, int height, uint32_t mips) override {
         gpu::EfbTarget t;
         if (kind != ImageKind::Eye && kind != ImageKind::Ui) {

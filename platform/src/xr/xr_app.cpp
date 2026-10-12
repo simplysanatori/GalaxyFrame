@@ -161,7 +161,11 @@ struct App {
     int skippedRefreshes = 0;  // refreshes the frame loop missed (logged)
     int lateRefreshes = 0;     // of those, missed while the frame loop's own work ran late
     int64_t skipLogAt = 0;
-    int64_t workStartNs = 0, lastWorkNs = 0;  // the last refresh's work, from xrWaitFrame to xrEndFrame
+    int64_t workStartNs = 0, lastWorkNs = 0;
+    int64_t workSumNs = 0, workMaxNs = 0;  // the refreshes' work since the last pacing log
+    int workCount = 0;
+    int waitRefreshes = 0, stallRefreshes = 0;  // ... and its waits for the GPU (at a release, while recording)
+    int64_t waitNs = 0, stallNs = 0;  // the last refresh's work, from xrWaitFrame to xrEndFrame
     bool warp = false;          // SpaceWarp: each frame goes out with motion vectors
     int warpFrames = 0;         // frames since SpaceWarp started (the first few are logged)
     XrTime warpLastTime = 0;    // display time of the last SpaceWarp frame
@@ -1681,7 +1685,14 @@ void notePoses(App& a, const App::VkSet& set, XrTime displayTime) {
                      "%.2f mm %.3f deg avg, %.2f mm %.3f deg max; right eye %.2f mm %.3f deg avg, %.2f mm %.3f deg max; eye distance %.2f-%.2f mm",
                      k, a.poseOnTime, a.poseDtSum / k, a.poseDtMax, a.posePosSum[0] / k, a.poseAngSum[0] / k, a.posePosMax[0], a.poseAngMax[0],
                      a.posePosSum[1] / k, a.poseAngSum[1] / k, a.posePosMax[1], a.poseAngMax[1], a.poseIpdMin, a.poseIpdMax);
-            port_log("vr: Vulkan pacing now: new eyes %s; %d sets in the last 5 s", a.vkEvery || !a.paired ? "every refresh" : "every second refresh", k);
+            port_log("vr: Vulkan pacing now: new eyes %s; %d sets in the last 5 s; a refresh's work %.2f ms avg %.2f max; waits for the GPU over "
+                     "1 ms: %d at a release (%.1f ms), %d while recording (%.1f ms)",
+                     a.vkEvery || !a.paired ? "every refresh" : "every second refresh", k, a.workCount ? a.workSumNs / 1e6 / a.workCount : 0.0,
+                     a.workMaxNs / 1e6, a.waitRefreshes, a.waitNs / 1e6, a.stallRefreshes, a.stallNs / 1e6);
+            a.workSumNs = a.workMaxNs = 0;
+            a.workCount = 0;
+            a.waitRefreshes = a.stallRefreshes = 0;
+            a.waitNs = a.stallNs = 0;
         }
         a.poseLogAt = t;
         a.poseSets = a.poseOnTime = 0;
@@ -1754,7 +1765,18 @@ bool showPendingVk(App& a, XrTime displayTime, bool due) {
     a.shownSpace = p.space;
     if (due) notePoses(a, p, displayTime);
     p.valid = false;
-    return waited > kLateWaitNs;
+    // Waits for the GPU while this refresh's work was recorded count too
+    // (a command buffer still in use).
+    int64_t stall = gfx.takeRecordingStallNs();
+    if (stall > 1000000) {
+        a.stallRefreshes++;
+        a.stallNs += stall;
+    }
+    if (waited > 1000000) {
+        a.waitRefreshes++;
+        a.waitNs += waited;
+    }
+    return waited + stall > kLateWaitNs;
 }
 
 // Every refresh or every second refresh at 120 Hz (see above), from the sets
@@ -1781,17 +1803,27 @@ void updatePaceVk(App& a, bool late) {
     a.vkWinSets++;
     a.vkWinLate += late;
     int64_t now = port_host_time_ns();
+    // The GPU's measure too: both eyes against the refresh, beside the
+    // compositor (about 1 ms of each 8.3 ms refresh on the Frame).
+    float refreshMs = a.displayHz > 0.0f ? 1000.0f / a.displayHz : 8.33f;
     if (a.vkEvery && a.vkWinSets >= 240) {
-        if (a.vkWinLate > 24) {
-            port_log("vr: Vulkan pacing: new eyes every second refresh (60 Hz): %d of the last %d sets not finished a refresh after submission",
-                     a.vkWinLate, a.vkWinSets);
+        int eyes = 0;
+        float pair = 2.0f * vr::recentEyeGpuMs(&eyes);
+        bool gpuFull = eyes >= 60 && pair > 0.85f * refreshMs;
+        if (a.vkWinLate > 24 || gpuFull) {
+            port_log("vr: Vulkan pacing: new eyes every second refresh (60 Hz): %d of the last %d sets late, both eyes %.1f ms of GPU a refresh "
+                     "(%.1f ms the limit)",
+                     a.vkWinLate, a.vkWinSets, pair, 0.85f * refreshMs);
             a.vkEvery = false;
             a.vkModeAt = now;
         }
         a.vkWinSets = a.vkWinLate = 0;
     } else if (!a.vkEvery && a.vkWinSets >= 600) {
-        if (a.vkWinLate <= 6 && now - a.vkModeAt >= 10000000000ll) {
-            port_log("vr: Vulkan pacing: new eyes every refresh again: %d of the last %d sets late", a.vkWinLate, a.vkWinSets);
+        int eyes = 0;
+        float pair = 2.0f * vr::recentEyeGpuMs(&eyes);
+        if (a.vkWinLate <= 6 && (eyes < 60 || pair < 0.75f * refreshMs) && now - a.vkModeAt >= 10000000000ll) {
+            port_log("vr: Vulkan pacing: new eyes every refresh again: %d of the last %d sets late, both eyes %.1f ms of GPU", a.vkWinLate, a.vkWinSets,
+                     pair);
             a.vkEvery = true;
             a.vkModeAt = now;
         }
@@ -2424,6 +2456,9 @@ void renderFrame(App& a) {
         XR_CHECK(end);
     }
     a.lastWorkNs = port_host_time_ns() - a.workStartNs;
+    a.workSumNs += a.lastWorkNs;
+    a.workMaxNs = a.lastWorkNs > a.workMaxNs ? a.lastWorkNs : a.workMaxNs;
+    a.workCount++;
     // The runtime's measure of the GPU (for the dynamic resolution): an app
     // frame spans two eyes and two refreshes with SpaceWarp, one eye and one
     // refresh when the eyes take alternate refreshes, both eyes and one
