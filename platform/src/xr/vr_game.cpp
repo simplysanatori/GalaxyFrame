@@ -35,6 +35,7 @@ int sWipeKind = 0;
 float sWipeClosed = 0.0f;
 unsigned int sWipeRgb = 0;
 uint64_t sWipeFrame = 0;  // game frame that drew the wipe
+int64_t sWipeAt = 0;      // host time of that draw
 std::atomic<int> sDioramaShown{0};
 float sWipeDim = 0.0f;  // how far the current eye's wipe has closed (panel, laser)
 
@@ -44,8 +45,13 @@ void currentWipe(int* kind, float* closed, unsigned int* rgb) {
     uint64_t shown = gpu::renderer().frameNumber();
     std::lock_guard<std::mutex> lock(sWipeLock);
     bool fresh = shown <= sWipeFrame;
+    // A wipe that closed all the way stays closed through the frames the
+    // game draws blank without it (a scene loading behind the wipe: the
+    // picture is black there, and the view around it must stay black too),
+    // until the game draws a wipe again, or for at most four seconds.
+    bool held = !fresh && sWipeClosed >= 0.99f && port_host_time_ns() - sWipeAt < 4000000000ll;
     *kind = sWipeKind;
-    *closed = fresh ? sWipeClosed : 0.0f;
+    *closed = fresh ? sWipeClosed : held ? 1.0f : 0.0f;
     *rgb = sWipeRgb;
 }
 
@@ -91,7 +97,10 @@ vr::RigParams sRigParams;
 bool sCutawayTest = false;
 // Comfort settings (see vr::loadSettings).
 bool sCutawayOn = true;
-float sVignetteStrength = 1.0f;
+// How dark the vignette gets (0..1, of the 0.85 the picture is darkened by at
+// most): at the slowest smooth movement and at full speed (1 rad/s), with the
+// comfort vignette on; with it off, `fast` is the strength of the old curve.
+float sVignetteSlow = 0.45f, sVignetteFast = 1.0f;
 #ifdef __ANDROID__
 float sResolution = 1.6f;     // largest eye size, relative to the headset's recommended one
 #else
@@ -121,10 +130,19 @@ float sStereoFar = 0.95f;     // the farthest things' distance apart on the scre
 float sStereoSize = 0.8f;     // each picture's size relative to the screen's single one (stereo_resolution)
 float sSkipHold = 1.0f;       // seconds A is held to skip a cutscene (skip_hold)
 bool sInvertCamera = true;    // the right stick's turns swapped (invert_camera)
+bool sComfortVignette = true;  // a gentle vignette for every smooth movement of the view (comfort_vignette)
+// Which kinds of cutscene stay in the diorama (cutscene_*): in the order of
+// the kinds in GameScene.cpp (stars, bosses, observatory, storybook, friends,
+// mario, other, event camera).
+bool sCutsceneDiorama[8] = {true, true, true, true, true, true, true, true};
+bool sDioramaTransitions = true;  // launch stars, pipes and arrivals stay in the diorama (diorama_transitions)
 bool sSmoothTurn = true;      // the right stick turns the diorama smoothly, not in steps (smooth_turn)
 // The stick's smooth turn (rad/s) and when it was set (host ns): input comes
 // from the frame loop's thread, the rig is updated on the game's.
 std::atomic<float> sStickTurn{0.0f}, sStickTilt{0.0f};
+std::atomic<bool> sTiltReset{false};                    // the stick's click, for the rig
+std::atomic<float> sAdjustAmount{0.0f};                 // the height / size adjust's deflection (0..1) and when
+std::atomic<int64_t> sAdjustAt{0};
 std::atomic<int64_t> sStickTurnAt{0};
 float sTurnSpeed = 120.0f;    // top speed of the stick's turn, degrees a second (turn_speed)
 float sTiltSpeed = 60.0f;     // top speed of the stick's tilt, degrees a second (tilt_speed)
@@ -488,6 +506,7 @@ extern "C" void port_vr_wipe(int kind, float closed, unsigned int rgb) {
     sWipeClosed = closed;
     sWipeRgb = rgb;
     sWipeFrame = frame;
+    sWipeAt = port_host_time_ns();
 }
 
 extern "C" int port_vr_diorama(void) { return sDioramaShown.load(); }
@@ -504,6 +523,10 @@ extern "C" void port_vr_transit_end(const void* host) {
 }
 
 extern "C" const void* port_vr_transit_host(void) { return sTransitHost.load(); }
+
+extern "C" int port_vr_diorama_transitions(void) { return sDioramaTransitions ? 1 : 0; }
+// 1 when that kind of cutscene (GameScene.cpp's list) stays in the diorama.
+extern "C" int port_vr_cutscene_diorama(int type) { return type >= 0 && type < 8 ? (sCutsceneDiorama[type] ? 1 : 0) : 1; }
 
 extern "C" void port_vr_pointer_touched(unsigned long long id) {
     int64_t now = port_host_time_ns();
@@ -568,14 +591,27 @@ vr::Setting sSettings[] = {
     {"diorama_distance", 0.2f, 20.0f, 0.0f, [] { return -sRigParams.anchor.z; }, [](float x) { sRigParams.anchor.z = -x; }},
     {"follow_smoothing", 0.0f, 10.0f, 0.0f, NUMBER(sRigParams.posHalfLife)},
     {"turn_smoothing", 0.0f, 10.0f, 0.0f, NUMBER(sRigParams.rotHalfLife)},
-    {"vignette", 0.0f, 1.0f, 0.0f, NUMBER(sVignetteStrength)},
+    {"vignette_slow", 0.0f, 1.0f, 0.0f, NUMBER(sVignetteSlow)},
+    {"vignette_fast", 0.0f, 1.0f, 0.0f, NUMBER(sVignetteFast)},
+    {"comfort_vignette", 0.0f, 1.0f, 0.0f, FLAG(sComfortVignette)},
     {"cutaway", 0.0f, 1.0f, 0.0f, FLAG(sCutawayOn)},
     {"turn_with_camera", 0.0f, 1.0f, 0.0f, FLAG(sRigParams.turnWithCamera)},
+    // 0 smooth, 1 steps, 2 off; the file also takes the words.
+    {"gravity_turns", 0.0f, 2.0f, 0.0f, [] { return (float)sRigParams.gravityTurns; }, [](float x) { sRigParams.gravityTurns = (int)lroundf(x); }},
     {"skip_hold", 0.0f, 10.0f, 0.0f, [] { return sSkipHold; },
      [](float x) {
          sSkipHold = x;
          port_skip_set_hold_seconds(x);
      }},
+    {"diorama_transitions", 0.0f, 1.0f, 0.0f, FLAG(sDioramaTransitions)},
+    {"cutscene_stars", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[0])},
+    {"cutscene_bosses", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[1])},
+    {"cutscene_observatory", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[2])},
+    {"cutscene_storybook", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[3])},
+    {"cutscene_friends", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[4])},
+    {"cutscene_mario", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[5])},
+    {"cutscene_other", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[6])},
+    {"cutscene_camera", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[7])},
     {"smooth_turn", 0.0f, 1.0f, 0.0f, FLAG(sSmoothTurn)},
     {"turn_speed", 20.0f, 360.0f, 0.0f, NUMBER(sTurnSpeed)},
     {"tilt_speed", 10.0f, 180.0f, 0.0f, NUMBER(sTiltSpeed)},
@@ -586,7 +622,7 @@ vr::Setting sSettings[] = {
          port_input_set_camera_inverted(sInvertCamera);
      }},
     {"resolution", 0.5f, 2.0f, 0.0f, NUMBER(sResolution)},
-    {"min_resolution", 0.5f, 1.25f, 0.0f, NUMBER(sMinScale)},
+    {"min_resolution", 0.5f, 2.0f, 0.0f, NUMBER(sMinScale)},
     {"refresh_rate", 60.0f, 144.0f, 0.0f, NUMBER(sRefreshRate)},
     {"foveation", 0.0f, 4.0f, 0.0f, NUMBER(sFoveation)},
     {"foveation_radius", 10.0f, 60.0f, 0.0f, NUMBER(sFoveaRadiusPct)},
@@ -637,6 +673,7 @@ void loadSettings(const char* path) {
         return;
     }
     char line[1280];
+    bool fastInFile = false;
     while (fgets(line, sizeof(line), f)) {
         char key[64];
         float value;
@@ -659,6 +696,15 @@ void loadSettings(const char* path) {
             port_log("%s: foveation = %s", path, text);
             continue;
         }
+        // gravity_turns = smooth | steps | off (or 0 to 2).
+        if (sscanf(line, " gravity_turns = %31[a-z]", text) == 1) {
+            static const char* const kNames[] = {"smooth", "steps", "off"};
+            for (int i = 0; i < 3; i++) {
+                if (!strcmp(text, kNames[i])) sRigParams.gravityTurns = i;
+            }
+            port_log("%s: gravity_turns = %s", path, text);
+            continue;
+        }
         if (sscanf(line, " language = %31[A-Za-z]", text) == 1) {
             port_language_set(text);
             port_log("%s: language = %s", path, text);
@@ -666,6 +712,12 @@ void loadSettings(const char* path) {
         }
         if (line[0] == '#' || sscanf(line, " %63[a-z_] = %f", key, &value) != 2) {
             continue;
+        }
+        // `vignette` is the old name of vignette_fast; the new key wins when both are there.
+        if (!strcmp(key, "vignette_fast")) fastInFile = true;
+        if (!strcmp(key, "vignette")) {
+            if (fastInFile) continue;
+            strcpy(key, "vignette_fast");
         }
         const Setting* setting = findSetting(key);
         if (!setting) {
@@ -738,6 +790,9 @@ void smoothTurn(float x, float y) {
     sStickTilt.store(stickCurve(y) * sTiltSpeed * kRad);
     sStickTurnAt.store(port_host_time_ns());
 }
+void resetTilt() {
+    if (dioramaShown() && !(gpu::renderer().camera().flags & PORT_GX_CAMERA_POINTER_UI)) sTiltReset.store(true);
+}
 void dioramaAdjust(float x, float y) {
     // The left D-pad with the left grip held: up raises the diorama (Mario
     // nearer your eyes), right makes the world bigger.  Saved to the file a
@@ -750,6 +805,10 @@ void dioramaAdjust(float x, float y) {
     const Setting* height = findSetting("diorama_height");
     const Setting* scale = findSetting("diorama_scale");
     float cy = stickCurve(y), cx = stickCurve(x);
+    if (dioramaShown() && (cx != 0.0f || cy != 0.0f)) {
+        sAdjustAmount.store(fmaxf(fabsf(cx), fabsf(cy)));
+        sAdjustAt.store(now);
+    }
     if (dioramaShown() && cy != 0.0f && height) {
         height->set(fminf(1.6f, fmaxf(0.0f, height->get() - cy * 0.4f * dt)));  // m/s at the stop
         sChangedNs = now;
@@ -1246,17 +1305,43 @@ void beginFrame(const FrameInfo& frame) {
         sRig.stickTurn = stickFresh && smoothTurning() ? sStickTurn.load() : 0.0f;
         sRig.tiltOn = smoothTurning();
         sRig.stickTilt = stickFresh && smoothTilting() ? sStickTilt.load() : 0.0f;
+        if (sTiltReset.exchange(false)) sRig.resetTilt = sRig.relevel = true;
         sStageFromView = updateRig(sRig, sRigParams, r.camera(), dt);
         static const bool sRigLog = getenv("PETARI_RIGLOG") != nullptr;
-        if (sRigLog && wasValid && (sRig.snapped || sRig.turnRate > 1.0f)) {
+        if (sRigLog && (sRig.inTransit || sRig.settle) && wasValid) {
+            // A transit kept in the diorama: where the rig is against the game camera, about 4 times a second.
+            static int sTransitLogged = 0;
+            if (sTransitLogged++ % 15 == 0 || sRig.snapped) {
+                const float* w = r.camera().watch;
+                port_log("vr: rig %s: watch %.0f from the pivot, turn %.2f rad/s, up %.2f %.2f %.2f, tilt %.1f deg, vignette %.2f", sRig.inTransit ? "follows the camera" : "settling",
+                         xm::length(xm::Vec3{w[0], w[1], w[2]} - prevPivot), sRig.turnRate, sRig.up.x, sRig.up.y, sRig.up.z,
+                         (sRig.pitch + sRig.transitPitch) * 57.29578f, sVignette);
+            }
+        } else if (sRigLog && wasValid && (sRig.snapped || sRig.turnRate > 1.0f)) {
             const float* w = r.camera().watch;
             port_log("vr: rig %s: watch moved %.0f from the pivot, turn %.2f rad/s, up %.2f %.2f %.2f, tilt %.1f deg", sRig.snapped ? "snapped" : "turning",
-                     xm::length(xm::Vec3{w[0], w[1], w[2]} - prevPivot), sRig.turnRate, sRig.up.x, sRig.up.y, sRig.up.z, sRig.pitch * 57.29578f);
+                     xm::length(xm::Vec3{w[0], w[1], w[2]} - prevPivot), sRig.turnRate, sRig.up.x, sRig.up.y, sRig.up.z, (sRig.pitch + sRig.transitPitch) * 57.29578f);
         }
-        // Comfort vignette while the world turns (0.35 rad/s .. 1.5 rad/s),
-        // easing in and out.
-        float target = fminf(1.0f, fmaxf(0.0f, (sRig.turnRate - 0.35f) / 1.15f)) * 0.85f * sVignetteStrength;
+        // Comfort vignette while the view moves.  The rate is how fast it
+        // turns (rad/s): the rig's, or what the stick asks for (so that it
+        // shows whatever the rig measured), or the equivalent of the height /
+        // size adjust's deflection (a transit or cutscene camera is the
+        // rig's own motion; a still shot has no vignette).  comfort_vignette:
+        // vignette_slow at the slowest turn, growing to vignette_fast at
+        // 1 rad/s; off: only from 0.35 rad/s on, full (vignette_fast) at 1.5.
+        float rate = sRig.turnRate;
+        if (stickFresh) rate = fmaxf(rate, fmaxf(fabsf(sRig.stickTurn), fabsf(sRig.stickTilt)));
+        if (port_host_time_ns() - sAdjustAt.load() < 250000000) rate = fmaxf(rate, 1.5f * sAdjustAmount.load());
+        float t = fminf(1.0f, rate / 1.0f);
+        float amount = sComfortVignette ? (rate > 0.02f ? sVignetteSlow + (sVignetteFast - sVignetteSlow) * t : 0.0f)
+                                        : sVignetteFast * fminf(1.0f, fmaxf(0.0f, (rate - 0.35f) / 1.15f));
+        float target = amount * 0.85f;
         sVignette += (target - sVignette) * fminf(1.0f, dt * (target > sVignette ? 12.0f : 4.0f));
+        static const bool sVigLog = getenv("PETARI_RIGLOG") != nullptr;
+        static int sVigLogged = 0;
+        if (sVigLog && (sVignette > 0.01f || target > 0.0f) && sVigLogged++ % 30 == 0) {
+            port_log("vr: vignette %.2f (target %.2f) for a rate of %.2f rad/s (rig %.2f), dt %.4f", sVignette, target, rate, sRig.turnRate, dt);
+        }
         // Grow the cutaway in over ~0.15 s while level geometry hides the
         // player, and out over ~0.3 s once it no longer does.
         bool hidden = sCutawayOn && (sCutawayTest || (r.camera().flags & PORT_GX_CAMERA_OCCLUDED));
@@ -1503,13 +1588,28 @@ Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int
         // The dark around the screen; with the passthrough setting the image
         // is see-through there instead (premultiplied alpha), and the
         // compositor shows the room behind it.
+        // The game's screen wipe is drawn into the picture, which is only
+        // the screen's square: the view around it follows the wipe too
+        // (towards its colour, and opaque over the see-through room), and
+        // what is drawn over the view dims with it.
+        int wipeKind;
+        float wipeClosed;
+        unsigned int wipeRgb;
+        currentWipe(&wipeKind, &wipeClosed, &wipeRgb);
         float dark = 1.0f - sPassAmount;
-        draw.clear(0.004f * dark, 0.004f * dark, 0.012f * dark, dark);
+        auto lin = [](unsigned int c) { float f = c / 255.0f; return f * f; };
+        float wr = wipeKind == 0 ? lin((wipeRgb >> 16) & 255) : 0.0f;
+        float wg = wipeKind == 0 ? lin((wipeRgb >> 8) & 255) : 0.0f;
+        float wb = wipeKind == 0 ? lin(wipeRgb & 255) : 0.0f;
+        float keep = 1.0f - wipeClosed;
+        draw.clear(0.004f * dark * keep + wr * wipeClosed, 0.004f * dark * keep + wg * wipeClosed, 0.012f * dark * keep + wb * wipeClosed,
+                   dark * keep + wipeClosed);
         if (r.hasFrame() && !sUiLayers) {
             drawPanel(sStereoFrame ? sFlatPair[eye] : sScaledShown ? sFlatPair[0] : sFlat,
                       viewProj * panelModel(screenCenter(), screenWidth(), (float)sFlat.width / sFlat.height),
                       true);
         }
+        sWipeDim = wipeClosed;  // after the screen: its picture has the wipe in it already
     }
     if (!sUiLayers) {
         settingsDraw(viewProj);
@@ -1859,12 +1959,17 @@ void drawUiLayer(int which, const gpu::EfbTarget& dst) {
     if (which == kHudLayer) {
         drawQuad(sHud.color, xm::scale(2.0f), false, 1.0f);  // the unit quad over the whole image
         sHudFresh = false;
-    } else if (which == kScreenLayer) {
-        drawQuad(sStereoShown || sScaledShown ? sFlatPair[0].color : sFlat.color, xm::scale(2.0f), true, 1.0f);
-        sFlatFresh = false;
-    } else if (which == kScreenRightLayer) {
-        drawQuad(sFlatPair[1].color, xm::scale(2.0f), true, 1.0f);
-        sFlatRightFresh = false;
+    } else if (which == kScreenLayer || which == kScreenRightLayer) {
+        float wipe = sWipeDim;
+        sWipeDim = 0.0f;  // the picture has the game's wipe in it already
+        if (which == kScreenLayer) {
+            drawQuad(sStereoShown || sScaledShown ? sFlatPair[0].color : sFlat.color, xm::scale(2.0f), true, 1.0f);
+            sFlatFresh = false;
+        } else {
+            drawQuad(sFlatPair[1].color, xm::scale(2.0f), true, 1.0f);
+            sFlatRightFresh = false;
+        }
+        sWipeDim = wipe;
     } else if (which == kSetupLayer) {
         setupDrawLayer();
     } else if (which == kBeamLayer || which == kReticleLayer || which == kSkipLayer) {
