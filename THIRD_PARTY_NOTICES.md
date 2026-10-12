@@ -3,6 +3,13 @@
 This repository and the app built from it contain or are derived from the
 following works, used under their licenses.
 
+## GalaxyQuest
+
+GalaxyFrame is a port of GalaxyQuest by bigmak94
+(https://github.com/bigmak94/GalaxyQuest): the platform layer, the VR
+presentation and the OpenGL ES renderer come from it. GalaxyQuest is released
+under The Unlicense, as are GalaxyFrame's changes: see [LICENSE](LICENSE).
+
 ## Petari
 
 `decomp/` holds the sources of Petari, the Super Mario Galaxy decompilation

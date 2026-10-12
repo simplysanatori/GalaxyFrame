@@ -1,6 +1,6 @@
 #!/bin/bash
 # Configures and builds the Linux arm64 target (the Steam Frame's own SteamVR
-# runtime): build-linux/libgame.so (the game) and build-linux/galaxyquest
+# runtime): build-linux/libgame.so (the game) and build-linux/galaxyframe
 # (the launcher).
 #   ./build_linux.sh [ninja targets...]
 # Needs clang, lld, CMake 3.24+, Ninja, the EGL/GLES and SDL2 headers, and

@@ -1,9 +1,9 @@
 #!/bin/bash
 # Converts your own Super Mario Galaxy disc into the files the game reads,
-# on the Frame itself: ~/.local/share/GalaxyQuest/game (about 3.3 GB).
+# on the Frame itself: ~/.local/share/GalaxyFrame/game (about 3.3 GB).
 #   steam-frame/prepare-game.sh <disc image (.rvz/.iso/.wbfs) or extracted folder> [--no-movies]
 # Disc images are extracted with nodtool (https://github.com/encounter/nod),
-# downloaded once into ~/.cache/galaxyquest and checked against its sha256.
+# downloaded once into ~/.cache/galaxyframe and checked against its sha256.
 # The extraction (3.2 GB) is deleted afterwards.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -11,8 +11,10 @@ SRC=$1
 [ -n "$SRC" ] && [ -e "$SRC" ] || { echo "usage: $0 <disc image or extracted folder> [--no-movies]" >&2; exit 1; }
 MOVIES=--with-movies
 [ "$2" = "--no-movies" ] && MOVIES=
-OUT=${GALAXYQUEST_HOME:-$HOME/.local/share/GalaxyQuest}/game
-CACHE=$HOME/.cache/galaxyquest
+OUT=${GALAXYFRAME_HOME:-${GALAXYQUEST_HOME:-$HOME/.local/share/GalaxyFrame}}/game  # GALAXYQUEST_HOME: the old name
+CACHE=$HOME/.cache/galaxyframe
+# The downloaded nodtool of an install made under the old name is kept.
+if [ ! -e "$CACHE" ] && [ -d "$HOME/.cache/galaxyquest" ]; then mv "$HOME/.cache/galaxyquest" "$CACHE"; fi
 
 NOD_VERSION=v2.0.0-alpha.12
 NOD_SHA256=33e801c0e4aee7e714ad84e89521f50e2f79005571b9d4779b695e44ea21ff99

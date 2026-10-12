@@ -4,7 +4,7 @@
 // submission through the renderer's command buffers and timeline.
 //
 // SteamVR on the Frame shows a released swapchain image at once, finished or
-// not, for Vulkan as for GLES (H1b): an image is released only once the GPU
+// not, for Vulkan as for GLES: an image is released only once the GPU
 // has finished the work recorded on it.  The frame loop (xr_app.cpp) waits
 // for the frame's fence before it releases; release() checks it again and
 // waits itself if needed (counted in the log).
@@ -181,7 +181,7 @@ public:
             return false;
         }
         // SteamVR on the Frame accepts mip levels for a swapchain but allocates
-        // the image's memory for level 0 only (H2: a 2048x1152 swapchain of 12
+        // the image's memory for level 0 only (measured: a 2048x1152 swapchain of 12
         // levels got 9.47 MB, one level is 9.44 MB): blitting the levels below
         // wrote past the image, into the other images' memory, and the screen
         // showed blocks of garbage.  One level on Vulkan (the compositor

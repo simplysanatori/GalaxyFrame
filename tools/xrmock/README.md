@@ -7,8 +7,8 @@ headset, and a script that compares what two builds do against it.
   `XR_RUNTIME_JSON=<out>/runtime.json`). Needs clang and the OpenXR headers of
   `third_party/openxr`.
 - `trace-compare.sh <build A> <build B> [paired|unpaired|warp ...]` runs the
-  real `galaxyquest` launcher of each build against the mock in a scratch
-  `GALAXYQUEST_HOME` and diffs the traces (swapchain acquire / release, frame
+  real `galaxyframe` launcher of each build against the mock in a scratch
+  `GALAXYFRAME_HOME` and diffs the traces (swapchain acquire / release, frame
   begin / end with their layers). Use `IGNORE_EXT=XR_KHR_vulkan_enable2` when
   comparing a build from before the extension was enabled.
 - `xrmock.c` is the runtime (frame clock, call-order checks, trace, settings
@@ -28,7 +28,7 @@ the session (`xrmock: summary ...`):
 
 - acquire, wait and release in order per swapchain (both APIs);
 - Vulkan: no swapchain with mip levels (SteamVR on the Frame allocates
-  memory for level 0 only; writing the others corrupted other images in H2);
+  memory for level 0 only; writing the others corrupted other images);
 - Vulkan, with `MOCK_XR_BUSY_MS=<ms>`: at each release the mock waits for the
   app's queue to go idle; longer than that means work was still queued. Off
   by default: the app records and submits the next set before it releases

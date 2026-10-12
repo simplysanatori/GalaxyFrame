@@ -1,23 +1,23 @@
 #!/bin/bash
-# H1 probe session: runs the five xrprobe cases one after another, 30 s each
+# Probe session: runs the five xrprobe cases one after another, 30 s each
 # with a 5 s pause between, and collects every log into one dated directory.
 # Put the headset on, start SteamVR, then run this from a terminal:
-#   tools/xrprobe/run-h1.sh [extra xrprobe options, e.g. --hz 90]
-# Environment: H1_SECONDS (30), H1_PAUSE (5), H1_OUT (output directory),
+#   tools/xrprobe/run-probes.sh [extra xrprobe options, e.g. --hz 90]
+# Environment: PROBE_SECONDS (30), PROBE_PAUSE (5), PROBE_OUT (output directory),
 #   XRPROBE (binary), VRTIMING (vrtiming.py; skipped when missing).
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 BIN=${XRPROBE:-$HERE/build/xrprobe}
-RUN_SECONDS=${H1_SECONDS:-30}
-PAUSE=${H1_PAUSE:-5}
-OUT=${H1_OUT:-$HOME/Games/GalaxyQuest/probe/h1-$(date +%Y%m%d-%H%M%S)}
+RUN_SECONDS=${PROBE_SECONDS:-30}
+PAUSE=${PROBE_PAUSE:-5}
+OUT=${PROBE_OUT:-$HOME/Games/GalaxyQuest/probe/probes-$(date +%Y%m%d-%H%M%S)}
 VRTIMING=${VRTIMING:-$HOME/Games/MoonlightXRNative/src/tools/vrtiming.py}
 
 if [ ! -x "$BIN" ]; then
     echo "xrprobe not built. Build it with:"
     echo "  cmake -S $HERE -B $HERE/build -G Ninja -DCMAKE_C_COMPILER=clang"
-    echo "  flock ~/Games/GalaxyQuest/.build.lock cmake --build $HERE/build"
+    echo "  flock ${GQROOT:-~/Games/GalaxyQuest}/.build.lock cmake --build $HERE/build"
     exit 1
 fi
 if ! pgrep -x vrcompositor >/dev/null; then
@@ -36,10 +36,10 @@ CASES=(
 "5-depth-only|--depth-only|The checkerboard at full frame rate with depth submitted. Smooth? Any warping or wobble around its edges when you move your head?"
 )
 
-echo "H1 probes: ${#CASES[@]} cases of ${RUN_SECONDS} s, logs in $OUT"
+echo "Probes: ${#CASES[@]} cases of ${RUN_SECONDS} s, logs in $OUT"
 [ -f "$VRTIMING" ] || echo "(vrtiming.py not found at $VRTIMING: compositor counters will be missing)"
 {
-    echo "H1 probe session $(date -Iseconds)"
+    echo "Probe session $(date -Iseconds)"
     echo "extra options: $*"
 } > "$OUT/session.txt"
 

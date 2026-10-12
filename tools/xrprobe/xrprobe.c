@@ -1,6 +1,6 @@
-// Copyright (C) 2026 Moonlight XR Native and GalaxyQuest Steam Frame contributors. GPLv3, see LICENSE.
+// Copyright (C) 2026 Moonlight XR Native and GalaxyFrame contributors. GPLv3, see LICENSE.
 // xrprobe: OpenXR + Vulkan probe for SteamVR pacing and frame synthesis on the
-// Steam Frame (lane P of GalaxyQuest frame.3). Forked from the Moonlight XR
+// Steam Frame (part of GalaxyFrame, not of the game build). Forked from the Moonlight XR
 // Native M0 hello program, which is proven on this headset.
 //
 // Modes (exactly one):
@@ -1892,7 +1892,7 @@ int main(int argc, char** argv) {
             VK_CHECK(vkQueueSubmit(vk.queue, 1, &si, fences[slot]));
             rec.cpuMs = (nowSec() - c0) * 1e3;
 
-            // SteamVR shows a released image at once, finished or not (H1b):
+            // SteamVR shows a released image at once, finished or not (measured):
             // the SpaceWarp cases release only finished images.
             if (cs->mode == MODE_PACE_FENCE || cs->mode == MODE_SW) {
                 double f0 = nowSec();

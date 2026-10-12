@@ -295,7 +295,7 @@ bool probeDevice();
 // Eight: the XR frame loop submits up to three times a refresh (left eye,
 // right eye and the rest, UI layers) with two refreshes' sets in flight;
 // with three, opening a command buffer waited for the last set's GPU work in
-// the middle of recording the next (H3 at resolution 1.0: "both eyes"
+// the middle of recording the next (at resolution 1.0: "both eyes"
 // taking 8-12 ms of CPU, refreshes missed).
 const int kFramesInFlight = 8;
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""One table from a GalaxyQuest session's logs on the Steam Frame (standard library only).
+"""One table from a GalaxyFrame session's logs on the Steam Frame (standard library only).
 
-  tools/session-report.py                       current and previous session in ~/.local/share/GalaxyQuest
-  tools/session-report.py DIR                   the same for another data folder ($GALAXYQUEST_HOME)
+  tools/session-report.py                       current and previous session in ~/.local/share/GalaxyFrame
+  tools/session-report.py DIR                   the same for another data folder ($GALAXYFRAME_HOME)
   tools/session-report.py LOG [VRTIMING] ...    named logs: petari_log.txt, then its vrtiming.log if any
 
 A session is a petari_log.txt (the game's log) and, when present, the vrtiming.log of the
-same session (SteamVR's compositor timing, written by steam-frame/galaxyquest.sh through
+same session (SteamVR's compositor timing, written by steam-frame/galaxyframe.sh through
 tools/vrtiming.py).  Folder mode pairs petari_log.txt with vrtiming.log and petari_log.txt.prev
 with vrtiming.log.prev.  Several sessions are columns of the same table, so a baseline and a
 later run line up.  Columns for logs that are missing are left out of the VR compositor rows.
@@ -203,7 +203,7 @@ def main(argv):
         return 0
     sessions = []
     if not argv or (len(argv) == 1 and os.path.isdir(argv[0])):
-        d = argv[0] if argv else os.environ.get("GALAXYQUEST_HOME", os.path.expanduser("~/.local/share/GalaxyQuest"))
+        d = argv[0] if argv else os.environ.get("GALAXYFRAME_HOME") or os.environ.get("GALAXYQUEST_HOME") or os.path.expanduser("~/.local/share/GalaxyFrame")
         for label, lg, vt in (("current", "petari_log.txt", "vrtiming.log"), ("previous", "petari_log.txt.prev", "vrtiming.log.prev")):
             lp, vp = os.path.join(d, lg), os.path.join(d, vt)
             if os.path.exists(lp) or os.path.exists(vp):
