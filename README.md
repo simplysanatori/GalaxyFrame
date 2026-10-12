@@ -103,12 +103,12 @@ The game sees a Wii Remote with a Nunchuk. The Frame controllers are mapped onto
 | Left grip held, D-pad up / down | None | In the diorama, smoothly raise or lower it (*Height*), saved to the settings file. Works with *Smooth turning* on or off; the D-pad reaches nothing else meanwhile |
 | Left grip held, D-pad left / right | None | In the diorama, smoothly make it smaller or bigger (*World size*), saved the same way |
 | D-pad up (left) | D-pad up | First-person look. With *Smooth turning* off the right stick up does it too |
-| Right stick click | None | In the diorama, level the tilt; with *Gravity turns* Steps or Off, also level the world to Mario's up (behind a blink) |
+| Right stick click | None | In the diorama, level the tilt; with *Planet turns* Steps or Off, also level the world to Mario's up (behind a blink) |
 | Right stick down (smooth turning off) | D-pad down | Page down in lists |
 | Right controller aim | Pointer | Collect star bits, grab Pull Stars, point at menus and the VR settings panel |
 | Right controller tilt | Remote tilt | Steer the Star Ball and the Ray |
 
-The left stick click is not used. *Left-handed* (VR settings, Game tab, or `left_handed = 1`) points with the left controller and swaps the hands' sticks, triggers, grips and bumpers; the buttons, Menu, View and the D-pad stay where they are. The left grip stays the height and size modifier (the right grip is C then).
+The left stick click is not used. *Left-handed* (VR settings, Controls tab, or `left_handed = 1`) points with the left controller and swaps the hands' sticks, triggers, grips and bumpers; the buttons, Menu, View and the D-pad stay where they are. The left grip stays the height and size modifier (the right grip is C then).
 
 **Haptics.** When the game rumbles the Wii Remote, both controllers buzz, in short pulses for as long as the game keeps the motor on. A light tick marks the pointer reaching a new target or a control of the VR settings panel. Both are on by default. `haptics = 0` in `petari_vr.ini` turns them off. The first pulse's result from SteamVR is logged once in `petari_log.txt` as `haptics: first pulse result N`.
 
@@ -120,7 +120,7 @@ The left stick click is not used. *Left-handed* (VR settings, Game tab, or `left
 
 **Recentring.** Use SteamVR's recentre (hold the system button, or use the dashboard). The game puts the screen or the diorama in front of you again.
 
-**The VR settings panel.** Press Menu or View. The pause menu opens, and the VR settings panel appears to the right of its buttons. Aim the right controller at it and press A or pull the right trigger. Its five tabs hold the settings of `petari_vr.ini`, except `haptics`. In the diorama, launch stars, pipes and the flight into a galaxy stay in the diorama and follow the game camera (*Diorama in flights*, on the *Diorama* tab); the *Comfort* tab has the vignette and *Gravity turns* (smooth, steps or off) for motion sickness. [docs/CONTROLS.md](docs/CONTROLS.md) explains each setting, pointing, tilt and skipping in detail. That page was written for the Quest's Touch Plus controllers. Its button table does not apply to the Frame, and the rest does.
+**The VR settings panel.** Press Menu or View. The pause menu opens, and the VR settings panel appears to the right of its buttons. Aim the right controller at it and press A or pull the right trigger. Its six tabs hold the settings of `petari_vr.ini`, except `haptics`. In the diorama, launch stars, pipes and the flight into a galaxy stay in the diorama and follow the game camera (*Diorama in flights*, on the *Cutscenes* tab); the *Comfort* tab has the vignette (how dark at slow and at fast movement) and *Planet turns* (smooth, steps or off) for motion sickness; the *Cutscenes* tab chooses, by kind, which cutscenes stay in the diorama (all but the videos, by default). [docs/CONTROLS.md](docs/CONTROLS.md) explains each setting, pointing, tilt and skipping in detail. That page was written for the Quest's Touch Plus controllers. Its button table does not apply to the Frame, and the rest does.
 
 ## Settings
 
@@ -141,7 +141,7 @@ Game files, saves, settings and logs are in `~/.local/share/GalaxyQuest`:
 Settings that matter on the Frame:
 
 - **SteamVR per-app settings.** `install.sh` sets these for the shortcut, and `galaxyquest.sh` sets them again at every launch: refresh rate 120 Hz, no throttling, no extra prediction frames, motion smoothing off. SteamVR has dropped them from its settings file before, which put the display at 72 Hz. The game's 60 fps divides 120 Hz evenly, so each game frame is shown for two refreshes. At 72 or 90 Hz motion is uneven. The game's own *Refresh rate* setting cannot change SteamVR's rate.
-- **Resolution.** Held at 0.8 of SteamVR's recommended size (`min_resolution` and `resolution` in `petari_vr.ini`, or the *Picture* tab). At 1.0 in heavy areas, the game and SteamVR's compositor together filled the GPU, and the picture ghosted on head movement. You can raise it. Keep the two values equal, since each step of the dynamic resolution is a visible change in sharpness.
+- **Resolution.** Held at 0.8 of SteamVR's recommended size (`min_resolution` and `resolution` in `petari_vr.ini`, or the *Display* tab). At 1.0 in heavy areas, the game and SteamVR's compositor together filled the GPU, and the picture ghosted on head movement. You can raise it. Keep the two values equal, since each step of the dynamic resolution is a visible change in sharpness.
 - **Lower latency.** `PETARI_RETRACE_STEP=2` in `petari_debug.env` moves the game's frame timing one refresh later, for about 8 ms less latency. The game then has 8 ms per frame, and a slow frame is shown twice, which happens as areas load.
 - **Sound** goes to the default PipeWire output.
 
