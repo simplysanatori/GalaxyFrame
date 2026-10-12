@@ -38,6 +38,73 @@ bool sLoaderTried = false;
 bool sDeviceReady = false;
 VkDebugUtilsMessengerEXT sMessenger = VK_NULL_HANDLE;
 std::atomic<int> sValidationErrors{0}, sValidationWarnings{0};
+bool sSyncValidation = false;
+std::string sInstanceRequest = "made elsewhere";  // what fillInstanceSetup asked for
+
+// The shared object a function pointer lives in: the first layer of the
+// call chain that intercepts it, or the driver.
+std::string libraryOf(const void* fn) {
+    Dl_info info;
+    if (!fn || !dladdr(fn, &info) || !info.dli_fname) return fn ? "?" : "(null)";
+    const char* slash = strrchr(info.dli_fname, '/');
+    return slash ? slash + 1 : info.dli_fname;
+}
+
+// Vulkan layer libraries loaded in the process (the loader's implicit
+// layers, the validation layer, layers an OpenXR API layer inserts).
+std::string loadedLayerLibraries() {
+    std::string list;
+    FILE* f = fopen("/proc/self/maps", "r");
+    if (!f) return list;
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        char* path = strchr(line, '/');
+        if (!path) continue;
+        path[strcspn(path, "\n")] = 0;
+        const char* base = strrchr(path, '/') + 1;
+        bool layer = strstr(base, "VkLayer") || strstr(base, "Layer_") || strstr(base, "MangoHud") || strstr(base, "fossilize") || strstr(base, "renderdoc");
+        if (layer && list.find(base) == std::string::npos) list += std::string(list.empty() ? "" : " ") + base;
+    }
+    fclose(f);
+    return list.empty() ? "none" : list;
+}
+
+const char* envState(const char* name) {
+    const char* v = getenv(name);
+    return v && *v ? v : "unset";
+}
+
+// Which layers and extensions are in play, and the call chain of the entry
+// points the renderer leans on (XR runtimes may insert Vulkan layers, such
+// as SteamVR's VK_LAYER_VALVE_fdm_injection, which rewrites render passes of
+// swapchain-sized targets for foveation and depth).
+void logChain(const VkDeviceCreateInfo* info) {
+    std::string exts;
+    for (uint32_t i = 0; info && i < info->enabledExtensionCount; i++) exts += std::string(i ? " " : "") + info->ppEnabledExtensionNames[i];
+    port_log("vk: instance: %s", sInstanceRequest.c_str());
+    port_log("vk: device extensions: %s", exts.c_str());
+    port_log("vk: layer libraries loaded: %s", loadedLayerLibraries().c_str());
+    struct {
+        const char* name;
+        const void* fn;
+    } chain[] = {
+        {"vkCreateDevice", (const void*)vkGetInstanceProcAddr(sDev.instance, "vkCreateDevice")},
+        {"vkQueueSubmit", (const void*)vkQueueSubmit},
+        {"vkCmdBeginRenderingKHR", (const void*)vkCmdBeginRenderingKHR},
+        {"vkCmdEndRenderingKHR", (const void*)vkCmdEndRenderingKHR},
+        {"vkCreateImage", (const void*)vkCreateImage},
+        {"vkCreateGraphicsPipelines", (const void*)vkCreateGraphicsPipelines},
+        {"vkCreateImageView", (const void*)vkCreateImageView},
+        {"vkCmdPipelineBarrier2KHR", (const void*)vkCmdPipelineBarrier2KHR},
+        {"vkCmdDrawIndexed", (const void*)vkCmdDrawIndexed},
+    };
+    std::string text;
+    for (auto& c : chain) text += std::string(text.empty() ? "" : ", ") + c.name + " -> " + libraryOf(c.fn);
+    port_log("vk: call chain: %s", text.c_str());
+    port_log("vk: A/B switches: DISABLE_VULKAN_FDM_INJECTION_LAYER=1 keeps SteamVR's FDM injection layer out (now %s), "
+             "DISABLE_GAMESCOPE_WSI=1 the Gamescope WSI layer (now %s), PETARI_VKVALIDATE=1|2 validation (now %s)",
+             envState("DISABLE_VULKAN_FDM_INJECTION_LAYER"), envState("DISABLE_GAMESCOPE_WSI"), envState("PETARI_VKVALIDATE"));
+}
 
 int validateLevel() {
     const char* v = debugEnv("PETARI_VKVALIDATE");
@@ -243,6 +310,7 @@ bool fillInstanceSetup(InstanceSetup* s) {
                 s->features.enabledValidationFeatureCount = 1;
                 s->features.pEnabledValidationFeatures = s->enables;
                 s->info.pNext = &s->features;
+                sSyncValidation = true;
             }
             if (hasExtension(layerExts, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
                 debugUtils = true;
@@ -258,6 +326,11 @@ bool fillInstanceSetup(InstanceSetup* s) {
     s->info.ppEnabledExtensionNames = extCount ? s->extensions : nullptr;
     s->info.enabledLayerCount = layerCount;
     s->info.ppEnabledLayerNames = layerCount ? s->layers : nullptr;
+    sInstanceRequest = "apiVersion 1.2, layers [";
+    for (uint32_t i = 0; i < layerCount; i++) sInstanceRequest += std::string(i ? " " : "") + s->layers[i];
+    sInstanceRequest += "], extensions [";
+    for (uint32_t i = 0; i < extCount; i++) sInstanceRequest += std::string(i ? " " : "") + s->extensions[i];
+    sInstanceRequest += "]";
     sDev.validation = layerCount > 0;
     sDev.debugUtils = false;
     for (uint32_t i = 0; i < extCount; i++) {
@@ -266,10 +339,8 @@ bool fillInstanceSetup(InstanceSetup* s) {
     return true;
 }
 
-bool adoptInstance(VkInstance instance, bool owned) {
-    if (!loadLoader() || !instance) return false;
-    sDev.instance = instance;
-    sDev.ownsInstance = owned;
+namespace {
+bool loadInstanceFunctions(VkInstance instance) {
     bool ok = true;
 #define GQ_VK_LOAD_INSTANCE(name)                                                 \
     name = (PFN_##name)vkGetInstanceProcAddr(instance, #name);                    \
@@ -282,7 +353,15 @@ bool adoptInstance(VkInstance instance, bool owned) {
 #define GQ_VK_LOAD_INSTANCE_OPT(name) name = (PFN_##name)vkGetInstanceProcAddr(instance, #name);
     GQ_VK_INSTANCE_OPT_FUNCS(GQ_VK_LOAD_INSTANCE_OPT)
 #undef GQ_VK_LOAD_INSTANCE_OPT
-    if (!ok) return false;
+    return ok;
+}
+}  // namespace
+
+bool adoptInstance(VkInstance instance, bool owned) {
+    if (!loadLoader() || !instance) return false;
+    sDev.instance = instance;
+    sDev.ownsInstance = owned;
+    if (!loadInstanceFunctions(instance)) return false;
     if (sDev.debugUtils && vkCreateDebugUtilsMessengerEXT && !sMessenger) {
         VkDebugUtilsMessengerCreateInfoEXT mci{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
         mci.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
@@ -290,7 +369,8 @@ bool adoptInstance(VkInstance instance, bool owned) {
                           VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
         mci.pfnUserCallback = debugCallback;
         if (vkCreateDebugUtilsMessengerEXT(instance, &mci, nullptr, &sMessenger) == VK_SUCCESS) {
-            port_log("vk: validation layer %s, messages go to this log", sDev.validation ? "on" : "off (debug utils only)");
+            port_log("vk: validation layer %s%s, messages go to this log", sDev.validation ? "on" : "off (debug utils only)",
+                     sDev.validation && sSyncValidation ? " with synchronization validation" : "");
         }
     }
     return true;
@@ -485,7 +565,7 @@ namespace {
 DeviceSetup* sAdoptSetup = nullptr;
 }  // namespace
 
-bool adoptDevice(VkPhysicalDevice phys, VkDevice device, uint32_t queueFamily, uint32_t queueIndex, bool owned) {
+bool adoptDevice(VkPhysicalDevice phys, VkDevice device, uint32_t queueFamily, uint32_t queueIndex, bool owned, const VkDeviceCreateInfo* usedInfo) {
     PortHostAllocScope hostAlloc;
     if (!sDev.instance || !device) return false;
     DeviceSetup check;
@@ -527,6 +607,7 @@ bool adoptDevice(VkPhysicalDevice phys, VkDevice device, uint32_t queueFamily, u
         port_log("vk: D24S8 depth-stencil attachments unsupported");
         return false;
     }
+    logChain(usedInfo ? usedInfo : &setup->info);
     if (!memInit()) return false;
     if (!createSubmission()) return false;
     sDeviceReady = true;
@@ -565,7 +646,7 @@ bool createStandalone() {
             continue;
         }
         sAdoptSetup = &ds;
-        bool ok = adoptDevice(phys, device, ds.queueFamily, 0, true);
+        bool ok = adoptDevice(phys, device, ds.queueFamily, 0, true, &ds.info);
         sAdoptSetup = nullptr;
         if (ok) return true;
     }
@@ -574,6 +655,48 @@ bool createStandalone() {
 }
 
 bool deviceReady() { return sDeviceReady; }
+
+bool probeDevice() {
+    PortHostAllocScope hostAlloc;
+    if (sDeviceReady) return true;
+    InstanceSetup is;
+    if (!fillInstanceSetup(&is)) return false;
+    // A plain instance of our own, only to look at the GPU: no layers.
+    is.info.enabledLayerCount = 0;
+    is.info.ppEnabledLayerNames = nullptr;
+    is.info.enabledExtensionCount = 0;
+    is.info.ppEnabledExtensionNames = nullptr;
+    is.info.pNext = nullptr;
+    VkInstance instance = VK_NULL_HANDLE;
+    VkResult r = vkCreateInstance(&is.info, nullptr, &instance);
+    if (r != VK_SUCCESS) {
+        port_log("vk: vkCreateInstance failed (%d)", (int)r);
+        return false;
+    }
+    bool ok = false;
+    PFN_vkDestroyInstance destroy = (PFN_vkDestroyInstance)vkGetInstanceProcAddr(instance, "vkDestroyInstance");
+    if (loadInstanceFunctions(instance)) {
+        uint32_t n = 0;
+        vkEnumeratePhysicalDevices(instance, &n, nullptr);
+        std::vector<VkPhysicalDevice> devs(n);
+        vkEnumeratePhysicalDevices(instance, &n, devs.data());
+        for (VkPhysicalDevice phys : devs) {
+            DeviceSetup ds;
+            if (fillDeviceSetup(phys, &ds)) {
+                ok = true;
+                break;
+            }
+        }
+        if (!ok) port_log("vk: no usable Vulkan device (%u found)", n);
+    }
+    if (destroy) destroy(instance, nullptr);
+    // The functions belong to the real instance, loaded when it is adopted.
+#define GQ_VK_CLEAR(name) name = nullptr;
+    GQ_VK_INSTANCE_FUNCS(GQ_VK_CLEAR)
+    GQ_VK_INSTANCE_OPT_FUNCS(GQ_VK_CLEAR)
+#undef GQ_VK_CLEAR
+    return ok;
+}
 
 // ---------------------------------------------------------------------------
 // Submission

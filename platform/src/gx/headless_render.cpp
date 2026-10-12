@@ -313,6 +313,41 @@ static xm::Mat4 testEye(gpu::Renderer& r, int w, int h, gpu::EyeView& ev) {
     return stageFromView;
 }
 
+// PETARI_XRSIM_FPS with the Vulkan renderer (headless.c calls this instead of
+// port_headless_xrsim, whose presentation draws with GLES): the headset
+// loop's renders without the presentation.  The newest prepared frame for
+// the left eye (the HUD to its own target, SpaceWarp's depth snapshot) and
+// the right eye at an eye's size, then the GPU is waited for.
+extern "C" void port_headless_vksim(void) {
+    gpu::Renderer& r = gpu::renderer();
+    if (r.api() != gpu::Api::Vulkan || !sStarted) {
+        return;  // the first snapshot initializes the renderer
+    }
+    r.update();
+    if (!r.hasFrame()) {
+        return;
+    }
+    static gpu::Target sEyes[2], sHud, sSnap;
+    const int w = 1344, h = 1408;
+    if (!sEyes[0].fbo) {
+        sEyes[0] = r.createTarget(w, h);
+        sEyes[1] = r.createTarget(w, h);
+        sHud = r.createTarget(w, h);
+        sSnap = r.createDepthTarget(w / 4, h / 4);
+    }
+    for (int e = 0; e < 2; e++) {
+        gpu::EyeView ev;
+        bool vr = r.camera().valid;
+        if (vr) {
+            testEye(r, w, h, ev);
+        }
+        ev.index = e;
+        ev.depthSnapshot = e == 0 ? &sSnap : nullptr;
+        r.render(sEyes[e], vr ? &ev : nullptr, &sHud, e == 0 ? gpu::HudMode::Target : gpu::HudMode::Skip);
+    }
+    r.finish();
+}
+
 // Renders `frame` at `scale` x the native EFB size and writes `path` (PNG).
 static unsigned long long renderShots(std::shared_ptr<const gpu::Frame> frame, const char* path, int scale) {
     gpu::Renderer& r = gpu::renderer();
@@ -447,13 +482,31 @@ static unsigned long long renderShots(std::shared_ptr<const gpu::Frame> frame, c
                  c.flags, c.aspect, c.fovy, c.watch[0], c.watch[1], c.watch[2], c.watchUp[0], c.watchUp[1], c.watchUp[2], ps.x, ps.y, ps.z);
     }
     // Time a few replays of the prepared frame (the per-eye cost in VR).
+    // PETARI_GPUTIME=1: also their GPU time (GLES: a GL_TIME_ELAPSED query;
+    // the Vulkan renderer times each render itself, PETARI_VKSTATS).
+    GLuint gpuQuery = 0;
+    static const bool gpuTime = gpu::debugEnv("PETARI_GPUTIME") && r.api() == gpu::Api::Gles &&
+                                strstr((const char*)glGetString(GL_EXTENSIONS), "GL_EXT_disjoint_timer_query");
+    if (gpuTime) {
+        glGenQueries(1, &gpuQuery);
+        glBeginQuery(0x88BF /* GL_TIME_ELAPSED_EXT */, gpuQuery);
+    }
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (int i = 0; i < 3; i++) {
         r.render(sTarget, nullptr, nullptr);
     }
+    if (gpuTime) {
+        glEndQuery(0x88BF);
+    }
     r.finish();
     double renderMs = msSince(t0) / 3.0;
     port_log("headless: prepare %.2f ms, replay %.2f ms", prepMs, renderMs);
+    if (gpuTime) {
+        GLuint ns = 0;
+        glGetQueryObjectuiv(gpuQuery, GL_QUERY_RESULT, &ns);
+        glDeleteQueries(1, &gpuQuery);
+        port_log("headless: replay GPU %.2f ms a render (GL timer)", ns / 3e6);
+    }
     if (r.api() == gpu::Api::Gles) {
         GLenum err = glGetError();
         if (err != GL_NO_ERROR) {

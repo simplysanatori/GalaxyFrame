@@ -198,6 +198,10 @@ int main(int argc, char** argv) {
     double xrsimFps = envSet("PETARI_XRSIM_FPS") ? atof(envSet("PETARI_XRSIM_FPS")) : 0.0;
     long long nextXrsim = start;
     void (*xrsimFn)(const char*, int, float, float) = (void (*)(const char*, int, float, float))dlsym(lib, "port_headless_xrsim");
+    // The Vulkan renderer (PETARI_GFX=vk) has a loop of its own: the
+    // presentation simulation draws with GLES.
+    const char* gfx = envSet("PETARI_GFX");
+    void (*vksimFn)(void) = gfx && (!strcmp(gfx, "vk") || !strcmp(gfx, "vulkan")) ? (void (*)(void))dlsym(lib, "port_headless_vksim") : NULL;
     uint32_t lastButtons = 0;
     for (;;) {
         long long now = nowMs();
@@ -213,10 +217,14 @@ int main(int argc, char** argv) {
             fprintf(stderr, "headless: %.2f s buttons %04x\n", (now - start) / 1000.0, pad.buttons);
             lastButtons = pad.buttons;
         }
-        if (xrsimFps > 0.0 && xrsimFn && shotIndex > 0 && now >= nextXrsim && now < nextShot) {  // after the first snapshot made the GL context; a due snapshot comes first
+        if (xrsimFps > 0.0 && (xrsimFn || vksimFn) && shotIndex > 0 && now >= nextXrsim && now < nextShot) {  // after the first snapshot made the GL context; a due snapshot comes first
             nextXrsim += (long long)(1000.0 / xrsimFps);
             if (nextXrsim < now) nextXrsim = now;
-            xrsimFn(NULL, 1, 0.0f, -20.0f);
+            if (vksimFn) {
+                vksimFn();
+            } else {
+                xrsimFn(NULL, 1, 0.0f, -20.0f);
+            }
             continue;
         }
         if (now < nextShot) {
@@ -227,7 +235,7 @@ int main(int argc, char** argv) {
         if (render) {
             snprintf(shot, sizeof(shot), "%s/../shots/frame_%03d.png", argv[2], shotIndex);
             render(shot, 2);
-            if (envSet("PETARI_XRSIM")) {
+            if (envSet("PETARI_XRSIM") && !vksimFn) {
                 // The headset presentation (vr_game.cpp) with simulated eyes.
                 void (*xrsim)(const char*, int, float, float) = (void (*)(const char*, int, float, float))dlsym(lib, "port_headless_xrsim");
                 float yaw = 0, pitch = -20;
