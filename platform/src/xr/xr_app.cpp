@@ -2542,6 +2542,18 @@ extern "C" __attribute__((visibility("default"))) void port_linux_main(const cha
         gpu::forceGles("the OpenXR runtime has no XR_KHR_vulkan_enable2");
     }
 #endif
+#ifndef __ANDROID__
+    // Turnip renders the eyes 7-8 % faster without its tiled (GMEM) mode
+    // (xr_sim: both eyes 6.6 -> 6.1 ms at resolution 0.8, 8.0 -> 7.4 ms at
+    // 1.0); foveation needs the tiles.  Read by the driver when the instance
+    // is made.  PETARI_VKSYSMEM=0 keeps the driver's own choice.
+    if (gpu::requestedApi() == gpu::Api::Vulkan && !vr::foveationWanted() &&
+        !(getenv("PETARI_VKSYSMEM") && !strcmp(getenv("PETARI_VKSYSMEM"), "0"))) {
+        std::string tu = getenv("TU_DEBUG") ? std::string(getenv("TU_DEBUG")) + ",sysmem" : "sysmem";
+        setenv("TU_DEBUG", tu.c_str(), 1);
+        port_log("vk: TU_DEBUG=%s (direct rendering, no tiles: faster for these eyes)", tu.c_str());
+    }
+#endif
     xrgfx::select(xrgfx::wantedApi());
     a.vk = xrgfx::gfx().api() == xrgfx::Api::Vulkan;
     xrgfx::gfx().createContext();

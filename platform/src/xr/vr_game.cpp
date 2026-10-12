@@ -1277,6 +1277,8 @@ void beginFrame(const FrameInfo& frame) {
     sRenderNs = port_host_time_ns() - frameStartNs;
 }
 
+bool foveationWanted() { return lroundf(sFoveation) > 0; }
+
 // The foveation setting as the full-resolution radius (normalized device
 // coordinates: a fraction of the half field of view; 0 = off) and the
 // density at the fringes (fraction of full per axis).

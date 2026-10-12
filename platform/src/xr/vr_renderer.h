@@ -229,6 +229,8 @@ enum { kHudLayer, kSettingsLayer, kScreenLayer, kSetupLayer, kScreenRightLayer, 
 // The UI layers from the bottom one to the top one.
 const int kUiLayerOrder[kUiLayerCount] = {kScreenLayer, kScreenRightLayer, kHudLayer, kSettingsLayer, kSetupLayer, kBeamLayer, kReticleLayer, kSkipLayer};
 void setUiLayers(bool on);
+// The foveation setting is on (it takes effect only with an eye-tracked gaze).
+bool foveationWanted();
 // The laser's origin and direction (stage space) from the controller's pose
 // at this refresh's display time, between the game's input updates (the
 // pointer and its length stay from the last pointerFromRay).
