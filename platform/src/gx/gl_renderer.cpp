@@ -28,32 +28,10 @@ namespace gpu {
 
 int gDebugStopAfterDraws = debugEnv("PETARI_GLSTOP") ? atoi(debugEnv("PETARI_GLSTOP")) : -1;
 
-// ---------------------------------------------------------------------------
-// Deferred GL deletes (texture images die on whichever thread drops them)
-// ---------------------------------------------------------------------------
-static std::mutex sDeleteLock;
-static std::vector<GLuint, PortHostAllocator<GLuint>> sDeleteTextures;  // pushed on any thread, freed on the GL one
-
-void queueGlTextureDelete(uint32_t tex) {
-    if (tex) {
-        std::lock_guard<std::mutex> lock(sDeleteLock);
-        sDeleteTextures.push_back(tex);
-    }
-}
-
-TexImage::~TexImage() {
-    queueGlTextureDelete(glTex);
-}
-
+// Deferred GL deletes (texture images die on whichever thread drops them;
+// gpu_textures.cpp keeps the queue).
 static void flushDeletes() {
-    std::vector<GLuint, PortHostAllocator<GLuint>> list;
-    {
-        std::lock_guard<std::mutex> lock(sDeleteLock);
-        list.swap(sDeleteTextures);
-    }
-    if (!list.empty()) {
-        glDeleteTextures((GLsizei)list.size(), list.data());
-    }
+    drainTextureDeletes([](const TexHandle* list, size_t count, void*) { glDeleteTextures((GLsizei)count, list); }, nullptr);
 }
 
 namespace {
@@ -1526,13 +1504,13 @@ void Renderer::Impl::upload(Prepared& p, bool syncPrograms) {
 
     // New textures.
     for (auto& img : f.textures) {
-        if (img->glTex && img->glVersion == img->version) {
+        if (img->gpuTex && img->gpuVersion == img->version) {
             continue;
         }
-        if (!img->glTex) {
-            glGenTextures(1, &img->glTex);
+        if (!img->gpuTex) {
+            glGenTextures(1, &img->gpuTex);
         }
-        glBindTexture(GL_TEXTURE_2D, img->glTex);
+        glBindTexture(GL_TEXTURE_2D, img->gpuTex);
         const u32* px = img->rgba.data();
         u32 w = img->width, h = img->height;
         for (u32 l = 0; l < img->levels; l++) {
@@ -1542,7 +1520,7 @@ void Renderer::Impl::upload(Prepared& p, bool syncPrograms) {
             h = h > 1 ? h / 2 : 1;
         }
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, (GLint)img->levels - 1);
-        img->glVersion = img->version;
+        img->gpuVersion = img->version;
         // Images never change once recorded, so the pixels are not needed
         // again (except by the PETARI_DUMP texture dump).
         static const bool keepPixels = debugEnv("PETARI_DUMP") != nullptr;
@@ -2115,7 +2093,7 @@ void Renderer::Impl::execute(EfbTarget& efb, const EyeView* eye, EfbTarget* hud,
                 auto cit = copies.find(copyKey(copySlot, (tr & 0x7FFFFFFF) << 5));
                 bindTexture(u, cit != copies.end() ? cit->second.tex : 0, sampler(it.texMode0[u], it.texMode1[u], 1));
             } else if (tr < textures.size()) {
-                bindTexture(u, textures[tr]->glTex, sampler(it.texMode0[u], it.texMode1[u], textures[tr]->levels));
+                bindTexture(u, textures[tr]->gpuTex, sampler(it.texMode0[u], it.texMode1[u], textures[tr]->levels));
             }
         }
 
