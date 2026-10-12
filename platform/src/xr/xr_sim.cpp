@@ -2,7 +2,6 @@
 // simulated eyes and writes what the swapchains would receive, side by side,
 // to a PNG.  Used by tools/run_headless.sh (PETARI_XRSIM=1) to check the
 // headset presentation without wearing the headset.
-#include <GLES3/gl32.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,14 +12,16 @@
 
 #include "port/port.h"
 #include "../gx/gl_renderer.h"
+#include "vr_draw.h"
 #include "vr_renderer.h"
+#include "xr_gfx.h"
 
 extern "C" void port_headless_write_png(const char* path, const unsigned char* rgba, int w, int h);
 
 namespace {
 
 bool sInit = false;
-GLuint sTex[2], sFbo[2];
+gpu::EfbTarget sEyeImage[2];  // the eye images, like the swapchain's
 const int kRecW = 1680, kRecH = 1760;  // Quest 3 recommended eye size
 int kW = kRecW, kH = kRecH;            // swapchain stand-ins (vr::swapchainScale())
 double sTime = 1.0;
@@ -30,12 +31,12 @@ double sTime = 1.0;
 // 0 world, 128 fixed in the room, 255 player).
 bool sMotion = false;
 const int kMvW = kRecW / 4, kMvH = kRecH / 4;
-GLuint sMvTex[2], sMvDepth[2];
+gpu::EfbTarget sMvImage[2], sMvDepth[2];
 vr::Extent sUsed{0, 0};  // part of the eye images rendered (Super Resolution: the render size)
 // PETARI_XRSIM_LAYERS=1: the panels go out as UI layers, as in the headset;
 // their images are composited into the eyes here in the compositor's stead.
 bool sLayers = false;
-GLuint sLayerTex[vr::kUiLayerCount], sLayerFbo[vr::kUiLayerCount];
+gpu::EfbTarget sLayerImage[vr::kUiLayerCount];
 
 xm::Quat axisAngle(xm::Vec3 axis, float deg) {
     float h = deg * 0.5f * 3.14159265f / 180.0f;
@@ -55,6 +56,7 @@ xm::Quat mul(xm::Quat a, xm::Quat b) {
 extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, float pitchDeg) {
     if (!sInit) {
         sInit = true;
+        xrgfx::select(xrgfx::wantedApi());
         // PETARI_VRINI=<path>: the settings file the VR app reads (and the
         // settings panel writes).
         if (const char* ini = getenv("PETARI_VRINI")) {
@@ -70,40 +72,24 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
         float swapScale = getenv("PETARI_XRSIM_SWAPSCALE") ? (float)atof(getenv("PETARI_XRSIM_SWAPSCALE")) : vr::swapchainScale();
         kW = (int)lroundf(kRecW * swapScale);
         kH = (int)lroundf(kRecH * swapScale);
-        glGenTextures(2, sTex);
-        glGenFramebuffers(2, sFbo);
+        xrgfx::Gfx& gfx = xrgfx::gfx();
         for (int e = 0; e < 2; e++) {
-            glBindTexture(GL_TEXTURE_2D, sTex[e]);
-            glTexStorage2D(GL_TEXTURE_2D, 1, GL_SRGB8_ALPHA8, kW, kH);  // like the swapchain
-            glBindFramebuffer(GL_FRAMEBUFFER, sFbo[e]);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sTex[e], 0);
+            sEyeImage[e] = gfx.createImage(xrgfx::ImageKind::Eye, kW, kH, 1);
         }
         sLayers = getenv("PETARI_XRSIM_LAYERS") != nullptr;
         if (sLayers) {
-            glGenTextures(vr::kUiLayerCount, sLayerTex);
-            glGenFramebuffers(vr::kUiLayerCount, sLayerFbo);
             for (int k = 0; k < vr::kUiLayerCount; k++) {
                 int w, h;
                 vr::uiLayerSize(k, &w, &h);
-                glBindTexture(GL_TEXTURE_2D, sLayerTex[k]);
-                glTexStorage2D(GL_TEXTURE_2D, 1, GL_SRGB8_ALPHA8, w, h);  // like the swapchain
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                glBindFramebuffer(GL_FRAMEBUFFER, sLayerFbo[k]);
-                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sLayerTex[k], 0);
+                sLayerImage[k] = gfx.createImage(xrgfx::ImageKind::Ui, w, h, 1);
             }
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
             vr::setUiLayers(true);
         }
         sMotion = getenv("PETARI_XRSIM_MV") != nullptr;
         if (sMotion) {
-            glGenTextures(2, sMvTex);
-            glGenTextures(2, sMvDepth);
             for (int e = 0; e < 2; e++) {
-                glBindTexture(GL_TEXTURE_2D, sMvTex[e]);
-                glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16F, kMvW, kMvH);
-                glBindTexture(GL_TEXTURE_2D, sMvDepth[e]);
-                glTexStorage2D(GL_TEXTURE_2D, 1, GL_DEPTH24_STENCIL8, kMvW, kMvH);
+                sMvImage[e] = gfx.createImage(xrgfx::ImageKind::Motion, kMvW, kMvH, 1);
+                sMvDepth[e] = gfx.createImage(xrgfx::ImageKind::Depth, kMvW, kMvH, 1);
             }
             vr::setMotionSize(kMvW, kMvH);
         }
@@ -176,25 +162,22 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
         }
         vr::beginFrame(fi);
         for (int e = 0; e < 2; e++) {
-            sUsed = vr::renderEye(e, fi, sFbo[e], kW, kH);
+            sUsed = vr::renderEye(e, fi, sEyeImage[e], kW, kH);
         }
         if (sLayers) {
             for (int k : vr::kUiLayerOrder) {
                 vr::UiLayer l = vr::uiLayer(k);
                 if (!l.visible) continue;
-                if (l.changed) vr::drawUiLayer(k, sLayerFbo[k]);
+                if (l.changed) vr::drawUiLayer(k, sLayerImage[k]);
                 for (int e = 0; e < 2; e++) {
                     if (l.eye != vr::kBothEyes && l.eye != (e == 0 ? vr::kLeftEye : vr::kRightEye)) continue;
-                    glBindFramebuffer(GL_FRAMEBUFFER, sFbo[e]);
-                    glViewport(0, 0, sUsed.width, sUsed.height);
-                    vr::compositeUiLayer(k, sLayerTex[k], fi.eyes[e].proj * fi.eyes[e].view);
+                    vr::compositeUiLayer(k, sLayerImage[k].color, fi.eyes[e].proj * fi.eyes[e].view, sEyeImage[e], sUsed.width, sUsed.height);
                 }
             }
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
         }
         if (sMotion) {
             for (int e = 0; e < 2; e++) {
-                vr::renderMotion(e, fi, sMvTex[e], sMvDepth[e]);
+                vr::renderMotion(e, fi, sMvImage[e].color, sMvDepth[e].depth);
             }
             xm::Quat dq;
             xm::Vec3 dp;
@@ -208,7 +191,7 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
     }
     if (!path) {
         int64_t t0 = port_host_time_ns();
-        glFinish();
+        xrgfx::gfx().finish();
         port_perf_gpu_wait(port_host_time_ns() - t0);
         return;
     }
@@ -218,8 +201,7 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
     // for sequences).
     static const bool sSmall = getenv("PETARI_XRSIM_SMALL") != nullptr;
     for (int e = 0; e < (sSmall ? 1 : 2); e++) {
-        glBindFramebuffer(GL_FRAMEBUFFER, sFbo[e]);
-        glReadPixels(0, 0, rw, rh, GL_RGBA, GL_UNSIGNED_BYTE, eyePx.data());
+        vrdraw::draw().readPixels(sEyeImage[e], rw, rh, eyePx.data());
         if (sSmall) {
             for (int y = 0; y < rh / 2; y++) {
                 for (int x = 0; x < rw / 2; x++) {
@@ -246,7 +228,6 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
         }
         px[i + 3] = 255;
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (sSmall) {
         port_headless_write_png(path, px.data(), rw / 2, rh / 2);
     } else {
@@ -256,7 +237,7 @@ extern "C" void port_headless_xrsim(const char* path, int frames, float yawDeg, 
     if (sMotion) {
         std::vector<unsigned char> img;
         std::string summary;
-        vr::motionDebugImage(sMvTex[0], &img, &summary);
+        vr::motionDebugImage(sMvImage[0].color, &img, &summary);
         std::string mvPath = path;
         if (mvPath.size() > 4 && mvPath.compare(mvPath.size() - 4, 4, ".png") == 0) mvPath.resize(mvPath.size() - 4);
         mvPath += "_mv.png";

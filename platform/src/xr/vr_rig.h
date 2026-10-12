@@ -12,7 +12,7 @@
 // happens at once behind a short blink instead of turning the world.
 #pragma once
 
-#include "../gx/gl_renderer.h"
+#include "../gx/gpu_renderer.h"
 #include "xmath.h"
 
 namespace vr {
