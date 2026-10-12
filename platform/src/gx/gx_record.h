@@ -72,8 +72,16 @@ using TexHandle = uint32_t;
 // A decoded texture shared between the recorder and the renderer.
 struct TexImage {
     uint32_t width = 0, height = 0, levels = 1;
-    std::vector<uint32_t> rgba;  // all levels, level 0 first
+    std::vector<uint32_t> rgba;  // all levels, level 0 first (once decoded: ensureDecoded)
     uint64_t version = 0;        // bumped when the pixels change
+    // Decoding off the game thread (tex_decode.h): the recorder keeps the
+    // texture memory and palette as they were, and a decode thread, or the
+    // first reader through ensureDecoded(), turns them into rgba.
+    // decodeState 0: rgba ready, 1: waiting, 2: being decoded.
+    std::atomic<uint32_t> decodeState{0};
+    std::vector<uint8_t> raw;      // the levels in texture memory
+    std::vector<uint8_t> rawTlut;  // the palette (CI formats)
+    uint32_t rawFmt = 0, rawTlutFmt = 0;
     // Renderer-side upload state (render thread only).
     TexHandle gpuTex = 0;
     uint64_t gpuVersion = 0;     // `version` of the pixels in gpuTex
