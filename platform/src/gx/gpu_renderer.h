@@ -166,6 +166,14 @@ Renderer& renderer();
 // cannot be created, GLES is used and a log line says so.
 void selectRenderer(const char* iniPath);
 
+// The backend PETARI_GFX or the ini file asks for (renderer() may still
+// fall back to GLES), without creating the renderer.
+Api requestedApi();
+// Makes renderer() use GLES whatever was asked, logging `why` (a string that
+// lives on) when Vulkan was asked for: the XR presentation cannot run on
+// Vulkan.  Before the first renderer() call.
+void forceGles(const char* why);
+
 // Backend factories (null if the backend is not available).
 Renderer* createGlesRenderer();
 Renderer* createVulkanRenderer();
