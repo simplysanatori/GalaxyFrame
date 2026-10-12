@@ -123,6 +123,17 @@ static XrResult XRAPI_CALL mCreateInstance(const XrInstanceCreateInfo* ci, XrIns
     return XR_SUCCESS;
 }
 static XrResult XRAPI_CALL mDestroyInstance(XrInstance i) { (void)i; return XR_SUCCESS; }
+static XrResult XRAPI_CALL mResultToString(XrInstance i, XrResult r, char buf[XR_MAX_RESULT_STRING_SIZE]) {
+    (void)i;
+    snprintf(buf, XR_MAX_RESULT_STRING_SIZE, "XrResult_%d", (int)r);
+    return XR_SUCCESS;
+}
+static XrResult XRAPI_CALL mGetInstanceProps(XrInstance i, XrInstanceProperties* p) {
+    (void)i;
+    p->runtimeVersion = XR_MAKE_VERSION(0, 1, 0);
+    strcpy(p->runtimeName, "xrmock");
+    return XR_SUCCESS;
+}
 static XrResult XRAPI_CALL mGetSystem(XrInstance i, const XrSystemGetInfo* gi, XrSystemId* id) {
     (void)i;
     (void)gi;
@@ -241,6 +252,10 @@ static XrResult XRAPI_CALL mCreateSwapchain(XrSession s, const XrSwapchainCreate
     return XR_SUCCESS;
 }
 static Chain* chainOf(XrSwapchain sc) { return &gChains[(uintptr_t)sc - 1000]; }
+static XrResult XRAPI_CALL mDestroySwapchain(XrSwapchain sc) {
+    (void)sc;
+    return XR_SUCCESS;
+}
 static int chainId(XrSwapchain sc) { return (int)((uintptr_t)sc - 1000); }
 static XrResult XRAPI_CALL mEnumSwapImages(XrSwapchain sc, uint32_t cap, uint32_t* count, XrSwapchainImageBaseHeader* im) {
     Chain* c = chainOf(sc);
@@ -622,11 +637,11 @@ typedef struct {
 } Entry;
 #define E(n, f) {n, (PFN_xrVoidFunction)f}
 static const Entry kTable[] = {
-    E("xrEnumerateInstanceExtensionProperties", mEnumExt), E("xrCreateInstance", mCreateInstance), E("xrDestroyInstance", mDestroyInstance),
+    E("xrEnumerateInstanceExtensionProperties", mEnumExt), E("xrCreateInstance", mCreateInstance), E("xrDestroyInstance", mDestroyInstance), E("xrGetInstanceProperties", mGetInstanceProps), E("xrResultToString", mResultToString),
     E("xrGetSystem", mGetSystem), E("xrGetSystemProperties", mGetSystemProps), E("xrCreateSession", mCreateSession),
     E("xrDestroySession", mDestroySession), E("xrCreateReferenceSpace", mCreateRefSpace), E("xrCreateActionSpace", mCreateActionSpace),
     E("xrDestroySpace", mDestroySpace), E("xrLocateSpace", mLocateSpace), E("xrEnumerateViewConfigurationViews", mEnumViewConfigViews),
-    E("xrEnumerateSwapchainFormats", mEnumFormats), E("xrCreateSwapchain", mCreateSwapchain), E("xrEnumerateSwapchainImages", mEnumSwapImages),
+    E("xrEnumerateSwapchainFormats", mEnumFormats), E("xrCreateSwapchain", mCreateSwapchain), E("xrDestroySwapchain", mDestroySwapchain), E("xrEnumerateSwapchainImages", mEnumSwapImages),
     E("xrAcquireSwapchainImage", mAcquire), E("xrWaitSwapchainImage", mWaitImage), E("xrReleaseSwapchainImage", mRelease),
     E("xrBeginSession", mBeginSession), E("xrEndSession", mEndSession), E("xrRequestExitSession", mRequestExit), E("xrPollEvent", mPollEvent),
     E("xrWaitFrame", mWaitFrame), E("xrBeginFrame", mBeginFrame), E("xrEndFrame", mEndFrame), E("xrLocateViews", mLocateViews),
