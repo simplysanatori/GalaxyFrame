@@ -22,9 +22,15 @@ fi
 # and without them the display ran at 72 Hz with throttling and motion
 # smoothing, which the game's pacing cannot work with.  SteamAppId is set by
 # Steam when launched from the library.
+# The display's refresh rate: 120 Hz, or GQ_REFRESH_HZ (session.env) or
+# refresh_rate in petari_vr.ini (90 or 120; SteamVR offers the game only the
+# rate it runs at).
+HZ=${GQ_REFRESH_HZ:-$(sed -n 's/^[[:space:]]*refresh_rate[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' "$HOME_DIR/petari_vr.ini" 2> /dev/null | tail -n 1)}
+case "$HZ" in 90 | 120) ;; *) HZ=120 ;; esac
+echo "refresh rate asked of SteamVR: $HZ Hz"
 VRCMD=/opt/steamvr/bin/linuxarm64/vrcmd
 if [ -n "$SteamAppId" ] && [ -x "$VRCMD" ]; then
-  for kv in preferredRefreshRate=120 framesToThrottle=0 additionalFramesToPredict=0 motionSmoothingOverride=2; do
+  for kv in preferredRefreshRate=$HZ framesToThrottle=0 additionalFramesToPredict=0 motionSmoothingOverride=2; do
     "$VRCMD" --set-settings-int "steam.app.$SteamAppId.${kv%=*}" "${kv#*=}" > /dev/null 2>&1 || echo "could not set SteamVR's ${kv%=*}"
   done
 fi

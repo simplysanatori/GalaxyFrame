@@ -1093,12 +1093,16 @@ void beginFrame(const FrameInfo& frame) {
     // every 10 s: with the game's retrace in the second step it has 8 ms).
     static int sRepeats = 0, sPickups = 0;
     static double sRepeatLogAt = 0.0;
+    static bool sNewSinceDue = false;  // a new frame was picked up since the last refresh one was due
     if (r.update()) {
         sLastFrame = r.frameNumber();
-    } else if (r.hasFrame()) {
-        sRepeats++;
+        sNewSinceDue = true;
     }
-    sPickups++;
+    if (frame.newFrameDue) {
+        if (!sNewSinceDue && r.hasFrame()) sRepeats++;
+        sPickups++;
+        sNewSinceDue = false;
+    }
     if (frame.time - sRepeatLogAt >= 10.0) {
         if (sRepeatLogAt > 0.0 && sRepeats > 0) port_log("vr: %d of %d game frames shown twice (not finished in time)", sRepeats, sPickups);
         sRepeatLogAt = frame.time;
