@@ -179,9 +179,11 @@ public:
             port_log("xr vk: no R8G8B8A8_SRGB eye swapchains; using format %lld", (long long)format);
         }
         XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-        // Transfer source: the debug shots read the images back; transfer
-        // destination: the mip levels are blitted.
-        ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_SRC_BIT;
+        // Transfer source and destination: the mip levels are blitted; the
+        // debug shots (PETARI_VRSHOT_MS) read the images back.
+        static const bool shots = getenv("PETARI_VRSHOT_MS") != nullptr;
+        ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+        if (shots || mips > 1) ci.usageFlags |= XR_SWAPCHAIN_USAGE_TRANSFER_SRC_BIT;
         if (mips > 1) ci.usageFlags |= XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
         ci.format = format;
         ci.sampleCount = 1;
@@ -191,7 +193,17 @@ public:
         ci.arraySize = 1;
         ci.mipCount = mips;
         sc.format = format;
-        XR_CHECK(xrCreateSwapchain(session, &ci, &sc.handle));
+        XrResult r = xrCreateSwapchain(session, &ci, &sc.handle);
+        if (XR_FAILED(r) && ci.usageFlags != (XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT)) {
+            // Without the transfer usages (the runtime refused them): one
+            // level, no read-back.
+            port_log("xr vk: a %dx%d swapchain with transfer usage refused (%d); made without, %u mip levels -> 1", width, height, (int)r, mips);
+            ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+            ci.mipCount = 1;
+            sc.mips = mips = 1;
+            r = xrCreateSwapchain(session, &ci, &sc.handle);
+        }
+        if (XR_FAILED(r)) port_fatal("xrCreateSwapchain failed: %d", (int)r);
         uint32_t n = 0;
         XR_CHECK(xrEnumerateSwapchainImages(sc.handle, 0, &n, nullptr));
         std::vector<XrSwapchainImageVulkan2KHR> images(n, {XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR});
