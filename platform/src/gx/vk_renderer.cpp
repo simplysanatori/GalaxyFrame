@@ -531,6 +531,7 @@ struct VkImpl {
         int gpuCount = 0;
     } st;
     int curPasses = 0, curCopies = 0;
+    std::vector<u8> deadItem;  // per item of the render in progress: a draw whose writes nothing reads (deadDraws)
     // PETARI_VKPROF: the open pass's profile mark and what it drew, and the
     // counts of a render.
     int passMark = -1;
@@ -543,7 +544,7 @@ struct VkImpl {
     std::string segLog;
     // Which paths the renders took, since start (PETARI_VKSTATS, at finish).
     struct Coverage {
-        long zCopies = 0, maskedClears = 0, attachmentClears = 0, xfbBlits = 0, snapshots = 0, lineBatches = 0, pointBatches = 0, emptyViewports = 0,
+        long zCopies = 0, deadDraws = 0, maskedClears = 0, attachmentClears = 0, xfbBlits = 0, snapshots = 0, lineBatches = 0, pointBatches = 0, emptyViewports = 0,
              hudSwitches = 0;
     } cov;
     double finishGpuMs = 0.0;  // renders timed since the last finish() (PETARI_GPUTIME)
@@ -565,6 +566,7 @@ struct VkImpl {
     void evictCopies();
     u32 allocEye(const EyeBlock& eb);
     void execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMode, VulkanRenderer& r);
+    int deadDraws(const VkPrepared& P, HudMode hudMode, bool tagPlayer, bool noCopies);
     void ensurePass(Target& t, size_t index);
     void endPass();
     bool needsClear(const Target& t) const { return (&t == efbTarget && efbNeedsClear) || (&t == hudTarget && hudNeedsClear); }
@@ -1082,6 +1084,65 @@ u32 VkImpl::allocEye(const EyeBlock& eb) {
 // ---------------------------------------------------------------------------
 // Execute
 // ---------------------------------------------------------------------------
+// Draws of a VR eye render whose writes into the EFB nothing reads: what an
+// eye render leaves behind is its color (the composite samples RGB; alpha,
+// depth and stencil are dropped, unless vk::setKeepDepth), so working back
+// from the end, a draw that writes only channels no later item reads (a
+// later draw's depth test or blending, a copy of those channels, the depth
+// snapshot) changes nothing.  The game ends its frame with a full-screen
+// depth write after its last copy, for its HUD.  Marks them in deadItem;
+// returns how many.
+int VkImpl::deadDraws(const VkPrepared& P, HudMode hudMode, bool tagPlayer, bool noCopies) {
+    enum : u8 { kRgb = 1, kA = 2, kZ = 4, kS = 8 };
+    const std::vector<Item>& items = P.items;
+    deadItem.assign(items.size(), 0);
+    u8 live = kRgb | (sKeepDepth ? kZ | kS : 0);
+    // In the HUD section the draws go to the HUD target or nowhere (the
+    // execute loop's inHudSection), except inline.
+    std::vector<u8> inHud(items.size(), 0);
+    {
+        bool h = false;
+        for (size_t i = 0; i < items.size(); i++) {
+            if (items[i].type == IT_MARKER && (items[i].marker == MARK_HUD_BEGIN || items[i].marker == MARK_HUD_END)) h = items[i].marker == MARK_HUD_BEGIN;
+            inHud[i] = h;
+        }
+    }
+    int n = 0;
+    for (size_t k = items.size(); k-- > 0;) {
+        const Item& it = items[k];
+        bool hudSec = inHud[k] && hudMode != HudMode::Inline;
+        if (it.type == IT_MARKER) {
+            if (it.marker == MARK_SCENE_DEPTH && tagPlayer && !hudSec) live |= kZ | kS;
+            continue;
+        }
+        if (hudSec) continue;  // not the EFB (copies there read the HUD target)
+        if (it.type == IT_COPY) {
+            if ((it.copy[9] >> 14) & 1) continue;  // the XFB copy: not made for an eye
+            if (noCopies) continue;
+            CopyOp op;
+            decodeCopy(it, 1, 1, 1, 1, 0, op);
+            static const u8 reads[12] = {kRgb | kA, kRgb, kRgb, kRgb | kA, kRgb, kRgb | kA, kA, kRgb, kRgb, kRgb, kRgb, kZ};
+            live |= op.mode >= 0 && op.mode < 12 ? reads[op.mode] : (kRgb | kA | kZ);
+            continue;
+        }
+        BlendState bs;
+        blendState(it, false, bs);
+        u8 writes = ((bs.colorMask & 7) ? kRgb : 0) | ((bs.colorMask & 8) ? kA : 0);
+        if (it.depthTest && it.depthWrite) writes |= kZ | (tagPlayer ? kS : 0);
+        if (!(writes & live)) {
+            deadItem[k] = 1;
+            n++;
+            continue;  // left out: its reads go too
+        }
+        if (it.depthTest && it.depthFunc != CompareFunc::Always) live |= kZ;
+        if (bs.on) {
+            typedef BlendFactor F;
+            auto readsDst = [](F f) { return f == F::DstColor || f == F::OneMinusDstColor || f == F::DstAlpha || f == F::OneMinusDstAlpha; };
+            if (bs.dstRGB != F::Zero || bs.dstA != F::Zero || readsDst(bs.srcRGB) || readsDst(bs.srcA)) live |= kRgb | kA;
+        }
+    }
+    return n;
+}
 // Opens a rendering instance on `t` (clearing it if this render has not yet)
 // unless one is open there.  Item `index` is the first it draws.
 void VkImpl::ensurePass(Target& t, size_t index) {
@@ -1551,6 +1612,10 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         }
     }
 
+    // Draws of an eye render whose writes nothing reads (deadDraws).
+    static const bool sDeadDraws = !vkLegacy();
+    bool skipDead = sDeadDraws && vrEye && deadDraws(P, hudMode, tagPlayer, noCopies) > 0;
+
     struct UnitMemo {
         u32 tr, mode0, mode1;
         VkImageView view;
@@ -1604,6 +1669,10 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
             continue;
         }
         if (!it.program || !it.idxCount) {
+            continue;
+        }
+        if (skipDead && deadItem[idx] && !toHudTarget) {
+            cov.deadDraws++;
             continue;
         }
         u32 progId = it.program;
@@ -2211,9 +2280,9 @@ void VulkanRenderer::finish() {
     if (stats) {
         sImpl->pipes.logStats("so far");
         const VkImpl::Coverage& c = sImpl->cov;
-        port_log("vk: paths so far: %ld Z copies, %ld masked clears, %ld attachment clears, %ld XFB blits, %ld depth snapshots, %ld HUD target switches, "
+        port_log("vk: paths so far: %ld Z copies, %ld dead draws left out, %ld masked clears, %ld attachment clears, %ld XFB blits, %ld depth snapshots, %ld HUD target switches, "
                  "%ld line batches, %ld point batches, %ld empty viewports",
-                 c.zCopies, c.maskedClears, c.attachmentClears, c.xfbBlits, c.snapshots, c.hudSwitches, c.lineBatches, c.pointBatches, c.emptyViewports);
+                 c.zCopies, c.deadDraws, c.maskedClears, c.attachmentClears, c.xfbBlits, c.snapshots, c.hudSwitches, c.lineBatches, c.pointBatches, c.emptyViewports);
     }
     profReport("finish", sImpl->finishGpuCount);
     perfReport("finish");
