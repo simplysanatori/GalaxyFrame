@@ -80,6 +80,7 @@ bool giantOn() { return setting("giant_screen"); }
 bool stereoOn() { return giantOn() && setting("stereo_screen"); }
 bool passthroughUsable() { return giantOn() && vr::passthroughAvailable(); }
 bool sharpenOn() { return setting("sharpening"); }
+bool smoothOn() { return setting("smooth_turn"); }
 bool severalLanguages() { return port_language_count() > 1; }
 
 void hintScreenOnly(char* out, size_t size, const char* hint) { snprintf(out, size, "%s", giantOn() ? hint : "Only on the giant screen"); }
@@ -179,8 +180,11 @@ const Item kGameItems[] = {
     {"language", "Language", nullptr, kStepper, 0, 0, 0, nullptr, severalLanguages, hintLanguage, languageOptions, languageText, languageGet,
      languageSet, languageFile},
     {"smooth_turn", "Smooth turning", "Turn the diorama smoothly with the stick instead of in steps", kSwitch},
+    {"turn_speed", "Turn speed", "Top speed of the stick's turn", kSlider, 30.0f, 240.0f, 10.0f, "%.0f deg/s", smoothOn},
+    {"tilt_speed", "Tilt speed", "Top speed of the stick's tilt, up and down", kSlider, 15.0f, 120.0f, 5.0f, "%.0f deg/s", smoothOn},
     {"invert_camera", "Invert camera", nullptr, kSwitch, 0, 0, 0, nullptr, nullptr, hintInvert},
     {"skip_hold", "Hold A to skip", "Cutscenes and dialogues", kStepper, 0.0f, 3.0f, 0.25f, nullptr, nullptr, nullptr, nullptr, skipText},
+    {"left_handed", "Left-handed", "The left controller points; sticks, triggers, grips swap", kSwitch},
 };
 
 struct Tab {
@@ -660,6 +664,14 @@ extern "C" void port_vr_pause_menu(int selecting) {
 namespace vr {
 
 void saveGamePath(const std::string& folder) { writeSettingsLater({{"game_path", folder}}); }
+
+void saveSetting(const char* key) {
+    const Setting* s = findSetting(key);
+    if (!s) return;
+    char text[32];
+    snprintf(text, sizeof(text), "%g", s->get());
+    writeSettingsLater({{key, text}});
+}
 
 void settingsInit(const char* iniPath) {
     sIniPath = iniPath ? iniPath : "";
