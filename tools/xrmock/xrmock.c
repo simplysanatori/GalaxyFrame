@@ -20,7 +20,15 @@
 //                             motion vectors and depth with each frame)
 //   MOCK_XR_EXTENSIONS=a,b    replace the list of extensions offered
 // The graphics API is chosen by the app's binding (xrmock_gfx.h).
+//
+// Checks (ERROR lines in the trace, and a summary on stderr when the session
+// ends): acquire / wait / release order per swapchain; with Vulkan, that the
+// app's GPU work had finished at each release (SteamVR shows a released image
+// at once); that both eyes of a projection layer come from one xrLocateViews
+// (the views turn with time, so views located for different times differ),
+// and for which display time that locate was made.
 #define _GNU_SOURCE
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,7 +61,7 @@ static int64_t nowNs(void) {
 
 // The graphics tables, tried in order for the session's binding.  Lane D2
 // adds the Vulkan one here.
-static const MockGfx* const kGfxTables[] = {&kMockGfxGles};
+static const MockGfx* const kGfxTables[] = {&kMockGfxGles, &kMockGfxVk};
 static const MockGfx* gGfx = NULL;  // the one the session is bound to
 
 #define MAXSC 64
@@ -62,6 +70,7 @@ typedef struct {
     int64_t format;
     void* images;
     int acquired, next;
+    int waited;  // of the images acquired, how many were waited for
 } Chain;
 static Chain gChains[MAXSC];
 static int gChainCount = 0;
@@ -206,7 +215,7 @@ static XrResult XRAPI_CALL mCreateSwapchain(XrSession s, const XrSwapchainCreate
     c->mips = (int)ci->mipCount;
     c->format = ci->format;
     c->count = 3;
-    c->images = gGfx->create_images(c->format, c->w, c->h, c->mips, c->count);
+    c->images = gGfx->create_images(c->format, ci->usageFlags, c->w, c->h, c->mips, c->count);
     trace("createSwapchain sc%d %dx%d mips=%d format=0x%llx usage=0x%llx", gChainCount, c->w, c->h, c->mips, (long long)c->format,
           (unsigned long long)ci->usageFlags);
     *out = (XrSwapchain)(uintptr_t)(1000 + gChainCount);
@@ -234,9 +243,21 @@ static XrResult XRAPI_CALL mAcquire(XrSwapchain sc, const XrSwapchainImageAcquir
     trace("acquire sc%d idx=%u", chainId(sc), *idx);
     return XR_SUCCESS;
 }
+static int gErrors = 0, gReleases = 0, gBusyReleases = 0;
+static double gBusyMaxMs = 0.0;
+static int gWaitHist[5];
+static int gPoseAge[6];  // display time minus locate time in refreshes: <0, 0, 1, 2, 3, more
+static int gPoseSets = 0, gPoseSameTime = 0, gPoseEarlier = 0, gPoseLater = 0, gPoseSplit = 0, gPoseUnknown = 0;
+static void checkPoses(const XrCompositionLayerProjection* p, XrTime displayTime);
 static XrResult XRAPI_CALL mWaitImage(XrSwapchain sc, const XrSwapchainImageWaitInfo* wi) {
-    (void)sc;
     (void)wi;
+    Chain* c = chainOf(sc);
+    if (c->waited >= c->acquired) {
+        trace("ERROR wait sc%d without an image acquired", chainId(sc));
+        gErrors++;
+        return XR_ERROR_CALL_ORDER_INVALID;
+    }
+    c->waited++;
     return XR_SUCCESS;
 }
 static XrResult XRAPI_CALL mRelease(XrSwapchain sc, const XrSwapchainImageReleaseInfo* ri) {
@@ -246,7 +267,29 @@ static XrResult XRAPI_CALL mRelease(XrSwapchain sc, const XrSwapchainImageReleas
         trace("ERROR release sc%d without acquire", chainId(sc));
         return XR_ERROR_CALL_ORDER_INVALID;
     }
+    if (c->waited <= 0) {
+        trace("ERROR release sc%d of an image not waited for", chainId(sc));
+        gErrors++;
+        return XR_ERROR_CALL_ORDER_INVALID;
+    }
+    if (gGfx && gGfx->release_wait_ms) {
+        // The wait includes other processes' GPU work (the desktop's
+        // compositor) ahead of the mock's own check: up to 4 ms seen
+        // with the app's work all done.  The eyes' work takes 10 ms and more.
+        static double limit = -1.0;
+        if (limit < 0.0) limit = getenv("MOCK_XR_BUSY_MS") ? atof(getenv("MOCK_XR_BUSY_MS")) : 4.0;
+        double ms = gGfx->release_wait_ms();
+        gReleases++;
+        gWaitHist[ms < 0.5 ? 0 : ms < 1.0 ? 1 : ms < 2.0 ? 2 : ms < 4.0 ? 3 : 4]++;
+        if (ms > limit) {
+            gBusyReleases++;
+            if (ms > gBusyMaxMs) gBusyMaxMs = ms;
+            trace("ERROR release sc%d before the GPU finished", chainId(sc));
+            gErrors++;
+        }
+    }
     c->acquired--;
+    c->waited--;
     trace("release sc%d", chainId(sc));
     return XR_SUCCESS;
 }
@@ -264,6 +307,17 @@ static XrResult XRAPI_CALL mBeginSession(XrSession s, const XrSessionBeginInfo* 
 }
 static XrResult XRAPI_CALL mEndSession(XrSession s) {
     (void)s;
+    fprintf(stderr,
+            "xrmock: summary: %d errors; %d releases checked for finished GPU work, %d before it finished (worst %.1f ms); "
+            "%d projection layers: eyes from one locate for the display time submitted %d, for an earlier one %d, a later one %d; eyes from "
+            "different locates %d, poses not from a locate %d\n",
+            gErrors, gReleases, gBusyReleases, gBusyMaxMs, gPoseSets, gPoseSameTime, gPoseEarlier, gPoseLater, gPoseSplit, gPoseUnknown);
+    fprintf(stderr, "xrmock: projection layers by refreshes from the locate to the display time: later %d, 0: %d, 1: %d, 2: %d, 3: %d, more %d\n", gPoseAge[0],
+            gPoseAge[1], gPoseAge[2], gPoseAge[3], gPoseAge[4], gPoseAge[5]);
+    if (gReleases) {
+        fprintf(stderr, "xrmock: queue drain time at the releases: <0.5 ms %d, 0.5-1 %d, 1-2 %d, 2-4 %d, >4 %d\n", gWaitHist[0], gWaitHist[1], gWaitHist[2],
+                gWaitHist[3], gWaitHist[4]);
+    }
     pushState(XR_SESSION_STATE_EXITING);
     trace("endSession");
     return XR_SUCCESS;
@@ -324,6 +378,7 @@ static XrResult XRAPI_CALL mEndFrame(XrSession s, const XrFrameEndInfo* ei) {
         char t[256];
         if (l->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
             const XrCompositionLayerProjection* p = (const XrCompositionLayerProjection*)l;
+            checkPoses(p, ei->displayTime);
             snprintf(t, sizeof(t), " proj[flags=%llx", (unsigned long long)p->layerFlags);
             strcat(buf, t);
             for (uint32_t v = 0; v < p->viewCount; v++) {
@@ -348,18 +403,64 @@ static XrResult XRAPI_CALL mEndFrame(XrSession s, const XrFrameEndInfo* ei) {
     trace("endFrame layers=%u%s", ei->layerCount, buf);
     return XR_SUCCESS;
 }
+// The head turns slowly from side to side, so views located for different
+// times differ.  The last locates are kept for the pose check in mEndFrame.
+#define LOCATES 32
+static struct {
+    XrTime time;
+    XrPosef pose[2];
+} gLocates[LOCATES];
+static int gLocateNext = 0;
 static XrResult XRAPI_CALL mLocateViews(XrSession s, const XrViewLocateInfo* li, XrViewState* vs, uint32_t cap, uint32_t* count, XrView* v) {
     (void)s;
-    (void)li;
     vs->viewStateFlags = XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_TRACKED_BIT |
                          XR_VIEW_STATE_POSITION_TRACKED_BIT;
     *count = 2;
+    double t = (double)(li->displayTime - gT0) / 1e9;
+    float yaw = (float)(0.3 * sin(t * 2.0 * 3.14159265 * 0.5));
+    float c = cosf(yaw), sn = sinf(yaw);
     for (uint32_t e = 0; e < 2 && e < cap; e++) {
-        v[e].pose.orientation = (XrQuaternionf){0, 0, 0, 1};
-        v[e].pose.position = (XrVector3f){e ? 0.032f : -0.032f, 1.6f, 0};
+        float x = e ? 0.032f : -0.032f;
+        v[e].pose.orientation = (XrQuaternionf){0, sinf(yaw * 0.5f), 0, cosf(yaw * 0.5f)};
+        v[e].pose.position = (XrVector3f){x * c, 1.6f, -x * sn};
         v[e].fov = (XrFovf){-0.84f, 0.84f, 0.84f, -0.84f};
+        gLocates[gLocateNext].pose[e] = v[e].pose;
     }
+    gLocates[gLocateNext].time = li->displayTime;
+    gLocateNext = (gLocateNext + 1) % LOCATES;
     return XR_SUCCESS;
+}
+
+static int samePose(const XrPosef* a, const XrPosef* b) { return !memcmp(a, b, sizeof(XrPosef)); }
+
+// Both eyes of a projection layer: from one locate, and for which time.
+static void checkPoses(const XrCompositionLayerProjection* p, XrTime displayTime) {
+    if (p->viewCount != 2) return;
+    gPoseSets++;
+    int left = -1, both = -1;
+    for (int i = 0; i < LOCATES; i++) {
+        if (!gLocates[i].time) continue;
+        if (samePose(&gLocates[i].pose[0], &p->views[0].pose)) {
+            left = i;
+            if (samePose(&gLocates[i].pose[1], &p->views[1].pose)) both = i;
+        }
+    }
+    if (both < 0) {
+        if (left >= 0) {
+            gPoseSplit++;
+            trace("ERROR projection layer eyes from different locates");
+            gErrors++;
+        } else {
+            gPoseUnknown++;
+        }
+        return;
+    }
+    XrTime t = gLocates[both].time;
+    if (t == displayTime) gPoseSameTime++;
+    else if (t < displayTime) gPoseEarlier++;
+    else gPoseLater++;
+    long k = lround((double)(displayTime - t) / (double)gPeriod);
+    gPoseAge[k < 0 ? 0 : k > 3 ? 5 : k + 1]++;
 }
 static XrResult XRAPI_CALL mStringToPath(XrInstance i, const char* s, XrPath* p) {
     (void)i;
