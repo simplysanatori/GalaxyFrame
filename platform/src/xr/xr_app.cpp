@@ -175,10 +175,14 @@ struct App {
     // once the GPU has finished them; the refresh in between shows the last
     // set again.  At other rates each refresh renders, waits and submits.
     bool vk = false;
+    bool vkEvery = true;          // 120 Hz: new eyes every refresh (else every second refresh)
+    bool vkPaceLogged = false;
+    unsigned vkPhase = 0;         // eyes every refresh: the game's retrace on every second
+    int vkWinSets = 0, vkWinLate = 0;  // sets shown, and of those not finished a refresh after submission
+    int64_t vkModeAt = 0;
     struct VkSet {
         bool valid = false;
         bool submitted = false;
-        bool now = false;  // released at the end of the refresh it was rendered in
         XrPosef pose[2];
         XrFovf fov[2];
         XrExtent2Di rect[2];
@@ -1489,25 +1493,30 @@ void renderPair(App& a, int s, const vr::FrameInfo& frame, const XrView views[2]
 // ---------------------------------------------------------------------------
 // The frame loop on Vulkan.  SteamVR on the Frame shows a released image at
 // once, finished or not (H1b), so an image is released only after the GPU
-// has finished it.  A game frame's two eyes (render and composite at
-// 1344x1408) cost 6.7 ms of GPU time on average in xr_sim and 10 to 13 ms in
-// heavy scenes, beside the compositor's own work on the same GPU; and
-// SteamVR's xrWaitFrame returns about one refresh before the display time
-// (H1b: one vsync from poses to photons for a fast app), so a set rendered
-// and waited for within the refresh it is shown in would miss it whenever
-// the GPU needs more than a few ms.  At 120 Hz each game frame therefore
-// takes two refreshes:
-//   first:  one xrLocateViews for the next refresh's display time, the
-//           game frame picked up, both eyes recorded into one command buffer
-//           from those views and submitted; the refresh itself shows the last
-//           set again (the compositor reprojects it);
-//   second: the fence waited for (the GPU had the refresh in between), both
-//           images released, and the set submitted with exactly the poses
-//           and fields of view it was rendered with.
+// has finished it.  SteamVR's xrWaitFrame returns about one refresh before
+// the display time (H1b: one vsync from poses to photons for a fast app), too
+// little to render both eyes and wait for them within the refresh they are
+// shown in.  So every set is rendered on one refresh for the next one's
+// display time and released on that next refresh:
+//   on a refresh: the set rendered on the last refresh is waited for (the GPU
+//     had the refresh in between), released and submitted with exactly the
+//     poses and fields of view it was rendered with; then one xrLocateViews
+//     for the next refresh's display time, the newest game frame, both eyes
+//     recorded into one command buffer from those views and submitted.
 // No image is held longer than that one refresh and the right eye is never
 // rendered apart from the left (frame.2's paired steps did both, and the
-// right eye landed at a random offset).  At other refresh rates each refresh
-// renders, waits for the GPU and submits its own set.
+// right eye landed at a random offset).
+// At 120 Hz the game runs at 60 frames a second (its retrace every second
+// refresh) and the eyes are rendered on every refresh, from that refresh's
+// head pose and the newest game frame ("every refresh"), while the GPU keeps
+// up: a pair costs 4.5 to 8 ms on the headset (H2) beside the compositor's
+// 1 ms, against 8.3 ms.  When more than a tenth of the sets of the last
+// 2 s were not finished a refresh after their submission, only the refresh
+// that picks up a game frame renders, and the one in between shows its set
+// again for the compositor to reproject ("every second refresh"); back to
+// every refresh after 10 s with at most 1 % of the sets late.
+// PETARI_VKPACE=every|second fixes either.  At other refresh rates every
+// refresh renders, and the game keeps its own clock.
 // ---------------------------------------------------------------------------
 
 // Pose check of a set going on show: its views against a locate at the
@@ -1556,6 +1565,7 @@ void notePoses(App& a, const App::VkSet& set, XrTime displayTime) {
                      "%.2f mm %.3f deg avg, %.2f mm %.3f deg max; right eye %.2f mm %.3f deg avg, %.2f mm %.3f deg max; eye distance %.2f-%.2f mm",
                      k, a.poseOnTime, a.poseDtSum / k, a.poseDtMax, a.posePosSum[0] / k, a.poseAngSum[0] / k, a.posePosMax[0], a.poseAngMax[0],
                      a.posePosSum[1] / k, a.poseAngSum[1] / k, a.posePosMax[1], a.poseAngMax[1], a.poseIpdMin, a.poseIpdMax);
+            port_log("vr: Vulkan pacing now: new eyes %s; %d sets in the last 5 s", a.vkEvery || !a.paired ? "every refresh" : "every second refresh", k);
         }
         a.poseLogAt = t;
         a.poseSets = a.poseOnTime = 0;
@@ -1581,9 +1591,10 @@ void releaseUiVk(App& a) {
 // the GPU has finished it, and on show from this refresh.  `due`: its
 // display time has come (the second refresh of a game frame), so a GPU not
 // done by now counts as a set not finished when due.
-void showPendingVk(App& a, XrTime displayTime, bool due) {
+// Returns whether the set was not finished yet (and was waited for).
+bool showPendingVk(App& a, XrTime displayTime, bool due) {
     App::VkSet& p = a.vkPending;
-    if (!p.valid) return;
+    if (!p.valid) return false;
     xrgfx::Gfx& gfx = xrgfx::gfx();
     if (!p.submitted) {
         a.renderedFence = gfx.submit();
@@ -1597,7 +1608,8 @@ void showPendingVk(App& a, XrTime displayTime, bool due) {
     }
     // PETARI_NO_GPU_WAIT=1: released unfinished (a test of tools/xrmock's check).
     static const bool noWait = getenv("PETARI_NO_GPU_WAIT") != nullptr;
-    if (!gfx.waitFence(a.renderedFence, 0) && !noWait) {
+    bool late = !gfx.waitFence(a.renderedFence, 0);
+    if (late && !noWait) {
         gfx.waitFence(a.renderedFence, 1000000000);
         if (due) {
             a.fenceWaits++;
@@ -1618,40 +1630,86 @@ void showPendingVk(App& a, XrTime displayTime, bool due) {
     a.shownSpace = p.space;
     if (due) notePoses(a, p, displayTime);
     p.valid = false;
+    return late;
+}
+
+// Every refresh or every second refresh at 120 Hz (see above), from the sets
+// not finished a refresh after their submission.
+void updatePaceVk(App& a, bool late) {
+    static const char* fixed = getenv("PETARI_VKPACE");
+    if (fixed && (!strcmp(fixed, "every") || !strcmp(fixed, "second"))) {
+        bool every = !strcmp(fixed, "every");
+        if (every != a.vkEvery || !a.vkPaceLogged) {
+            port_log("vr: Vulkan pacing: new eyes %s (PETARI_VKPACE=%s)", every ? "every refresh" : "every second refresh", fixed);
+        }
+        a.vkEvery = every;
+        a.vkPaceLogged = true;
+        return;
+    }
+    if (!a.vkPaceLogged) {
+        port_log("vr: Vulkan pacing: new eyes every refresh while the GPU keeps up, else every second refresh");
+        a.vkPaceLogged = true;
+    }
+    a.vkWinSets++;
+    a.vkWinLate += late;
+    int64_t now = port_host_time_ns();
+    if (a.vkEvery && a.vkWinSets >= 240) {
+        if (a.vkWinLate > 24) {
+            port_log("vr: Vulkan pacing: new eyes every second refresh (60 Hz): %d of the last %d sets not finished a refresh after submission",
+                     a.vkWinLate, a.vkWinSets);
+            a.vkEvery = false;
+            a.vkModeAt = now;
+        }
+        a.vkWinSets = a.vkWinLate = 0;
+    } else if (!a.vkEvery && a.vkWinSets >= 600) {
+        if (a.vkWinLate <= 6 && now - a.vkModeAt >= 10000000000ll) {
+            port_log("vr: Vulkan pacing: new eyes every refresh again: %d of the last %d sets late", a.vkWinLate, a.vkWinSets);
+            a.vkEvery = true;
+            a.vkModeAt = now;
+        }
+        a.vkWinSets = a.vkWinLate = 0;
+    }
 }
 
 // The eyes of a refresh on Vulkan (see above).
 void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration period, bool paired) {
     a.vkShownNow = false;
     if (a.vkPending.valid) {
-        // The second refresh of a game frame (or a set left over when the
-        // display left 120 Hz or the session stopped rendering).
-        showPendingVk(a, fs.predictedDisplayTime, fs.shouldRender);
+        // Rendered on the last refresh for this one (or left over when the
+        // session stopped rendering).
+        bool late = showPendingVk(a, fs.predictedDisplayTime, fs.shouldRender);
         a.vkShownNow = true;
+        if (paired && fs.shouldRender) updatePaceVk(a, late);
     }
     if (!fs.shouldRender) {
         updateInput(a, fs.predictedDisplayTime);
         return;
     }
-    if (paired && a.vkShownNow) {
-        // The game starts its next frame here with PETARI_RETRACE_STEP=2.
+    bool every = !paired || a.vkEvery;
+    if (!every && a.vkShownNow) {
+        // Every second refresh: the one between shows the set again.  The
+        // game starts its next frame here with PETARI_RETRACE_STEP=2.
         if (gBooted && !retraceInFirstStep()) port_vi_retrace();
         return;
     }
-    // Render: for the next refresh's display time at 120 Hz, for this one's
-    // otherwise.
-    XrTime time = paired ? fs.predictedDisplayTime + refresh : fs.predictedDisplayTime;
-    updateInput(a, time);
+    // The refresh that starts a game frame (all of them but every second one
+    // at 120 Hz with eyes every refresh): input, the game's retrace.
+    bool gameRefresh = !paired || !a.vkEvery || (a.vkPhase++ & 1) == 0;
+    // For the next refresh's display time (the runtime's frame period away
+    // when it is not pacing at 120 Hz).
+    XrTime time = fs.predictedDisplayTime + (paired ? refresh : period);
+    if (gameRefresh) updateInput(a, time);
     XrView views[2];
     locateViews(a, time, views);
     vr::FrameInfo frame = frameInfo(a, views, time);
-    // One eye's share of the GPU: as with the paired GLES steps (the
-    // compositor shares the GPU), or both eyes in one refresh.
-    frame.eyeBudgetMs = paired ? refresh * 0.65f / 1e6f : period / 2e6f;
+    frame.newFrameDue = gameRefresh;
+    // One eye's share of the GPU: both eyes on every refresh beside the
+    // compositor, or one refresh each as with the paired GLES steps.
+    frame.eyeBudgetMs = every ? (paired ? refresh : period) * 0.4f / 1e6f : refresh * 0.65f / 1e6f;
     int64_t t0 = port_host_time_ns();
     vr::beginFrame(frame);
     int64_t t1 = port_host_time_ns();
-    if (paired && gBooted && retraceInFirstStep()) port_vi_retrace();
+    if (paired && gameRefresh && gBooted && (a.vkEvery || retraceInFirstStep())) port_vi_retrace();
     uint32_t idx[2];
     for (int e = 0; e < 2; e++) {
         idx[e] = acquireImage(a.eyes[0][e]);
@@ -1668,7 +1726,6 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
     int64_t t3 = port_host_time_ns();
     p.valid = true;
     p.submitted = false;
-    p.now = !paired;
     p.space = a.appSpace;
     p.time = time;
     // A late first step, broken down as on GLES (a few per 10 s).
@@ -1688,28 +1745,22 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
 }
 
 // The end of a refresh's work on Vulkan, after the UI layers were drawn:
-// one submission for everything recorded; what goes out in this refresh is
-// released once it has finished.
-void finishFrameVk(App& a, const XrFrameState& fs) {
+// one submission for everything recorded.  A set rendered now goes out on
+// the next refresh, with the UI images drawn now; UI images drawn on a
+// refresh without a set (the one between with eyes every second refresh)
+// go out now, once finished.
+void finishFrameVk(App& a) {
     App::VkSet& p = a.vkPending;
     bool ui = false;
     for (bool b : a.uiPending) ui |= b;
-    if (p.valid && !p.submitted) {
-        a.renderedFence = xrgfx::gfx().submit();
-        a.renderedFenceAt = port_host_time_ns();
-        p.submitted = true;
-    } else if (ui) {
-        xrgfx::Fence f = xrgfx::gfx().submit();
-        if (!p.valid) {
-            xrgfx::gfx().waitFence(f, 1000000000);
-        }
-    }
-    if (p.valid && !p.now) {
-        return;  // released on the next refresh, with the UI images drawn now
-    }
     if (p.valid) {
-        showPendingVk(a, fs.predictedDisplayTime, false);
-    } else {
+        if (!p.submitted) {
+            a.renderedFence = xrgfx::gfx().submit();
+            a.renderedFenceAt = port_host_time_ns();
+            p.submitted = true;
+        }
+    } else if (ui) {
+        xrgfx::gfx().waitFence(xrgfx::gfx().submit(), 1000000000);
         releaseUiVk(a);
     }
 }
@@ -2032,7 +2083,7 @@ void renderFrame(App& a) {
         }
     }
     if (a.vk) {
-        finishFrameVk(a, fs);
+        finishFrameVk(a);
     }
 
     XrCompositionLayerProjectionView projViews[2] = {{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}, {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};

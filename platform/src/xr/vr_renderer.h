@@ -29,6 +29,10 @@ struct FrameInfo {
     // SpaceWarp: the frame's motion vectors will be rendered (renderMotion),
     // so the eyes keep the scene's depth.
     bool motion;
+    // A new game frame is due by now (false on the refreshes between, when
+    // the eyes are rendered on every refresh of a 60 Hz game): one that has
+    // not come counts as shown twice.
+    bool newFrameDue = true;
 };
 
 // Near and far planes of the eye projections, metres (the depth images

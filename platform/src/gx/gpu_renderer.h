@@ -160,10 +160,12 @@ public:
 // selectRenderer(), else by PETARI_GFX, else GLES.
 Renderer& renderer();
 
-// Chooses the backend before the first renderer() call.  PETARI_GFX
-// (vk | vulkan | gles) wins over `renderer = ...` in the ini file at
-// `iniPath` (may be null).  Without a Vulkan backend in the build, or if it
-// cannot be created, GLES is used and a log line says so.
+// Chooses the backend before the first renderer() call (the game calls it;
+// headless tools do not).  PETARI_GFX (vk | vulkan | gles) wins over
+// `renderer = ...` in the ini file at `iniPath` (may be null); with neither
+// the game uses Vulkan (without selectRenderer: GLES).  Without a Vulkan
+// backend in the build, or if it cannot be created, GLES is used and a log
+// line says so.
 void selectRenderer(const char* iniPath);
 
 // The backend PETARI_GFX or the ini file asks for (renderer() may still
