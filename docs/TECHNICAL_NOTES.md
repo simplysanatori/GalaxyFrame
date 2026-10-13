@@ -91,7 +91,7 @@ Things I tried that did not work: a CPU wait before release (the loop missed ref
 
 ### Resolution
 
-The default eye size is 1.0, the size SteamVR's own resolution setting gives the game (1728 by 1728 per eye at 100 % on the Frame), held steady for the session (`min_resolution = resolution`), since each step of a dynamic resolution was a visible change in sharpness. At 1.0 both eyes render every refresh in most scenes; the pacing drops to every second refresh where the GPU cannot keep up and comes back on its own. 0.8 holds every refresh with room to spare. Render targets of sizes no longer in use are kept and reused, so changing the size does not stall the render thread. The sharpening pass is AMD FidelityFX CAS.
+The default eye size is 0.9 of the size SteamVR's own resolution setting gives the game (1728 by 1728 per eye at 100 % on the Frame), held steady for the session (`min_resolution = resolution`), since each step of a dynamic resolution was a visible change in sharpness. At 0.9 both eyes render every refresh with some headroom, and 1.0 in most scenes; the pacing drops to every second refresh where the GPU cannot keep up and comes back on its own. Render targets of sizes no longer in use are kept and reused, so changing the size does not stall the render thread. The sharpening pass is AMD FidelityFX CAS.
 
 ### Controls and haptics
 

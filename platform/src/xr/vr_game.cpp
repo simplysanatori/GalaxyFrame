@@ -107,10 +107,10 @@ float sResolution = 1.6f;     // largest eye size, relative to the headset's rec
 #else
 // Steam Frame: held at one size for the session (min_resolution =
 // resolution), since each step of the dynamic resolution was a visible
-// change in sharpness.  1.0 (SteamVR's recommended size) renders both eyes
-// every refresh at 120 Hz; the pacing drops to every second refresh in a
-// scene the GPU cannot keep up with and comes back on its own.
-float sResolution = 1.0f;
+// change in sharpness.  0.9 of SteamVR's recommended size renders both eyes
+// every refresh at 120 Hz with some headroom; the pacing drops to every
+// second refresh in a scene the GPU cannot keep up with and comes back.
+float sResolution = 0.9f;
 #endif
 float sRefreshRate = 120.0f;  // requested display refresh rate, Hz
 // Foveation of the eye renders round the eye-tracked gaze (foveation,
@@ -127,7 +127,7 @@ float sSharpness = 0.5f;      // its strength, 0..1
 #ifdef __ANDROID__
 float sMinScale = 0.8f;       // lowest render scale (min_resolution)
 #else
-float sMinScale = 1.0f;       // lowest render scale (min_resolution): the Frame holds one size
+float sMinScale = 0.9f;       // lowest render scale (min_resolution): the Frame holds one size
 #endif
 bool sGiantScreen = true;     // gameplay on the giant virtual screen (giant_screen; the default at first start)
 bool sStereoScreen = false;   // the giant screen's picture as a stereo pair (stereo_screen)
@@ -140,9 +140,9 @@ bool sComfortVignette = true;  // a gentle vignette for every smooth movement of
 // Which kinds of cutscene stay in the diorama (cutscene_*): in the order of
 // the kinds in GameScene.cpp (stars, bosses, observatory, storybook, friends,
 // mario, other, event camera).
-bool sCutsceneDiorama[8] = {true, true, true, true, true, true, true, true};
+bool sCutsceneDiorama[8] = {true, true, true, true, false, true, true, true};  // Lumas and friends off by default
 bool sDioramaTransitions = true;  // launch stars, pipes and arrivals stay in the diorama (diorama_transitions)
-float sStarBitSpeed = 2.0f;   // how fast shot Star Bits fly, 1 = as in the game (star_bit_speed)
+float sStarBitSpeed = 3.0f;   // how fast shot Star Bits fly, 1 = as in the game (star_bit_speed)
 bool sSmoothTurn = true;      // the right stick turns the diorama smoothly, not in steps (smooth_turn)
 // The stick's smooth turn (rad/s) and when it was set (host ns): input comes
 // from the frame loop's thread, the rig is updated on the game's.
@@ -622,7 +622,7 @@ vr::Setting sSettings[] = {
     {"cutscene_mario", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[5])},
     {"cutscene_other", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[6])},
     {"cutscene_camera", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[7])},
-    {"star_bit_speed", 1.0f, 3.0f, 0.0f, NUMBER(sStarBitSpeed)},
+    {"star_bit_speed", 1.0f, 5.0f, 0.0f, NUMBER(sStarBitSpeed)},
     {"smooth_turn", 0.0f, 1.0f, 0.0f, FLAG(sSmoothTurn)},
     {"turn_speed", 20.0f, 360.0f, 0.0f, NUMBER(sTurnSpeed)},
     {"tilt_speed", 10.0f, 180.0f, 0.0f, NUMBER(sTiltSpeed)},
@@ -755,6 +755,10 @@ void loadSettings(const char* path) {
         }
     }
     fclose(f);
+    if (sVignetteFast < sVignetteSlow) {
+        port_log("%s: vignette_fast raised to the slow value %g (it is never below it)", path, sVignetteSlow);
+        sVignetteFast = sVignetteSlow;
+    }
 }
 
 const std::string& gamePath() { return sGamePath; }
@@ -1358,8 +1362,10 @@ void beginFrame(const FrameInfo& frame) {
         if (stickFresh) rate = fmaxf(rate, fmaxf(fabsf(sRig.stickTurn), fabsf(sRig.stickTilt)));
         if (port_host_time_ns() - sAdjustAt.load() < 250000000) rate = fmaxf(rate, 1.5f * sAdjustAmount.load());
         float t = fminf(1.0f, rate / 1.0f);
-        float amount = sComfortVignette ? (rate > 0.02f ? sVignetteSlow + (sVignetteFast - sVignetteSlow) * t : 0.0f)
-                                        : sVignetteFast * fminf(1.0f, fmaxf(0.0f, (rate - 0.35f) / 1.15f));
+        // The fast level is never below the slow one: the vignette only grows with speed.
+        float fast = fmaxf(sVignetteFast, sVignetteSlow);
+        float amount = sComfortVignette ? (rate > 0.02f ? sVignetteSlow + (fast - sVignetteSlow) * t : 0.0f)
+                                        : fast * fminf(1.0f, fmaxf(0.0f, (rate - 0.35f) / 1.15f));
         float target = amount;  // of the full vignette (vr_draw.h)
         sVignette += (target - sVignette) * fminf(1.0f, dt * (target > sVignette ? 12.0f : 4.0f));
         static const bool sVigLog = getenv("PETARI_RIGLOG") != nullptr;

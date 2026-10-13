@@ -225,7 +225,7 @@ const Item kControlItems[] = {
     {"turn_speed", "Turn speed", "Top speed of the stick's turn", kSlider, 30.0f, 240.0f, 10.0f, "%.0f deg/s", smoothOn},
     {"tilt_speed", "Tilt speed", "Top speed of the stick's tilt", kSlider, 15.0f, 120.0f, 5.0f, "%.0f deg/s", smoothOn},
     {"invert_camera", "Invert camera", nullptr, kSwitch, 0, 0, 0, nullptr, nullptr, hintInvert},
-    {"star_bit_speed", "Star Bit speed", "How fast shot Star Bits fly", kSlider, 1.0f, 3.0f, 0.25f, "%.2f x"},
+    {"star_bit_speed", "Star Bit speed", "How fast shot Star Bits fly", kSlider, 1.0f, 5.0f, 0.25f, "%.2f x"},
     {"left_handed", "Left-handed", "The left controller points; sticks swap", kSwitch},
 };
 const Item kComfortItems[] = {
@@ -234,7 +234,7 @@ const Item kComfortItems[] = {
     {"comfort_vignette", "Comfort vignette", "Darker edges whenever the view moves", kSwitch},
     {"vignette_slow", "Vignette at slow movement", "How dark the edges get at the slowest turn", kSlider, 0.0f, 1.0f, 0.05f, nullptr, comfortOn, nullptr, nullptr,
      percentText},
-    {"vignette_fast", "Vignette at fast movement", "How dark the edges get at full speed", kSlider, 0.0f, 1.0f, 0.05f, nullptr, nullptr, nullptr, nullptr,
+    {"vignette_fast", "Vignette at fast movement", "At full speed; never below the slow value", kSlider, 0.0f, 1.0f, 0.05f, nullptr, nullptr, nullptr, nullptr,
      percentText},
 };
 const Item kDisplayItems[] = {

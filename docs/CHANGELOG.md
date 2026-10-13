@@ -14,7 +14,7 @@ The first release of GalaxyFrame, Super Mario Galaxy in VR running natively on t
 ### Rendering
 
 - A native Vulkan renderer that replays the game's recorded frames.
-- Both eyes rendered on every refresh of the 120 Hz display, from the head pose of that refresh, at SteamVR's recommended resolution. Each pair is handed to SteamVR only once the GPU has finished it.
+- Both eyes rendered on every refresh of the 120 Hz display, from the head pose of that refresh, at 0.9 of SteamVR's recommended resolution. Each pair is handed to SteamVR only once the GPU has finished it.
 - When the GPU falls behind in a heavy scene, new eyes every second refresh until it is lighter again, then back.
 - The shaders compiled to SPIR-V at run time and cached; a warmed cache has every pipeline ready at launch.
 - GPU work cut by about a quarter per eye: the drawing state is sent once per run of draws, draws nothing reads are skipped, channel-only copies are blits, the HUD is drawn once per game frame, and the GPU renders directly to memory.
@@ -24,15 +24,17 @@ The first release of GalaxyFrame, Super Mario Galaxy in VR running natively on t
 
 - The Steam Frame controllers bound through SteamVR's own profile, with rumble on both controllers.
 - Smooth turning of the diorama with the right stick, with a turn speed slider; 45 degree steps behind a blink as the alternative.
+- Star Bits shot three times as fast, with a slider from 1x to 5x.
 
 ### Comfort
 
 - A comfort vignette: a clear circle around where you look, closing in as the view moves, with its strength set for slow and for fast movement.
+- The game's in-engine cutscenes in the diorama, following their camera, with a switch per kind on a Cutscenes tab. The videos stay on the flat screen.
 
 ### The settings panel
 
 - Six tabs: Diorama, Screen, Cutscenes, Controls, Comfort and Display. The switches that do nothing on the Frame are hidden.
-- One resolution setting, shown in pixels: 1.00 is what SteamVR's own resolution setting gives the game.
+- One resolution setting, shown in pixels: 1.00 is what SteamVR's own resolution setting gives the game; 0.90 by default.
 
 ### Install
 
