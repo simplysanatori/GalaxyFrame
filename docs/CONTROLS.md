@@ -396,6 +396,7 @@ turn_smoothing = 0.35
 # file without it has the old one: its values are multiplied by 0.3 when
 # read).  An old `vignette` line is read as vignette_fast.
 vignette_slow = 0.3
+# Never below vignette_slow: a lower value is raised to it.
 vignette_fast = 0.5
 vignette_scale = 2
 # Fade out scenery that hides Mario (0 = off)
