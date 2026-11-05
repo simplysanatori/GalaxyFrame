@@ -213,7 +213,13 @@ constexpr Item kScreenItems[] = {
 };
 // Dimmed with the giant screen: a cutscene there is on the flat screen anyway.
 constexpr Item kCutsceneItems[] = {
+    // Hidden for now, and off by default: some of the flights' camera angles
+    // (Launch Stars, pipes, a galaxy's arrival) come out wrong in the
+    // diorama, so they stay on the flat screen until that is worked on.  The
+    // ini key still works.
+#if 0
     {"diorama_transitions", "Diorama in flights", "Launch stars, pipes and arrivals", kSwitch, 0, 0, 0, nullptr, giantOff},
+#endif
     {"cutscene_stars", "Power Stars", "Stars appearing and returning", kSwitch, 0, 0, 0, nullptr, giantOff},
     {"cutscene_bosses", "Bosses and enemies", "Introductions, hits and defeats", kSwitch, 0, 0, 0, nullptr, giantOff},
     {"cutscene_observatory", "Comet Observatory", "Rosalina, Toad Brigade, the domes", kSwitch, 0, 0, 0, nullptr, giantOff},
