@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.1 (November 2026)
+
+- You can now install and update GalaxyFrame with Frametanium. The release carries its own `install.sh`, which installs the unpacked release in place and updates the Super Mario Galaxy VR entry in your library instead of adding another.
+- The release also carries `steam-cef.py` and a new `uninstall.sh`.
+- Nothing in the game changed: the program and the shader cache seed are the 1.0.0 ones.
+- The release also has a `galaxyframe-<version>-framedrop-linux-arm64.zip` and a manifest for FrameDrop. It adds its own library entry, and its `run.sh` installs the release without adding a second one.
+
 ## 1.0.0 (October 2026)
 
 The first release of GalaxyFrame, Super Mario Galaxy in VR running natively on the Valve Steam Frame. It is a port of bigmak94's GalaxyQuest, built on the Petari decompilation.
