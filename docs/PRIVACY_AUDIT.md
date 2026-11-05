@@ -17,7 +17,7 @@ What `tools/privacy-check.sh` and the checks below look for before anything is p
 - The sha256 in `steam-frame/prepare-game.sh` is the checksum of the public nodtool download.
 - Published history: no tokens, keys or network identifiers. Commits and tags on this branch use the GitHub no-reply address.
 - The release tarball holds only the launcher, the stripped game library, the Vulkan shader library, the headless runner, the launch wrapper, `vrtiming.py` and, if given, a shader cache seed (`spirv.bin`). `steam-frame/build.sh` packs those files by name, so configuration, saves, logs and keys cannot end up in a tarball. No personal strings were found in the binaries.
-- The game's own logs (`petari_log.txt`, `launch.log`) hold file paths, the Steam shortcut's app id and settings. They hold no account names, network addresses or serial numbers. SteamVR's own logs can hold device serial numbers. The README says to check those before attaching them to a report.
+- The game's own logs (`petari_log.txt`, `launch.log`) hold file paths, the Steam shortcut's app id and settings. They hold no account names, network addresses or serial numbers. SteamVR's own logs can hold device serial numbers. The [user guide](USER_GUIDE.md#reporting-a-problem) says to check those before attaching them to a report.
 - There is no bug-report or log-collection script in the repository.
 
 ## Verification
