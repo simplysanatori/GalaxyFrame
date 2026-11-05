@@ -4,7 +4,9 @@
 # "Super Mario Galaxy VR" entry to the Steam library, set to 120 Hz in
 # SteamVR.  Steam must be running.
 #   steam-frame/install.sh [galaxyframe-*-linux-arm64.tar.gz]
-# Without an argument it installs the build output (build-linux/, from
+# Without an argument it installs the folder it is in when that is an unpacked
+# release (the tarball carries this script at its top level, which is how
+# Frametanium runs it), else the build output (build-linux/, from
 # build_linux.sh) if there is one, else the newest tarball in
 # steam-frame/release/.
 # The game files are a separate step: steam-frame/prepare-game.sh.
@@ -72,8 +74,26 @@ done
 
 mkdir -p "$DEST"
 TARBALL=$1
-[ -n "$TARBALL" ] || [ -x "$HERE/../build-linux/galaxyframe" ] || TARBALL=$(ls "$HERE"/release/galaxyframe-*-linux-arm64.tar.gz 2> /dev/null | sort -V | tail -1)
-if [ -n "$TARBALL" ] && [ -f "$TARBALL" ]; then
+# Run from an unpacked release (the tarball's own install.sh, e.g. started by Frametanium)?
+UNPACKED=
+[ -n "$TARBALL" ] || { [ -x "$HERE/galaxyframe" ] && [ -f "$HERE/libgame.so" ] && UNPACKED=$HERE; } || true
+[ -n "$TARBALL" ] || [ -n "$UNPACKED" ] || [ -x "$HERE/../build-linux/galaxyframe" ] || TARBALL=$(ls "$HERE"/release/galaxyframe-*-linux-arm64.tar.gz 2> /dev/null | sort -V | tail -1)
+if [ -n "$UNPACKED" ]; then
+  echo "installing the unpacked release in $UNPACKED"
+  # Each file is put in place in one step: the game may be running.
+  for f in galaxyframe petari_headless libgame.so; do
+    [ -f "$UNPACKED/$f" ] || continue
+    cp "$UNPACKED/$f" "$DEST/$f.new" && mv "$DEST/$f.new" "$DEST/$f"
+  done
+  # The Vulkan shader library; a release without it runs on GLES, and an old
+  # copy must not stay beside a newer game library.
+  rm -f "$DEST/libgq_glsl.so"
+  if [ -f "$UNPACKED/libgq_glsl.so" ]; then
+    cp "$UNPACKED/libgq_glsl.so" "$DEST/libgq_glsl.so.new" && mv "$DEST/libgq_glsl.so.new" "$DEST/libgq_glsl.so"
+  else
+    echo "note: this release has no libgq_glsl.so (the game uses GLES)"
+  fi
+elif [ -n "$TARBALL" ] && [ -f "$TARBALL" ]; then
   echo "installing $TARBALL"
   tar -xzf "$TARBALL" -C "$DEST" galaxyframe libgame.so
   tar -xzf "$TARBALL" -C "$DEST" petari_headless 2> /dev/null || true
@@ -100,8 +120,10 @@ else
 fi
 cp "$HERE/galaxyframe.sh" "$DEST/galaxyframe.sh"
 # The compositor timing logger galaxyframe.sh runs beside the game.
-if [ -f "$HERE/../tools/vrtiming.py" ]; then
+if [ -z "$UNPACKED" ] && [ -f "$HERE/../tools/vrtiming.py" ]; then
   cp "$HERE/../tools/vrtiming.py" "$DEST/vrtiming.py"
+elif [ -n "$UNPACKED" ]; then
+  [ -f "$UNPACKED/vrtiming.py" ] && cp "$UNPACKED/vrtiming.py" "$DEST/vrtiming.py"
 elif [ -n "$TARBALL" ]; then
   tar -xzf "$TARBALL" -C "$DEST" vrtiming.py 2> /dev/null || true
 fi
@@ -111,7 +133,10 @@ rm -f "$DEST/galaxyquest" "$DEST/galaxyquest.sh"
 
 # A shader cache seed shipped in the tarball (spirv.bin) goes into the data
 # folder, unless there is a spirv.bin there already.
-if [ -n "$TARBALL" ] && [ -f "$TARBALL" ] && [ ! -e "$DATA/spirv.bin" ] && tar -tzf "$TARBALL" spirv.bin > /dev/null 2>&1; then
+if [ -n "$UNPACKED" ] && [ -f "$UNPACKED/spirv.bin" ] && [ ! -e "$DATA/spirv.bin" ]; then
+  mkdir -p "$DATA"
+  cp "$UNPACKED/spirv.bin" "$DATA/spirv.bin" && echo "placed the shader cache seed in $DATA/spirv.bin"
+elif [ -n "$TARBALL" ] && [ -f "$TARBALL" ] && [ ! -e "$DATA/spirv.bin" ] && tar -tzf "$TARBALL" spirv.bin > /dev/null 2>&1; then
   mkdir -p "$DATA"
   tar -xzf "$TARBALL" -C "$DATA" spirv.bin && echo "placed the shader cache seed in $DATA/spirv.bin"
 fi
