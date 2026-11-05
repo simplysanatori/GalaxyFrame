@@ -163,6 +163,12 @@ void init();
 //                     view to the right (the camera goes round Mario to the
 //                     left); 0 moves the camera the way the stick is pushed,
 //                     as the Wii's D-pad did
+//   shake_spin        1 (default): a flick of either controller spins, as a
+//                     shake of the Wii Remote or the Nunchuk did; 0: only
+//                     the buttons spin
+//   spin_shake_strength  how fast the flick must be, relative to 2.5 m/s
+//                     at the controller's front, 0.2 .. 1.6 (1); lower is
+//                     gentler
 //   haptics           1 (default) buzzes the right controller when the game
 //                     rumbles the Wii Remote and ticks it over panel
 //                     controls; 0 for none
@@ -199,6 +205,9 @@ bool highClocks();
 bool haptics();
 // The right stick's camera turns swapped (invert_camera).
 bool invertCamera();
+// The controller speed that spins, m/s (shake_spin, spin_shake_strength);
+// 0 with shaking turned off.
+float spinShakeSpeed();
 // The room around the giant screen (the passthrough setting).  Wanted: the
 // setting is on and the giant screen with it, so the headset's passthrough
 // should run.  Shown: how far the eye images are see-through around the
