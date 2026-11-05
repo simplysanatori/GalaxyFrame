@@ -223,6 +223,6 @@ GalaxyQuest and GalaxyFrame's changes are in the public domain under [The Unlice
 
 I wanted Super Mario Galaxy on my Frame without Lepton, so I started from GalaxyQuest and had it built natively for SteamVR. The first version drew through a translation layer and its pacing fought SteamVR; one eye jittered and the GPU ran out in heavy areas. The second step was a Vulkan renderer of its own, pacing written for how SteamVR actually behaves, and then the comfort and control work that makes the diorama pleasant for a longer session. It started as a project for my own headset. It ended up good enough to share.
 
-I made this with partial assistance from Claude. GalaxyQuest is also AI-written, as its README says. Neither the GalaxyQuest author nor the Petari team has reviewed this port. If that is not for you, no worries. Read the code before trusting it; it is a starting point for anyone who wants Super Mario Galaxy, or another GalaxyQuest-style port, on the Frame.
+I made this with partial assistance from Claude. GalaxyQuest is also AI-written, as its README says. It is a starting point for anyone who wants Super Mario Galaxy, or another GalaxyQuest-style port, on the Frame.
 
 Developer notes, the probe results and what was learned about SteamVR on the Frame are in the [technical notes](docs/TECHNICAL_NOTES.md).

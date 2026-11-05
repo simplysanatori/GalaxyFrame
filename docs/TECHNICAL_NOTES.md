@@ -8,7 +8,7 @@ Not affiliated with Valve, Nintendo, the Petari team or the GalaxyQuest author.
 
 ## AI disclosure
 
-I did not write this code by hand. The port, its scripts and these notes were written with Anthropic's Claude (Claude Opus 5.5 and Claude Fable 5.1, through Claude Code), running on my Steam Frame. I chose what to attempt, supplied the disc, reviewed the code and the scripts as they were written, ran each build in the headset and reported what I saw. Claude read the logs and changed the code. GalaxyQuest is also AI-written, as its README says. The GalaxyQuest author and the Petari team have not reviewed this port. Read the code before trusting it. "How this was made" at the end has more.
+I did not write this code by hand. The port, its scripts and these notes were written with Anthropic's Claude (Claude Opus 5.5 and Claude Fable 5.1, through Claude Code), running on my Steam Frame. I chose what to attempt, supplied the disc, reviewed the code and the scripts as they were written, ran each build in the headset and reported what I saw. Claude read the logs and changed the code. GalaxyQuest is also AI-written, as its README says. "How this was made" at the end has more.
 
 ## Status
 
