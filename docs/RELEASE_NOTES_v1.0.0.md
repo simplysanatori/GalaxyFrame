@@ -47,7 +47,7 @@ Super Mario Galaxy in VR, running natively on the Valve Steam Frame. GalaxyFrame
 
 ## Install
 
-Unpack the tarball on the Frame and run `steam-frame/install.sh` from the repository with the tarball as its argument. It installs the program, creates the Steam shortcut and keeps your game files, saves and settings on an update. The [README](https://github.com/simplysanatori/GalaxyFrame/blob/steam-frame/README.md) has the full steps, the controls and the settings.
+Unpack the tarball on the Frame and run `steam-frame/install.sh` from the repository with the tarball as its argument. It installs the program, creates the Steam shortcut and keeps your game files, saves and settings on an update. The [README](https://github.com/simplysanatori/GalaxyFrame/blob/steam-frame/README.md) has the install steps. The [user guide](https://github.com/simplysanatori/GalaxyFrame/blob/steam-frame/docs/USER_GUIDE.md) has the full steps, the controls and the settings.
 
 ## Known
 

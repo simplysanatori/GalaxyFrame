@@ -35,7 +35,7 @@ Update the way you installed it. Your game files, saves and settings stay where 
 - **Frametanium:** it picks up the new version and runs the release's `install.sh`.
 - **FrameDrop:** install the new zip. Its `run.sh` installs the release on the next start, without adding a second library entry.
 
-New here? The [README](https://github.com/simplysanatori/GalaxyFrame/blob/steam-frame/README.md) has the full steps, the controls and the settings. You make the game files from your own disc with `steam-frame/prepare-game.sh`, once.
+New here? The [README](https://github.com/simplysanatori/GalaxyFrame/blob/steam-frame/README.md) has the install steps. The [user guide](https://github.com/simplysanatori/GalaxyFrame/blob/steam-frame/docs/USER_GUIDE.md) has the full steps, the controls and the settings. You make the game files from your own disc with `steam-frame/prepare-game.sh`, once.
 
 ## Known
 
