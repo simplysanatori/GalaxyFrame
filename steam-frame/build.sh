@@ -4,7 +4,8 @@
 # with the launcher, the stripped game library, the shader library of the
 # Vulkan backend (libgq_glsl.so, left out when glslang was not available to
 # build it; the game then uses GLES), the launch wrapper and, if you give one,
-# a Vulkan shader cache seed.  SHA256SUMS is written next to the tarball.
+# a Vulkan shader cache seed, and install.sh, steam-cef.py and uninstall.sh at
+# the top level (the unpacked folder installs itself).  SHA256SUMS is written next to the tarball.
 #   steam-frame/build.sh [version [spirv.bin]]
 # The version defaults to 1.0.0.  spirv.bin is optional: the SPIR-V cache of
 # a played session (~/.local/share/GalaxyFrame/spirv.bin).  It goes into the
@@ -34,6 +35,10 @@ else
 fi
 cp steam-frame/galaxyframe.sh tools/vrtiming.py "$STAGE/"
 FILES="$FILES vrtiming.py"
+# The installer, its helper and the uninstaller: a tool that unpacks the tarball (Frametanium) runs
+# install.sh from the unpacked folder.
+cp steam-frame/install.sh steam-frame/steam-cef.py steam-frame/uninstall.sh "$STAGE/"
+FILES="$FILES install.sh steam-cef.py uninstall.sh"
 if [ -n "$SEED" ]; then
   cp "$SEED" "$STAGE/spirv.bin"
   FILES="$FILES spirv.bin"

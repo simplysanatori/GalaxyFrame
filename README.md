@@ -90,6 +90,10 @@ If you ran this port under its old name GalaxyQuest, `install.sh` moves `~/.loca
 
 The installer changes nothing outside the folders listed under [Files](#files), the Steam shortcut and SteamVR's settings for that shortcut.
 
+## Install with Frametanium
+
+If you use [Frametanium](https://github.com/Cogential/frametanium), add `simplysanatori/GalaxyFrame` there. It downloads the release, runs its `install.sh` and updates it when I publish a new version. Your game files still come from your own disc: clone this repository and run `steam-frame/prepare-game.sh` once (step 3 above).
+
 ## First run
 
 The game starts on a giant virtual screen, as on a TV. To play in the diorama, press Menu, aim at the VR settings panel beside the pause menu, and turn off *Giant screen* on the *Screen* tab.
