@@ -12,7 +12,7 @@ Download the
 [Windows installer](https://github.com/bigmak94/GalaxyQuest/releases/latest/download/GalaxyQuest-Installer-windows-x86_64.exe)
 from the [latest release](https://github.com/bigmak94/GalaxyQuest/releases/latest).
 For macOS, Linux, or installation without the installer, use the
-[manual instructions](../README.md#installing-manually).
+[manual instructions](../README.upstream.md#installing-manually).
 
 1. Enable developer mode, connect the headset with a USB data cable, and allow
    USB debugging in the headset. See [Meta's setup guide](https://developers.meta.com/horizon/documentation/android-apps/enable-developer-mode/).

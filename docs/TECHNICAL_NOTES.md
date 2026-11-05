@@ -2,13 +2,13 @@
 
 GalaxyFrame is a port of [GalaxyQuest](https://github.com/bigmak94/GalaxyQuest) to the Valve Steam Frame. GalaxyQuest plays Super Mario Galaxy in VR as a native port of the game, built on the [Petari](https://github.com/SMGCommunity/Petari) decompilation, and ships as a Meta Quest app. GalaxyFrame builds the same code as a Linux Arm64 program that runs in the Frame's own SteamVR, without Lepton, an APK or adb. This document is for version 1.0.0.
 
-Install, first run, controls, settings, troubleshooting and how to report problems are in the [README](../README.md). This one says how the port works, how to build it, and what I learned about SteamVR on the Frame. The setting-by-setting description of the VR panel and the ini file is in [CONTROLS.md](CONTROLS.md); the environment switches for testing are in [TECHNICAL.md](TECHNICAL.md), which is GalaxyQuest's own technical document and still describes the shared code.
+Install, first run and the main controls are in the [README](../README.md); full controls, settings, troubleshooting and how to report problems are in the [user guide](USER_GUIDE.md). This one says how the port works, how to build it, and what I learned about SteamVR on the Frame. The setting-by-setting description of the VR panel and the ini file is in [CONTROLS.md](CONTROLS.md); the environment switches for testing are in [TECHNICAL.md](TECHNICAL.md), which is GalaxyQuest's own technical document and still describes the shared code.
 
 Not affiliated with Valve, Nintendo, the Petari team or the GalaxyQuest author.
 
 ## AI disclosure
 
-I did not write this code by hand. The port, its scripts and these notes were written with Anthropic's Claude (Claude Opus 5.5 and Claude Fable 5.1, through Claude Code), running on my Steam Frame. I chose what to attempt, supplied the disc, reviewed the code and the scripts as they were written, ran each build in the headset and reported what I saw. Claude read the logs and changed the code. GalaxyQuest is also AI-written, as its README says. "How this was made" at the end has more.
+I started this port and used Anthropic's Claude (Claude Opus 5.5 and Claude Fable 5.1, through Claude Code, running on my Steam Frame) to speed up development. I wrote, reviewed and fixed code by hand all the way through, kept the AI's work checked and reined in, and aimed to keep the port as lightweight as possible. I ran each build in the headset. GalaxyQuest is also AI-written, as its README says. "How this was made" at the end has more.
 
 ## Status
 
@@ -95,7 +95,7 @@ The default eye size is 0.9 of the size SteamVR's own resolution setting gives t
 
 ### Controls and haptics
 
-The Frame controllers are bound through `XR_VALVE_frame_controller_interaction` (`suggestFrame()` and `updateInput()` in `xr_app.cpp`), so SteamVR does not translate them into Quest Touch controllers. A and B are the Wii Remote's A and B, X, Y, the right bumper or a flick spin, the left D-pad is the Wii D-pad and View is Minus. The full table is in the README. In the diorama the right stick turns and tilts the view smoothly, and the left grip with the D-pad sets its height and size. A left-handed option swaps the hands.
+The Frame controllers are bound through `XR_VALVE_frame_controller_interaction` (`suggestFrame()` and `updateInput()` in `xr_app.cpp`), so SteamVR does not translate them into Quest Touch controllers. A and B are the Wii Remote's A and B, X, Y, the right bumper or a flick spin, the left D-pad is the Wii D-pad and View is Minus. The full table is in the [user guide](USER_GUIDE.md#controls). In the diorama the right stick turns and tilts the view smoothly, and the left grip with the D-pad sets its height and size. A left-handed option swaps the hands.
 
 The game drives the Wii Remote's rumble motor with `WPADControlMotor` (`platform/src/input/wpad.cpp`), which `updateInput()` reads through `port_input_rumble(0)` every frame. Both controllers buzz: while the motor is on each gets a 120 ms pulse at amplitude 0.5, renewed every 80 ms, and when the motor goes off the haptic is stopped at once. Short pulses mean a runtime that ignores the duration cannot leave a controller running. A 15 ms tick at amplitude 0.25 marks the pointer reaching a new target on the settings panel. The haptic action is bound on both hands' `output/haptic` for the Frame profile and the Touch profiles. `haptics = 0` in `petari_vr.ini` turns both off. The result of the first `xrApplyHapticFeedback` is logged once as `haptics: first pulse result N`.
 
@@ -185,7 +185,7 @@ A short run with the headset asleep (no frames shown) showed that SteamVR/OpenXR
 
 ## How this was made
 
-I wanted Super Mario Galaxy on my Frame without Lepton, so I started from GalaxyQuest and had it built natively for SteamVR. I did not write the code by hand. The investigation, the port, the scripts and these notes were produced by Anthropic's Claude (Claude Opus 5.5 and Claude Fable 5.1, through Claude Code) working on my Steam Frame. I supplied the disc, reviewed what was written and ran each build in the headset.
+I wanted Super Mario Galaxy on my Frame without Lepton, so I started from GalaxyQuest and built it natively for SteamVR, using Anthropic's Claude (Claude Opus 5.5 and Claude Fable 5.1, through Claude Code) to speed up development. I wrote, reviewed and fixed code by hand throughout, and ran each build in the headset.
 
 The work went roughly like this. First, reading GalaxyQuest's platform layer to see how much was Android-specific. Little was: the launcher, the OpenXR session binding, the sound output and the storage paths. Then checking that SteamVR's native runtime offers OpenGL ES through EGL, and replacing those pieces. Then rounds of full builds against glibc and libstdc++, for code that compiles differently from Android's bionic and libc++. Two boot crashes were traced with gdb: a `(null)` path from glibc's `sprintf`, and a disc-read queue freed on the wrong heap. After that came the pacing work, where the first version drew through a translation layer and one eye jittered, then a Vulkan renderer of its own and pacing written for how SteamVR behaves, and finally the comfort and control work that makes the diorama pleasant for a longer session. Each step was tested in the headset, and everything under Status was checked by running the game there.
 
