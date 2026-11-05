@@ -7,7 +7,7 @@
 # a Vulkan shader cache seed, and install.sh, steam-cef.py and uninstall.sh at
 # the top level (the unpacked folder installs itself).  SHA256SUMS is written next to the tarball.
 #   steam-frame/build.sh [version [spirv.bin]]
-# The version defaults to 1.0.1.  spirv.bin is optional: the SPIR-V cache of
+# The version defaults to 1.1.0.  spirv.bin is optional: the SPIR-V cache of
 # a played session (~/.local/share/GalaxyFrame/spirv.bin).  It goes into the
 # tarball as it is, and install.sh puts it into the data folder only when
 # there is no spirv.bin there yet, so a first launch compiles fewer shaders.
@@ -17,7 +17,7 @@
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 cd "$HERE/.."
-VERSION=${1:-1.0.1}
+VERSION=${1:-1.1.0}
 SEED=${2:-$GALAXYFRAME_SPIRV_SEED}
 [ -z "$SEED" ] || [ -f "$SEED" ] || { echo "no such shader cache seed: $SEED" >&2; exit 1; }
 
