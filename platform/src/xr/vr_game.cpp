@@ -137,7 +137,7 @@ float sStereoSize = 0.8f;     // each picture's size relative to the screen's si
 float sSkipHold = 1.0f;       // seconds A is held to skip a cutscene (skip_hold)
 bool sInvertCamera = true;    // the right stick's turns swapped (invert_camera)
 bool sShakeSpin = true;       // a flick of a controller spins (shake_spin)
-float sSpinShakeStrength = 1.0f;  // the flick's speed that spins, relative to 2.5 m/s (spin_shake_strength)
+float sSpinShakeStrength = 1.0f;  // the flick's speed that spins, relative to 1.5 m/s (spin_shake_strength)
 bool sComfortVignette = true;  // a gentle vignette for every smooth movement of the view (comfort_vignette)
 // Which kinds of cutscene stay in the diorama (cutscene_*): in the order of
 // the kinds in GameScene.cpp (stars, bosses, observatory, storybook, friends,
@@ -788,7 +788,10 @@ int refreshRates(float* rates, int max) {
     return n;
 }
 bool invertCamera() { return sInvertCamera; }
-float spinShakeSpeed() { return sShakeSpin ? 2.5f * sSpinShakeStrength : 0.0f; }
+// The flick's speed at 100 % strength, at the controller's front: a quick
+// flick of the wrist, not a swing of the arm (2.5 m/s was too hard to reach).
+constexpr float kShakeSpeed = 1.5f;
+float spinShakeSpeed() { return sShakeSpin ? kShakeSpeed * sSpinShakeStrength : 0.0f; }
 bool passthroughWanted() { return sPassthrough && sGiantScreen; }
 float passthroughShown() { return sPassAmount; }
 bool passthroughAvailable() { return sPassAvailable; }
