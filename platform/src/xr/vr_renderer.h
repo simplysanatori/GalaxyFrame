@@ -134,11 +134,12 @@ void init();
 //                     game's speed)
 //   left_handed       1 to point with the left controller and swap the
 //                     sticks, triggers, grips and bumpers (0, default)
-//   diorama_transitions  1 (default) keeps the diorama through launch stars,
-//                     pipes and a galaxy's arrival, following the game
-//                     camera as the screen shows it (the world swings with
-//                     it, smoothed, with the turn vignette); 0 shows them on
-//                     the flat screen, as early versions did
+//   diorama_transitions  1 keeps the diorama through launch stars, pipes
+//                     and a galaxy's arrival, following the game camera as
+//                     the screen shows it (the world swings with it,
+//                     smoothed, with the turn vignette); 0 (default) shows
+//                     them on the flat screen.  Not on the panel for now:
+//                     some of their camera angles are wrong in the diorama
 //   gravity_turns     smooth (default): the world turns with Mario's up round a
 //                     round planet; steps: it holds still and re-levels in one
 //                     step behind a blink once his up is 35 degrees away; off:
