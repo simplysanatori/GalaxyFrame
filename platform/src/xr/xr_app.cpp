@@ -46,6 +46,7 @@
 #include "../gx/gl_renderer.h"
 #include "vr_draw.h"
 #include "vr_renderer.h"
+#include "vr_shake.h"
 #include "xmath.h"
 #include "xr_gfx.h"
 
@@ -98,6 +99,7 @@ struct App {
     bool stickClickHeld = false;    // the right stick's click, for its edge
     bool dpadTurned = false;        // that flick was a snap turn of the diorama, not the D-pad
     bool aimTracked = true;         // the right controller's aim pose is known
+    vr::ShakeDetector shake[2];     // shake to spin, per hand (left, right)
     int lastRumble = 0;
     int64_t nextRumblePulse = 0;    // host time (ns) the held rumble is pulsed again
     bool hapticLogged = false;      // the runtime's answer to the first pulse is in the log
@@ -1063,27 +1065,54 @@ void updateInput(App& a, XrTime time) {
     if (smooth) vr::smoothTurn(turnX, tiltY);
     vr::dioramaAdjust(adjX, adjY);
 
-    // Spin: B or Y, or flicking the right controller like a Wii Remote,
-    // produces the acceleration spike the game reads as a remote shake (some
-    // objects only answer that one); flicking the left controller shakes the
-    // Nunchuk, which also spins.
+    // Spin: B or Y (X, Y or the bumper on the Steam Frame's controllers), or
+    // flicking the pointing controller like a Wii Remote, produces the
+    // acceleration spike the game reads as a remote shake (some objects only
+    // answer that one); flicking the other controller shakes the Nunchuk,
+    // which also spins.
     static int spinFrames = 0, nunSpinFrames = 0;
-    static XrTime lastFlick[2] = {0, 0};
     if (getBool(a, a.bAction) || getBool(a, a.yAction) ||
         (a.bumperAction != XR_NULL_HANDLE && getBool(a, a.bumperAction, a.handPath[hm]))) {
         spinFrames = 6;
     }
+    // A flick (vr_shake.h): faster than spinShakeSpeed at the aim pose, 0.3 s
+    // between spins.  None while the pointer works a menu (the pause menu and
+    // the settings panel beside it, the game's other pointer menus, the setup
+    // screen) or with shake_spin off, nor for 0.3 s after.  The poses are
+    // located for the display time the eyes are rendered for, like the
+    // pointer's.
+    const float shakeSpeed = vr::spinShakeSpeed();
+    const bool onMenus = vr::setupActive() || vr::settingsShown() || (gpu::renderer().camera().flags & PORT_GX_CAMERA_POINTER_UI);
     for (int h = 0; h < 2; h++) {
         XrSpaceVelocity vel{XR_TYPE_SPACE_VELOCITY};
         XrSpaceLocation vloc{XR_TYPE_SPACE_LOCATION};
         vloc.next = &vel;
-        if (XR_SUCCEEDED(xrLocateSpace(a.aimSpace[h], a.appSpace, time, &vloc)) && (vel.velocityFlags & XR_SPACE_VELOCITY_LINEAR_VALID_BIT)) {
-            const XrVector3f& v = vel.linearVelocity;
-            float speed = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
-            if (speed > 2.5f && time - lastFlick[h] > 300000000) {  // m/s; 0.3 s between spins
-                (h == hm ? spinFrames : nunSpinFrames) = 6;
-                lastFlick[h] = time;
-            }
+        vr::ShakeSample sample;
+        sample.timeNs = time;
+        if (XR_SUCCEEDED(xrLocateSpace(a.aimSpace[h], a.appSpace, time, &vloc)) && (vloc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
+            sample.valid = true;
+            sample.tracked = (vloc.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
+            sample.pos[0] = vloc.pose.position.x;
+            sample.pos[1] = vloc.pose.position.y;
+            sample.pos[2] = vloc.pose.position.z;
+            sample.velocityValid = (vel.velocityFlags & XR_SPACE_VELOCITY_LINEAR_VALID_BIT) != 0;
+            sample.vel[0] = vel.linearVelocity.x;
+            sample.vel[1] = vel.linearVelocity.y;
+            sample.vel[2] = vel.linearVelocity.z;
+        }
+        vr::ShakeDetector& d = a.shake[h];
+        if (d.update(sample, shakeSpeed, onMenus || shakeSpeed <= 0.0f)) {
+            (h == hm ? spinFrames : nunSpinFrames) = 6;
+        }
+        if (d.takeFirstSeen()) {
+            char state[32];
+            snprintf(state, sizeof(state), shakeSpeed > 0.0f ? "on at %.2f m/s" : "off", shakeSpeed);
+            port_log("vr: shake to spin, %s controller: %s at the aim pose; %s", h ? "right" : "left",
+                     d.firstVelocityValid() ? "the runtime's velocity (valid)" : "no valid velocity from the runtime, position differences", state);
+        }
+        if (d.takeSwitched()) {
+            port_log("vr: shake to spin, %s controller: the runtime's velocity stays far below the positions' (%.2f m/s fastest); position differences from now on",
+                     h ? "right" : "left", d.peakPositions);
         }
     }
     if (spinFrames > 0) {
@@ -1851,6 +1880,22 @@ void updatePaceVk(App& a, bool late) {
         }
         a.vkWinSets = a.vkWinLate = 0;
     }
+}
+
+// At the end of a session: how shake to spin went, per controller (the
+// fastest flick outside menus, by the runtime's velocity and by the
+// positions; 0 for none).
+void logShakeSummary(App& a) {
+    char hands[2][160];
+    for (int h = 0; h < 2; h++) {
+        const vr::ShakeDetector& d = a.shake[h];
+        snprintf(hands[h], sizeof(hands[h]), "%s %d spins, %d ignored on menus, fastest %.2f m/s by the runtime and %.2f by the positions%s",
+                 h ? "right" : "left", d.spins, d.ignored, d.peakRuntime, d.peakPositions, d.usingPositions() ? " (positions used)" : "");
+    }
+    char state[32];
+    float speed = vr::spinShakeSpeed();
+    snprintf(state, sizeof(state), speed > 0.0f ? "on at %.2f m/s" : "off", speed);
+    port_log("vr: shake to spin (%s at the end): %s; %s", state, hands[1], hands[0]);
 }
 
 // The laser between the game's input updates: the controller's aim pose at
@@ -2767,6 +2812,7 @@ extern "C" __attribute__((visibility("default"))) void port_linux_main(const cha
         }
         port_thread_prio_tick();
     }
+    logShakeSummary(a);
     port_log("exiting");
 #ifdef __ANDROID__
     exit(0);

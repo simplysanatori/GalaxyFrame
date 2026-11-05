@@ -136,6 +136,8 @@ float sStereoFar = 0.95f;     // the farthest things' distance apart on the scre
 float sStereoSize = 0.8f;     // each picture's size relative to the screen's single one (stereo_resolution)
 float sSkipHold = 1.0f;       // seconds A is held to skip a cutscene (skip_hold)
 bool sInvertCamera = true;    // the right stick's turns swapped (invert_camera)
+bool sShakeSpin = true;       // a flick of a controller spins (shake_spin)
+float sSpinShakeStrength = 1.0f;  // the flick's speed that spins, relative to 2.5 m/s (spin_shake_strength)
 bool sComfortVignette = true;  // a gentle vignette for every smooth movement of the view (comfort_vignette)
 // Which kinds of cutscene stay in the diorama (cutscene_*): in the order of
 // the kinds in GameScene.cpp (stars, bosses, observatory, storybook, friends,
@@ -632,6 +634,8 @@ vr::Setting sSettings[] = {
          sInvertCamera = x != 0.0f;
          port_input_set_camera_inverted(sInvertCamera);
      }},
+    {"shake_spin", 0.0f, 1.0f, 0.0f, FLAG(sShakeSpin)},
+    {"spin_shake_strength", 0.2f, 1.6f, 0.0f, NUMBER(sSpinShakeStrength)},
     {"resolution", 0.5f, 2.0f, 0.0f, NUMBER(sResolution)},
     {"min_resolution", 0.5f, 2.0f, 0.0f, NUMBER(sMinScale)},
     {"refresh_rate", 60.0f, 144.0f, 0.0f, NUMBER(sRefreshRate)},
@@ -784,6 +788,7 @@ int refreshRates(float* rates, int max) {
     return n;
 }
 bool invertCamera() { return sInvertCamera; }
+float spinShakeSpeed() { return sShakeSpin ? 2.5f * sSpinShakeStrength : 0.0f; }
 bool passthroughWanted() { return sPassthrough && sGiantScreen; }
 float passthroughShown() { return sPassAmount; }
 bool passthroughAvailable() { return sPassAvailable; }

@@ -183,12 +183,16 @@ void hintGravity(char* out, size_t size) {
 }
 
 bool comfortOn() { return setting("comfort_vignette"); }
+bool shakeOn() { return setting("shake_spin"); }
+void hintShake(char* out, size_t size) {
+    snprintf(out, size, "%s", shakeOn() ? "Flick a controller like a Wii Remote" : "Only the buttons spin");
+}
 
 // What applies on the Steam Frame only (the Linux build) is left out there:
 // the headset's own passthrough, SpaceWarp, Super Resolution and clock
 // levels, and the refresh rate (fixed at 120 Hz; their ini keys still work).
 // The Quest build lists them.
-const Item kDioramaItems[] = {
+constexpr Item kDioramaItems[] = {
     {"diorama_distance", "Distance", nullptr, kSlider, 0.6f, 4.0f, 0.1f, "%.1f m", nullptr, hintDiorama},
     {"diorama_height", "Height", "How far below your eyes Mario stands", kStepper, 0.0f, 1.6f, 0.05f, "%.2f m"},
     {"diorama_scale", "World size", "1.0 is the usual size", kStepper, 0.5f, 3.0f, 0.1f, "%.1f"},
@@ -196,7 +200,7 @@ const Item kDioramaItems[] = {
     {"cutaway", "See through scenery", "Fade what hides Mario from you", kSwitch},
     {"turn_with_camera", "Turn with the camera", "The world swings with the game camera", kSwitch},
 };
-const Item kScreenItems[] = {
+constexpr Item kScreenItems[] = {
     {"giant_screen", "Giant screen", "Play on a big screen, no diorama", kSwitch},
     {"screen_distance", "Screen distance", "How far away the giant screen is", kSlider, 2.5f, 10.0f, 0.5f, "%.1f m", giantOn},
 #ifdef __ANDROID__
@@ -208,7 +212,7 @@ const Item kScreenItems[] = {
     {"stereo_resolution", "3D resolution", "Size of each eye's picture", kStepper, 0.5f, 1.0f, 0.05f, "%.2f", stereoOn},
 };
 // Dimmed with the giant screen: a cutscene there is on the flat screen anyway.
-const Item kCutsceneItems[] = {
+constexpr Item kCutsceneItems[] = {
     {"diorama_transitions", "Diorama in flights", "Launch stars, pipes and arrivals", kSwitch, 0, 0, 0, nullptr, giantOff},
     {"cutscene_stars", "Power Stars", "Stars appearing and returning", kSwitch, 0, 0, 0, nullptr, giantOff},
     {"cutscene_bosses", "Bosses and enemies", "Introductions, hits and defeats", kSwitch, 0, 0, 0, nullptr, giantOff},
@@ -220,15 +224,18 @@ const Item kCutsceneItems[] = {
      "cutscene_camera"},
     {"skip_hold", "Hold A to skip", "Cutscenes and dialogues", kStepper, 0.0f, 3.0f, 0.25f, nullptr, nullptr, nullptr, nullptr, skipText},
 };
-const Item kControlItems[] = {
+constexpr Item kControlItems[] = {
     {"smooth_turn", "Smooth turning", "The stick turns the diorama smoothly", kSwitch},
     {"turn_speed", "Turn speed", "Top speed of the stick's turn", kSlider, 30.0f, 240.0f, 10.0f, "%.0f deg/s", smoothOn},
     {"tilt_speed", "Tilt speed", "Top speed of the stick's tilt", kSlider, 15.0f, 120.0f, 5.0f, "%.0f deg/s", smoothOn},
     {"invert_camera", "Invert camera", nullptr, kSwitch, 0, 0, 0, nullptr, nullptr, hintInvert},
     {"star_bit_speed", "Star Bit speed", "How fast shot Star Bits fly", kSlider, 1.0f, 5.0f, 0.25f, "%.2f x"},
     {"left_handed", "Left-handed", "The left controller points; sticks swap", kSwitch},
+    {"shake_spin", "Shake to spin", nullptr, kSwitch, 0, 0, 0, nullptr, nullptr, hintShake},
+    {"spin_shake_strength", "Shake strength", "Lower needs a gentler flick", kSlider, 0.2f, 1.6f, 0.1f, nullptr, shakeOn, nullptr, nullptr,
+     percentText},
 };
-const Item kComfortItems[] = {
+constexpr Item kComfortItems[] = {
     {"gravity_turns", "Planet turns", nullptr, kStepper, 0, 0, 0, nullptr, nullptr, hintGravity, gravityOptions, gravityText, nullptr, nullptr, gravityFile},
     {"turn_smoothing", "Turn smoothing", "How gently the world turns with Mario", kStepper, 0.0f, 1.5f, 0.05f, "%.2f s", smoothGravityOn},
     {"comfort_vignette", "Comfort vignette", "Darker edges whenever the view moves", kSwitch},
@@ -237,7 +244,7 @@ const Item kComfortItems[] = {
     {"vignette_fast", "Vignette at fast movement", "At full speed; never below the slow value", kSlider, 0.0f, 1.0f, 0.05f, nullptr, nullptr, nullptr, nullptr,
      percentText},
 };
-const Item kDisplayItems[] = {
+constexpr Item kDisplayItems[] = {
 #ifdef __ANDROID__
     {"min_resolution", "Lowest resolution", nullptr, kStepper, 0.5f, 1.25f, 0.05f, "%.2f", nullptr, hintScale},
     {"resolution", "Highest resolution", "Used while the GPU has time to spare", kStepper, 0.5f, 2.0f, 0.05f, "%.2f"},
@@ -261,9 +268,13 @@ struct Tab {
     const Item* items;
     int count;
 };
-const int kMaxItems = 9;  // on a tab (a slider counts as two rows in the layout; 9 rows fit)
+const int kMaxItems = 9;  // on a tab
+const int kMaxRows = 12;  // on a tab, a slider counting as two (the panel's height is made for them)
+constexpr int rowCount(const Item* items, int count) { return count == 0 ? 0 : (items[0].kind == kSlider ? 2 : 1) + rowCount(items + 1, count - 1); }
 #define TAB(name, items) {name, items, (int)(sizeof(items) / sizeof(items[0]))}
-#define FITS(items) static_assert(sizeof(items) / sizeof(items[0]) <= kMaxItems, "too many settings on a tab")
+#define FITS(items)                                                                              \
+    static_assert(sizeof(items) / sizeof(items[0]) <= kMaxItems, "too many settings on a tab"); \
+    static_assert(rowCount(items, (int)(sizeof(items) / sizeof(items[0]))) <= kMaxRows, "a tab's rows do not fit the panel")
 // Two rows of three.
 const Tab kTabs[] = {TAB("Diorama", kDioramaItems),   TAB("Screen", kScreenItems),   TAB("Cutscenes", kCutsceneItems),
                      TAB("Controls", kControlItems), TAB("Comfort", kComfortItems), TAB("Display", kDisplayItems)};
@@ -310,9 +321,11 @@ void itemHint(const Item& item, char* out, size_t size) {
 // 880 pixels wide so the longest hint (the Resolution row's "Now 1.00 = 1234
 // px; 1.00 is SteamVR's setting (1234 px)", about 775 px) fits under the
 // 32 px margin; the right-hand controls sit kExtraW further right than they
-// did at 640.  The size in metres keeps the pixel density (1524 px/m).
+// did at 640.  The size in metres keeps the pixel density (1524 px/m).  The
+// height holds kMaxRows rows under the tabs (1300 px held 9; the shake rows
+// on the Controls tab made it 12).
 const int kExtraW = 240;
-const int kTexW = 640 + kExtraW, kTexH = 1300;
+const int kTexW = 640 + kExtraW, kTexH = 1654;
 const float kWidthM = 0.5775f;  // metres; height from the texture's aspect
 // Right of the HUD panel (see kHudCenter in vr_game.cpp: 1.45 m wide, 1 m
 // away, the pause menu on it) and in front of it.  The panel is turned
@@ -320,7 +333,10 @@ const float kWidthM = 0.5775f;  // metres; height from the texture's aspect
 // x 0.78 and z -0.72 that edge is still 0.12 m before the HUD plane, and the
 // two never intersect.  Widened by 0.1575 m from the first 0.42 m, so the
 // centre is half of that further right and the left edge has not moved.
-const xm::Vec3 kCenter{0.8588f, -0.12f, -0.72f};
+// Made 0.232 m taller (from 0.853 m) for the Controls tab's 12 rows, and its
+// centre 0.116 m lower (from -0.12), so the top edge, the tabs and the rows
+// stay where they were.
+const xm::Vec3 kCenter{0.8588f, -0.2362f, -0.72f};
 
 // Layout, in texture pixels (top-down rows).  Under the title, the tabs;
 // under them the tab's settings, one row each (a slider takes two).
@@ -328,9 +344,10 @@ const float kDefaultsX0 = 448.0f + kExtraW, kDefaultsX1 = 608.0f + kExtraW, kDef
 // The tabs: three to a row, in as many rows as that takes.
 const int kTabsPerRow = 3;
 const int kTabRows = (kTabCount + kTabsPerRow - 1) / kTabsPerRow;
-const float kTabsY0 = 92.0f, kTabH = 48.0f, kTabRowStep = 54.0f, kTabsX0 = 24.0f, kTabW = (kTexW - 48.0f) / kTabsPerRow;
-const float kTabsY1 = kTabsY0 + kTabH + kTabRowStep * (kTabRows - 1);  // the bottom of the last row
-const float kRowsTop = kTabsY1 + 20.0f, kRowH = 118.0f;
+constexpr float kTabsY0 = 92.0f, kTabH = 48.0f, kTabRowStep = 54.0f, kTabsX0 = 24.0f, kTabW = (kTexW - 48.0f) / kTabsPerRow;
+constexpr float kTabsY1 = kTabsY0 + kTabH + kTabRowStep * (kTabRows - 1);  // the bottom of the last row
+constexpr float kRowsTop = kTabsY1 + 20.0f, kRowH = 118.0f;
+static_assert(kRowsTop + kMaxRows * kRowH + 24.0f <= kTexH, "the rows do not fit the panel's height");
 float tabX0(int t) { return kTabsX0 + kTabW * (t % kTabsPerRow); }
 float tabY0(int t) { return kTabsY0 + kTabRowStep * (t / kTabsPerRow); }
 const float kControlY = 42.0f;  // a row's control, below the row's top
