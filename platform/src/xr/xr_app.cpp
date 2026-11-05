@@ -1272,6 +1272,25 @@ void updateFocus(App& a) {
 // ---------------------------------------------------------------------------
 // Frame loop
 // ---------------------------------------------------------------------------
+// Before the session ends and before it is destroyed: the GPU finishes the
+// work submitted so far (the last eye sets, drawn into swapchain images the
+// runtime frees with the session), waiting at most 1 s.  Quitting used to
+// end the session and the process with that work still running: the kernel
+// logged GPU faults (source=CP and CCU) in the same second as the exit, and
+// once the GPU hung and the SteamVR compositor lost its device with it.
+// One fence after everything on the one queue (Vulkan: the timeline value
+// of a last submission, which the runtime's own submissions to that queue
+// precede; GLES: a fence sync) covers all of it.
+void drainGpu(App& a, const char* before) {
+    if (a.session == XR_NULL_HANDLE) return;
+    xrgfx::Gfx& gfx = xrgfx::gfx();
+    int64_t t0 = port_host_time_ns();
+    xrgfx::Fence fence = gfx.submit();
+    bool done = gfx.waitFence(fence, 1000000000ll);
+    gfx.destroyFence(fence);
+    port_log("vr: GPU %s before %s (%.1f ms)", done ? "idle" : "still busy after 1 s", before, (port_host_time_ns() - t0) / 1e6);
+}
+
 void handleEvents(App& a, bool& quit) {
     XrEventDataBuffer ev{XR_TYPE_EVENT_DATA_BUFFER};
     while (xrPollEvent(a.instance, &ev) == XR_SUCCESS) {
@@ -1291,6 +1310,7 @@ void handleEvents(App& a, bool& quit) {
                 requestRefreshRate(a);
                 requestPerformanceLevels(a);
             } else if (a.state == XR_SESSION_STATE_STOPPING) {
+                drainGpu(a, "xrEndSession");
                 xrEndSession(a.session);
                 a.sessionRunning = false;
             } else if (a.state == XR_SESSION_STATE_EXITING || a.state == XR_SESSION_STATE_LOSS_PENDING) {
@@ -2821,7 +2841,10 @@ extern "C" __attribute__((visibility("default"))) void port_linux_main(const cha
     // running and hang on a lock one of them holds: tell the runtime the app
     // is gone, then leave at once (saves are written when made, the log line
     // by line).
-    if (a.session != XR_NULL_HANDLE) xrDestroySession(a.session);
+    if (a.session != XR_NULL_HANDLE) {
+        drainGpu(a, "xrDestroySession");
+        xrDestroySession(a.session);
+    }
     if (a.instance != XR_NULL_HANDLE) xrDestroyInstance(a.instance);
     _exit(0);
 #endif
