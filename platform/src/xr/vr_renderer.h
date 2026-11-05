@@ -166,7 +166,7 @@ void init();
 //   shake_spin        1 (default): a flick of either controller spins, as a
 //                     shake of the Wii Remote or the Nunchuk did; 0: only
 //                     the buttons spin
-//   spin_shake_strength  how fast the flick must be, relative to 2.5 m/s
+//   spin_shake_strength  how fast the flick must be, relative to 1.5 m/s
 //                     at the controller's front, 0.2 .. 1.6 (1); lower is
 //                     gentler
 //   haptics           1 (default) buzzes the right controller when the game
