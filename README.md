@@ -12,6 +12,7 @@ What it does:
 - Renders both eyes on every refresh of the 120 Hz display, from your current head position, at 0.9 of SteamVR's recommended resolution.
 - Uses the Steam Frame controllers through SteamVR's own controller profile, with rumble.
 - Turns the diorama smoothly with the stick, and shoots Star Bits faster, with a slider for each.
+- Spins when you flick a controller, like a Wii Remote.
 - Keeps the game's own cutscenes in the diorama, following their camera, with a switch per kind.
 - Darkens the edges of the view while it moves, to help with motion sickness.
 
@@ -22,7 +23,7 @@ GalaxyQuest draws with OpenGL ES and runs on the Quest's own runtime. On the Fra
 - A Linux Arm64 build: a launcher, an OpenXR session in SteamVR, SDL2 sound and plain folders for the game files, saves and settings.
 - A Vulkan renderer beside the OpenGL ES one. It replays the game's recorded frames with Vulkan directly, with the shaders compiled to SPIR-V at run time and cached.
 - Frame pacing written for SteamVR. Each refresh locates the head once, renders both eyes from that pose and hands them over only after the GPU has finished them. If the GPU cannot keep up, it drops to new eyes every second refresh and returns on its own.
-- A control layout for the Frame controllers, smooth turning with a speed slider, Star Bits shot faster with a slider, and haptics on both controllers.
+- A control layout for the Frame controllers, smooth turning with a speed slider, Star Bits shot faster with a slider, shake to spin set for the Frame controllers, and haptics on both controllers.
 - The game's in-engine cutscenes shown in the diorama, following their camera; the videos stay on the flat screen. A Cutscenes tab chooses this by kind.
 - A comfort vignette measured in viewing angle, with its strength set for slow and fast movement.
 - The VR settings panel reorganised into six tabs, with the switches that do nothing on the Frame hidden.
@@ -32,7 +33,7 @@ GalaxyQuest draws with OpenGL ES and runs on the Quest's own runtime. On the Fra
 
 ## Status
 
-Version 1.0.0 is the first release. It has been played on one Steam Frame (SteamOS 0.4.5, SteamVR 2.18) with the US disc.
+Version 1.1.0 is the current release. It has been played on one Steam Frame (SteamOS 0.4.5, SteamVR 2.18) with the US disc.
 
 Seen working in the headset: the diorama and the giant screen, 120 Hz with new eyes every refresh at resolution 0.9 and 1.0, the controls and rumble, smooth turning, Star Bits at 3x, cutscenes in the diorama, the VR settings panel, the comfort vignette, the 2D screens for menus and videos, saving and loading.
 
@@ -57,16 +58,16 @@ Known:
    cd GalaxyFrame
    ```
 
-2. Download `galaxyframe-1.0.1-linux-arm64.tar.gz` and `SHA256SUMS` from the [Releases](https://github.com/simplysanatori/GalaxyFrame/releases) page. Check the download and install it:
+2. Download `galaxyframe-1.1.0-linux-arm64.tar.gz` and `SHA256SUMS` from the [Releases](https://github.com/simplysanatori/GalaxyFrame/releases) page. Check the download and install it:
 
    ```sh
    sha256sum -c --ignore-missing SHA256SUMS
-   steam-frame/install.sh ~/Downloads/galaxyframe-1.0.1-linux-arm64.tar.gz
+   steam-frame/install.sh ~/Downloads/galaxyframe-1.1.0-linux-arm64.tar.gz
    ```
 
    The installer copies the program to `~/Games/GalaxyFrame/app`. It adds **Super Mario Galaxy VR** to your Steam library as a non-Steam shortcut, or updates the entry if it is there. It sets SteamVR's per-app settings for that shortcut. The script talks to Steam through its local debugging port, which SteamOS has on by default.
 
-3. Convert your disc, once. This takes a few minutes and 3.3 GB. With `--no-movies` it takes 2.3 GB less, and the prologue and ending movies play as black.
+3. Convert your disc, once. This takes a few minutes and 3.3 GB. With `--no-movies` it takes 2.3 GB less, and the game skips the prologue and ending movies.
 
    ```sh
    steam-frame/prepare-game.sh /path/to/SuperMarioGalaxy.rvz
@@ -114,8 +115,8 @@ The game sees a Wii Remote with a Nunchuk. The Frame controllers are mapped onto
 | **A** | A | Jump, talk, confirm. Hold to float as Boo Mario. Hold to skip a cutscene or a dialogue |
 | **B** or right trigger | B | Shoot Star Bits (3x as fast as on the Wii by default; *Star Bit speed* on the Controls tab, 1x to 5x), cancel, back out of menus |
 | **X**, **Y** or right bumper | Shake the Remote | Spin |
-| Flick the right controller | Shake the Remote | Spin |
-| Flick the left controller | Shake the Nunchuk | Spin |
+| Flick the right controller | Shake the Remote | Spin (*Shake to spin* on the Controls tab) |
+| Flick the left controller | Shake the Nunchuk | Spin (*Shake to spin* on the Controls tab) |
 | Left trigger | Z | Crouch, ground pound, long jump and backflip (with A) |
 | Left bumper | C | Put the game camera behind Mario |
 | **Menu** or **View** | Plus, Minus | Pause menu, with the VR settings panel beside it |
@@ -126,6 +127,8 @@ The game sees a Wii Remote with a Nunchuk. The Frame controllers are mapped onto
 
 With *Smooth turning* off, the stick turns the diorama 45 degrees at a time behind a short blink, as the D-pad does.
 
+Shake to spin: flick a controller as you would a Wii Remote. *Shake to spin* on the Controls tab turns it off, and *Shake strength* sets how hard the flick must be. Shakes are ignored while the pause menu or the settings panel is open.
+
 Rumble: when the game rumbles the Wii Remote, both controllers buzz. A light tick marks the pointer reaching a new target on the settings panel.
 
 Skipping: hold A during a cutscene or a dialogue. A ring fills at the lower right of your view, and the scene is skipped when it is full.
@@ -134,7 +137,7 @@ Recentring: use SteamVR's own recentre. The game puts the screen or the diorama 
 
 ## Settings
 
-Press Menu or View in the game. The pause menu opens, with the VR settings panel to its right. Aim the right controller at it and press A. The panel has six tabs: Diorama, Screen, Cutscenes, Controls, Comfort and Display. The Cutscenes tab has a switch per kind of scene (Power Stars, bosses and enemies, the Comet Observatory, the storybook, Lumas and friends, Mario's changes, other scenes): on, the scene plays in the diorama following its own camera; off, on the flat screen. Lumas and friends is off by default. Each setting has a short description under it, and everything on the panel is also in `~/.local/share/GalaxyFrame/petari_vr.ini`, with a comment on each line.
+Press Menu or View in the game. The pause menu opens, with the VR settings panel to its right. Aim the right controller at it and press A. The panel has six tabs: Diorama, Screen, Cutscenes, Controls, Comfort and Display. The Cutscenes tab has a switch per kind of scene (Power Stars, bosses and enemies, the Comet Observatory, the storybook, Lumas and friends, Mario's changes, other scenes): on, the scene plays in the diorama following its own camera; off, on the flat screen. Lumas and friends is off by default. Launch Star flights, pipes and arrivals are shown on the flat screen. The Controls tab has *Shake to spin* (on by default) and *Shake strength* (20 % to 160 %, 100 % by default; lower needs a gentler flick). Each setting has a short description under it, and everything on the panel is also in `~/.local/share/GalaxyFrame/petari_vr.ini`, with a comment on each line.
 
 Two settings matter most:
 

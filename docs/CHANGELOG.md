@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.1.0 (November 2026)
+
+### Controls
+
+- Shake to spin. Flick either controller like a Wii Remote and Mario spins. The left controller shakes the Nunchuk. X, Y and the right bumper still spin as before.
+- Two new settings on the Controls tab: *Shake to spin*, on by default, and *Shake strength*, from 20 % to 160 %, 100 % by default. Lower needs a gentler flick.
+- The default is set for the Frame controllers. At 100 % a flick of 1.5 m/s spins. GalaxyQuest's Quest default is 2.5 m/s.
+- Shakes are ignored while the pause menu or the settings panel is open.
+- The strength setting comes from GalaxyQuest, where bigmak94 added it for the Quest.
+
+### The game
+
+- Launch Star flights, pipes and arrivals are shown on the flat screen. The in-engine cutscenes on the Cutscenes tab still play in the diorama.
+- Leaving the game used to upset SteamVR's compositor. Now quitting waits for the GPU to finish, and the game closes cleanly.
+
+### From GalaxyQuest
+
+- Movies left out when you converted the disc are skipped, with no black screen. `prepare-game.sh` includes the movies by default, so this only matters if you used `--no-movies`.
+- Build fixes for file systems that tell upper and lower case apart.
+
 ## 1.0.1 (November 2026)
 
 - You can now install and update GalaxyFrame with Frametanium. The release carries its own `install.sh`, which installs the unpacked release in place and updates the Super Mario Galaxy VR entry in your library instead of adding another.
