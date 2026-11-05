@@ -208,9 +208,10 @@ left out (*Passthrough*, *Smooth motion*, *Super resolution*, *Refresh rate*,
 
 **Cutscenes** (dimmed with the giant screen: a cutscene is on the flat screen there anyway)
 
-- **Diorama in flights** (on by default): launch stars, pipes and other
-  transits that carry Mario, and the flight into a galaxy, stay in the
-  diorama instead of going back to the flat screen. The world follows the
+- **Diorama in flights** (off by default, and not on the panel;
+  `diorama_transitions = 1` in `petari_vr.ini` turns it on): launch stars,
+  pipes and other transits that carry Mario, and the flight into a galaxy,
+  stay in the diorama instead of going back to the flat screen. The world follows the
   game camera as the screen would show it: its up, the point it watches,
   its facing and how high it looks from, smoothed (the pivot follows within
   about 0.12 s, the facing and tilt with the *Turn smoothing* time), with the
@@ -221,8 +222,8 @@ left out (*Passthrough*, *Smooth motion*, *Super resolution*, *Refresh rate*,
   view's facing and tilt stay as the flight left them: the diorama carries
   on from there instead of returning to the old position (a tilt from below
   Mario rises to just above his horizon over a couple of seconds). Off, the
-  transits and the flight in are shown on the flat screen as before. Dimmed
-  while *Giant screen* is on. The Cutscenes tab does the same for cutscenes.
+  transits and the flight in are shown on the flat screen. The Cutscenes tab
+  does the same for cutscenes.
 
 Every cutscene the game plays itself, except the videos, can stay in the
 diorama (a switch on, the default) or go to the flat screen (off), by kind.
@@ -272,7 +273,7 @@ it (`GameScene.cpp`), so a scene the words miss counts as *Other scenes*.
 - **Turn speed** (120° a second by default, 30 to 240) and **Tilt speed**
   (60°, 15 to 120): the top speed of the stick's turn and tilt with
   *Smooth turning*, at full deflection.
-- **Star Bit speed** (2.00 x by default, 1.00 to 3.00 in steps of 0.25;
+- **Star Bit speed** (3.00 x by default, 1.00 to 5.00 in steps of 0.25;
   `star_bit_speed`): how fast a Star Bit shot with the right trigger flies.
   1.00 is the game's own speed and 2.00 twice as fast: the shot takes half
   as many frames to its target and reaches as far as before. A long shot is
@@ -286,6 +287,14 @@ it (`GameScene.cpp`), so a scene the words miss counts as *Other scenes*.
   camera's turns: the D-pad's left and right still turn pages the usual
   way.
 - **Left-handed** (off by default): see above.
+- **Shake to spin** (on by default; `shake_spin`): a flick of either
+  controller spins, as a shake of the Wii Remote did. The left controller
+  shakes the Nunchuk. Off, only the buttons spin. Shakes are ignored while
+  the pause menu or the settings panel is open.
+- **Shake strength** (100 % by default, 20 % to 160 % in steps of 10 %;
+  `spin_shake_strength`): how hard the flick must be. Lower needs a gentler
+  flick. At 100 % a flick of 1.5 m/s at the controller's front spins.
+  Dimmed while *Shake to spin* is off.
 
 **Comfort**
 
@@ -473,7 +482,7 @@ turn_with_camera = 0
 gravity_turns = smooth
 # 1: launch stars, pipes and the flight into a galaxy stay in the diorama,
 # following the game camera; 0: they are shown on the flat screen
-diorama_transitions = 1
+diorama_transitions = 0
 # 1: the edges darken a little at once whenever the view moves smoothly
 # (more the faster); 0: only for turns faster than about 20 degrees a second
 comfort_vignette = 1
@@ -498,10 +507,15 @@ smooth_turn = 1
 turn_speed = 120
 tilt_speed = 60
 # How fast a shot Star Bit flies, 1 = the game's own speed, 3 = three times
-star_bit_speed = 2
+star_bit_speed = 3
 # 1: the left controller points and the hands' sticks, triggers, grips and
 # bumpers swap; 0: the right one points
 left_handed = 0
+# 1: a flick of either controller spins; 0: only the buttons spin
+shake_spin = 1
+# How hard the flick must be, relative to 1.5 m/s (0.2 to 1.6; 1 = 100 %).
+# Lower needs a gentler flick.
+spin_shake_strength = 1
 # Ask the headset for high CPU and GPU clock levels (Meta's SustainedHigh,
 # the CPU at 1.92 GHz on Quest 3). 0 leaves the clocks to the system, which
 # runs the CPU slower to save battery, and more frames come late.
