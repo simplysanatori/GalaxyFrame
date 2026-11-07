@@ -3,6 +3,9 @@
 Super Mario Galaxy in VR, running natively on the Valve Steam Frame.
 It is a port of [GalaxyQuest](https://github.com/bigmak94/GalaxyQuest) by bigmak94, built on the [Petari](https://github.com/SMGCommunity/Petari) decompilation.
 
+> [!IMPORTANT]
+> **GalaxyFrame 1.1.0 currently requires the SteamOS Beta.** It was built against glibc 2.43, which only the Beta has. Stable has glibc 2.39, which lacks the newer math functions `libgame.so` needs (`acosf`, `asinf`, `atan2f`, `remainderf`, `sqrtf`), so the game fails to start with `GLIBC_2.43 not found`. A hotfix is coming soon that builds against the older glibc and bundles the libraries it needs with the app, so it runs on both Stable and Beta.
+
 ## Features
 
 - A diorama in front of you, or a giant virtual screen
