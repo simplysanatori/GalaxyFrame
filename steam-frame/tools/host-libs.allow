@@ -1,0 +1,21 @@
+# The host libraries GalaxyFrame may load from SteamOS (steam-frame/tools/check-bundle.sh).
+# One soname or shell pattern per line.  Anything else a shipped binary or library needs must sit next to
+# libgame.so in the app folder.  Every soname taken from the system must also be named in every SteamOS
+# build listed in host-sonames/ (check-bundle.sh fails otherwise), so this list is the rule and those
+# files are the proof.  Nothing here is ever bundled.
+
+# glibc (the game is built against 2.39, the oldest SteamOS has had) and the compiler runtime (GCC 15 on all builds)
+libc.so.6
+libm.so.6
+ld-linux-aarch64.so.1
+libdl.so.2
+libpthread.so.0
+librt.so.1
+libstdc++.so.6
+libgcc_s.so.1
+# graphics: the glvnd libraries with Mesa behind them and the Vulkan loader (the game dlopens it)
+libEGL.so.1
+libGLESv2.so.2
+libvulkan.so.1
+# sound and window: SDL2 (every SteamOS build ships it)
+libSDL2-2.0.so.0
