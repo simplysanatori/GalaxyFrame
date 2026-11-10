@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1 (November 2026)
+
+- GalaxyFrame now runs on SteamOS Stable, Beta and Preview. 1.1.0 needed the Beta's newer glibc; this release is built against glibc 2.39, and the OpenXR loader it needs is packed with the game instead of being taken from SteamVR.
+
 ## 1.1.0 (November 2026)
 
 ### Controls

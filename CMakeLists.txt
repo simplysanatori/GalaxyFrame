@@ -160,8 +160,16 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(SDL2 REQUIRED sdl2)
 
+  # GQ_OPENXR_SONAME: the soname of a loader built from the Khronos sources
+  # (steam-frame/tools/build-portable.sh).  It ships in the release next to
+  # libgame.so.  Empty: SteamVR's own loader, which has no soname.
+  set(GQ_OPENXR_SONAME "" CACHE STRING "Soname of the OpenXR loader to bundle (empty: SteamVR's)")
   add_library(openxr_loader SHARED IMPORTED)
-  set_target_properties(openxr_loader PROPERTIES IMPORTED_LOCATION ${OPENXR_LOADER} IMPORTED_NO_SONAME ON)
+  if(GQ_OPENXR_SONAME)
+    set_target_properties(openxr_loader PROPERTIES IMPORTED_LOCATION ${OPENXR_LOADER} IMPORTED_SONAME ${GQ_OPENXR_SONAME})
+  else()
+    set_target_properties(openxr_loader PROPERTIES IMPORTED_LOCATION ${OPENXR_LOADER} IMPORTED_NO_SONAME ON)
+  endif()
 
   target_include_directories(game PRIVATE ${OPENXR_INCLUDE} ${SDL2_INCLUDE_DIRS})
   target_link_libraries(game PRIVATE openxr_loader EGL GLESv2 ${SDL2_LIBRARIES} pthread dl m)
@@ -170,8 +178,15 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   # delete), as on Android.  The OpenXR loader is SteamVR's (it has no soname,
   # so it is found by file name: beside libgame.so, else in SteamVR).
   get_filename_component(OPENXR_LOADER_DIR ${OPENXR_LOADER} DIRECTORY)
+  if(GQ_OPENXR_SONAME)
+    set(GQ_RUNPATH "\$ORIGIN")
+    # CMake would add the loader's build folder as a RUNPATH entry of its own.
+    set_target_properties(game PROPERTIES SKIP_BUILD_RPATH ON)
+  else()
+    set(GQ_RUNPATH "\$ORIGIN:${OPENXR_LOADER_DIR}")
+  endif()
   target_link_options(game PRIVATE -fuse-ld=lld -Wl,--image-base=0x98000000 -Wl,-Bsymbolic -Wl,--gc-sections
-    "-Wl,-rpath,\$ORIGIN:${OPENXR_LOADER_DIR}")
+    "-Wl,-rpath,${GQ_RUNPATH}")
 
   add_executable(galaxyframe platform/linux/launcher.c)
   target_link_libraries(galaxyframe PRIVATE dl)

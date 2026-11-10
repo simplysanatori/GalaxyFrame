@@ -81,7 +81,8 @@ UNPACKED=
 if [ -n "$UNPACKED" ]; then
   echo "installing the unpacked release in $UNPACKED"
   # Each file is put in place in one step: the game may be running.
-  for f in galaxyframe petari_headless libgame.so; do
+  # libopenxr_loader.so.1 is the OpenXR loader libgame.so needs (it finds it beside itself).
+  for f in galaxyframe petari_headless libopenxr_loader.so.1 libgame.so; do
     [ -f "$UNPACKED/$f" ] || continue
     cp "$UNPACKED/$f" "$DEST/$f.new" && mv "$DEST/$f.new" "$DEST/$f"
   done
@@ -95,7 +96,7 @@ if [ -n "$UNPACKED" ]; then
   fi
 elif [ -n "$TARBALL" ] && [ -f "$TARBALL" ]; then
   echo "installing $TARBALL"
-  tar -xzf "$TARBALL" -C "$DEST" galaxyframe libgame.so
+  tar -xzf "$TARBALL" -C "$DEST" galaxyframe libopenxr_loader.so.1 libgame.so
   tar -xzf "$TARBALL" -C "$DEST" petari_headless 2> /dev/null || true
   # The Vulkan shader library; a release without it runs on GLES, and an old
   # copy must not stay beside a newer game library.
