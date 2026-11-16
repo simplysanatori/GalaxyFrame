@@ -495,6 +495,7 @@ controlled with environment variables:
 | `PETARI_GLSTEPS=a,b,...`, `PETARI_GLITEMS=n`, `PETARI_DUMP=n`, `PETARI_COPYDUMP=dir`, `PETARI_COPYDUMP_EYE=1` | Partial renders (also of the VR test view), batch list of every nth prepared frame (1: all; markers, depth state and the player tag per batch), register dump with the first n textures (default 16), EFB copies as PNGs (of the left eye with `PETARI_COPYDUMP_EYE`) |
 | `PETARI_STAGE="Galaxy[:scenario]"` | Enter that galaxy two seconds into ordinary gameplay (e.g. `HeavensDoorGalaxy:1`); `tools/galaxy_tour.sh` runs a list of galaxies and collects captures and crash reports in `out/tour/` |
 | `PETARI_MOVIE=n` | Play movie n (0 = PrologueA .. 6 = EndingB) two seconds into gameplay in a stage with a movie player (the castle garden or the observatory) |
+| `PETARI_SAVETEST=frames` | Once, after that many frames of ordinary gameplay in the diorama: close the wipe and bring up the save window over it, as at the end of a Power Star; the wipe opens again once it is answered |
 | `PETARI_NERVES=N`, `PETARI_THREADS=1` | Trace N state-machine transitions; dump emulated threads at exit |
 | `PETARI_WANDER=s` | From s seconds on, play by itself (pseudo-random stick, jumps, spins, crouches) for soak tests. The runner logs its memory use every 30 s |
 | `PETARI_XRSIM=1`, `PETARI_XRHEAD="yaw,pitch"` | Run the headset presentation (`vr_game.cpp`) with two simulated eyes and save both swapchain images side by side (`frame_NNN_xr.png`) |

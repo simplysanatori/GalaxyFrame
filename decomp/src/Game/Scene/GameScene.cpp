@@ -354,6 +354,31 @@ void GameScene::update() {
         }
     }
     {
+        // Debug: PETARI_SAVETEST=<frames> recreates the end of a Power Star in
+        // the diorama, once: after that many frames of ordinary gameplay with
+        // the diorama shown, the wipe closes, the save window comes up over
+        // it, and the wipe opens again once it is answered.
+        static s32 sSaveFrames = 0, sSaveStep = 0;
+        static const char* saveTest = getenv("PETARI_SAVETEST");
+        if (saveTest && *saveTest && isNerve(GET_NERVE(GameScene, GameSceneAction))) {
+            if (sSaveStep == 0 && !MR::isDemoActive() && port_vr_diorama() && ++sSaveFrames >= atoi(saveTest)) {
+                OSReport("port: save test: closing the wipe\n");
+                MR::closeWipeCircle(60);
+                sSaveStep = 1;
+            } else if (sSaveStep == 1 && !MR::isWipeActive()) {
+                OSReport("port: save test: the save window is up\n");
+                GameSequenceFunction::startGameDataSaveSequence(false, false);
+                MR::startStarPointerModePauseMenu(this);
+                sSaveStep = 2;
+            } else if (sSaveStep == 2 && !GameSequenceFunction::isActiveSaveDataHandleSequence()) {
+                OSReport("port: save test: answered, opening the wipe\n");
+                MR::endStarPointerMode(this);
+                MR::openWipeCircle();
+                sSaveStep = 3;
+            }
+        }
+    }
+    {
         // Debug: PETARI_MOVIE=<type> (0 = PrologueA .. 6 = EndingB) plays that
         // movie after two seconds of gameplay in a stage with a movie player,
         // such as the castle garden or the observatory.
