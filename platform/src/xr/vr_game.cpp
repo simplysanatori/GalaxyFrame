@@ -38,6 +38,11 @@ uint64_t sWipeFrame = 0;  // game frame that drew the wipe
 int64_t sWipeAt = 0;      // host time of that draw
 std::atomic<int> sDioramaShown{0};
 float sWipeDim = 0.0f;  // how far the current eye's wipe has closed (panel, laser)
+// The last game frame recorded with a save, error or HOME window up (see
+// port_vr_system_window), and whether the frame on show has one.
+std::atomic<uint64_t> sSystemWindowFrame{0};
+bool sSystemWindow = false;
+bool sMenuPointer = false;  // the frame on show has the pointer on menus
 
 // The wipe on the frame being shown: it holds while no newer frame arrives
 // (the game draws nothing while it loads behind a closed wipe).
@@ -88,6 +93,14 @@ unsigned sSkipsSeen = 0;
 
 // Brightness of what is drawn over the view (panels, laser).
 float overlayBrightness() { return (1.0f - sFade) * (1.0f - sWipeDim) * (1.0f - sSkipDim); }
+// The game draws its save, error and HOME windows over its own wipe, as on a
+// TV: after a Power Star the save window comes up on a closed wipe.  In the
+// diorama they are on the HUD panel, and dimmed with the wipe they were
+// invisible, the laser too, so the player could not answer them.  The panel
+// keeps its light while one is up, and the laser while one is up or the
+// pointer is on menus.
+float hudBrightness() { return (1.0f - sFade) * (sSystemWindow ? 1.0f : 1.0f - sWipeDim) * (1.0f - sSkipDim); }
+float laserBrightness() { return (1.0f - sFade) * (sSystemWindow || sMenuPointer ? 1.0f : 1.0f - sWipeDim) * (1.0f - sSkipDim); }
 
 gpu::EfbTarget sEye[2], sHud, sFlat;
 bool sVrMode = false;
@@ -169,7 +182,7 @@ bool sFlatFresh = false;      // the virtual screen's picture was drawn since it
 bool sUiLayers = false;       // the panels with text go out as compositor layers (vr::setUiLayers)
 bool sHudFresh = false;       // eye 0 drew the HUD since the HUD layer last took it
 int sHudDraws = 0;            // draws in that HUD
-float sHudLayerBrightness = -1.0f;  // overlayBrightness() the HUD layer image was last drawn with
+float sHudLayerBrightness = -1.0f;  // hudBrightness() the HUD layer image was last drawn with
 float sCutAmount = 0.0f;  // cutaway grown in (1) while the player is hidden
 xm::Mat4 sStageFromView = xm::Mat4::identity();
 uint64_t sLastFrame = 0;
@@ -322,9 +335,11 @@ xm::Mat4 panelModel(xm::Vec3 center, float width, float aspect) {
     return m * s;
 }
 
-void drawQuad(gpu::TexHandle texture, const xm::Mat4& mvp, bool opaque, float alpha) {
-    vrdraw::draw().quad(texture, mvp.m, opaque, alpha, overlayBrightness());
+void drawQuad(gpu::TexHandle texture, const xm::Mat4& mvp, bool opaque, float alpha, float brightness) {
+    vrdraw::draw().quad(texture, mvp.m, opaque, alpha, brightness);
 }
+
+void drawQuad(gpu::TexHandle texture, const xm::Mat4& mvp, bool opaque, float alpha) { drawQuad(texture, mvp, opaque, alpha, overlayBrightness()); }
 
 void drawPanel(const gpu::EfbTarget& tex, const xm::Mat4& mvp, bool opaque) { drawQuad(tex.color, mvp, opaque, 1.0f); }
 
@@ -340,7 +355,7 @@ float panelDistance(xm::Vec3 o, xm::Vec3 d, xm::Vec3 center) {
 vr::FrameInfo sOverlayFrame{};
 
 bool laserShown() {
-    if (!sAimValid || overlayBrightness() <= 0.0f) return false;
+    if (!sAimValid || laserBrightness() <= 0.0f) return false;
     // On the giant screen the game's own cursor shows where the controller
     // points (see drawLaser).
     return !(sGiantScreen && !sVrMode && !sAimOnPanel && !vr::setupActive());
@@ -360,7 +375,7 @@ xm::Quat basisQuat(xm::Vec3 x, xm::Vec3 y, xm::Vec3 z) {
 
 // Beam from the right controller to where it points, plus a reticle there.
 void drawLaser(const vr::EyeInfo& eye, const xm::Mat4& viewProj) {
-    if (!sAimValid || overlayBrightness() <= 0.0f) return;
+    if (!sAimValid || laserBrightness() <= 0.0f) return;
     // On the giant screen the game's own cursor shows where the controller
     // points, as on a TV: no beam from the controller to it.  The VR layer's
     // own panels have no cursor, so the beam stays for those.
@@ -376,7 +391,7 @@ void drawLaser(const vr::EyeInfo& eye, const xm::Mat4& viewProj) {
     // Beam: corners ordered for a strip (x across, y along).
     float beam[12] = {p0.x - side.x, p0.y - side.y, p0.z - side.z, p0.x + side.x, p0.y + side.y, p0.z + side.z,
                       p1.x - side1.x, p1.y - side1.y, p1.z - side1.z, p1.x + side1.x, p1.y + side1.y, p1.z + side1.z};
-    const float beamColor[4] = {0.75f, 0.9f, 1.0f, 0.8f * overlayBrightness()};
+    const float beamColor[4] = {0.75f, 0.9f, 1.0f, 0.8f * laserBrightness()};
     draw.overlayQuad(beam, beamColor, vrdraw::kShapeBeam, nullptr);
     // Reticle facing the eye, sized to stay readable with distance; it swells
     // and brightens for a moment when the pointer touches a new target.
@@ -390,7 +405,7 @@ void drawLaser(const vr::EyeInfo& eye, const xm::Mat4& viewProj) {
     v = v * r;
     float ret[12] = {p1.x - u.x - v.x, p1.y - u.y - v.y, p1.z - u.z - v.z, p1.x + u.x - v.x, p1.y + u.y - v.y, p1.z + u.z - v.z,
                      p1.x - u.x + v.x, p1.y - u.y + v.y, p1.z - u.z + v.z, p1.x + u.x + v.x, p1.y + u.y + v.y, p1.z + u.z + v.z};
-    const float retColor[4] = {1.0f, 0.95f + 0.05f * pulse, 0.55f + 0.45f * pulse, 0.95f * overlayBrightness()};
+    const float retColor[4] = {1.0f, 0.95f + 0.05f * pulse, 0.55f + 0.45f * pulse, 0.95f * laserBrightness()};
     draw.overlayQuad(ret, retColor, vrdraw::kShapeReticle, nullptr);
     draw.overlayEnd();
 }
@@ -520,6 +535,12 @@ extern "C" void port_vr_wipe(int kind, float closed, unsigned int rgb) {
 }
 
 extern "C" int port_vr_diorama(void) { return sDioramaShown.load(); }
+
+// Called by GameSystem::draw on every frame it records: whether a save, error
+// or HOME window is drawn over the scene in it.
+extern "C" void port_vr_system_window(int up) {
+    if (up) sSystemWindowFrame.store(port_gx_recording_frame());
+}
 
 namespace {
 std::atomic<const void*> sTransitHost{nullptr};
@@ -1331,6 +1352,13 @@ void beginFrame(const FrameInfo& frame) {
     updateSkipIndicator(dt);
     sVrMode = sShownVrMode && r.hasFrame() && r.camera().valid;
     sDioramaShown.store(sVrMode ? 1 : 0);
+    {
+        uint64_t f = sSystemWindowFrame.load();
+        bool up = f != 0 && r.hasFrame() && r.frameNumber() <= f;
+        if (up != sSystemWindow) port_log("vr: a save, error or HOME window %s", up ? "is up: the HUD panel and the laser stay lit over the wipe" : "is gone");
+        sSystemWindow = up;
+        sMenuPointer = r.hasFrame() && r.camera().valid && (r.camera().flags & PORT_GX_CAMERA_POINTER_UI);
+    }
     // The room around the giant screen (passthrough) fades in and out with
     // the setting; the diorama fills the view itself.
     float room = sPassthrough && sPassAvailable && sGiantScreen && !sShownVrMode ? 1.0f : 0.0f;
@@ -1607,7 +1635,7 @@ Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int
         draw.composite(comp);
         draw.profileMark("panels");
         if (!sUiLayers) {
-            drawPanel(sHud, viewProj * panelModel(kHudCenter, kHudWidth, (float)sHud.width / sHud.height), false);
+            drawQuad(sHud.color, viewProj * panelModel(kHudCenter, kHudWidth, (float)sHud.width / sHud.height), false, 1.0f, hudBrightness());
         }
     } else {
         if (r.hasFrame() && sStereoFrame) {
@@ -1904,14 +1932,14 @@ void drawOverlayLayer(int which) {
         // Narrower at the controller: the layer is as wide as the far end.
         float near = 0.0012f / (0.0012f + 0.0008f * sAimLength);
         float beam[12] = {-near, -1.0f, 0.0f, near, -1.0f, 0.0f, -1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f};
-        const float beamColor[4] = {0.75f, 0.9f, 1.0f, 0.8f * overlayBrightness()};
+        const float beamColor[4] = {0.75f, 0.9f, 1.0f, 0.8f * laserBrightness()};
         draw.overlayQuad(beam, beamColor, vrdraw::kShapeBeam, nullptr);
     } else {
         const float full[12] = {-1.0f, -1.0f, 0.0f, 1.0f, -1.0f, 0.0f, -1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f};
         if (which == kReticleLayer) {
             float pulse = 1.0f - (float)(port_host_time_ns() - sTouchPulseAt.load()) / 250000000.0f;
             pulse = pulse > 0.0f ? pulse : 0.0f;
-            const float retColor[4] = {1.0f, 0.95f + 0.05f * pulse, 0.55f + 0.45f * pulse, 0.95f * overlayBrightness()};
+            const float retColor[4] = {1.0f, 0.95f + 0.05f * pulse, 0.55f + 0.45f * pulse, 0.95f * laserBrightness()};
             draw.overlayQuad(full, retColor, vrdraw::kShapeReticle, nullptr);
         } else {
             bool popping = sSkipPop >= 0.0f;
@@ -1976,9 +2004,9 @@ UiLayer uiLayer(int which) {
     if (which == kHudLayer) {
         // Only while it holds something: a layer costs the compositor its
         // area on every refresh, drawn or not.
-        l.visible = sUiLayers && sVrMode && sHudDraws > 0 && overlayBrightness() > 0.001f;
-        // Its image is the HUD at overlayBrightness(): new when either is.
-        l.changed = sHudFresh || overlayBrightness() != sHudLayerBrightness;
+        l.visible = sUiLayers && sVrMode && sHudDraws > 0 && hudBrightness() > 0.001f;
+        // Its image is the HUD at hudBrightness(): new when either is.
+        l.changed = sHudFresh || hudBrightness() != sHudLayerBrightness;
         l.position = kHudCenter;
         l.width = kHudWidth;
         l.height = kHudWidth * (float)sHud.height / (float)sHud.width;
@@ -2015,9 +2043,9 @@ void drawUiLayer(int which, const gpu::EfbTarget& dst) {
     draw.beginTarget(dst, part.imageWidth ? part.imageWidth : w, part.imageHeight ? part.imageHeight : h, false);
     draw.clear(0.0f, 0.0f, 0.0f, 0.0f);
     if (which == kHudLayer) {
-        drawQuad(sHud.color, xm::scale(2.0f), false, 1.0f);  // the unit quad over the whole image
+        drawQuad(sHud.color, xm::scale(2.0f), false, 1.0f, hudBrightness());  // the unit quad over the whole image
         sHudFresh = false;
-        sHudLayerBrightness = overlayBrightness();
+        sHudLayerBrightness = hudBrightness();
     } else if (which == kScreenLayer || which == kScreenRightLayer) {
         float wipe = sWipeDim;
         sWipeDim = 0.0f;  // the picture has the game's wipe in it already

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.2 (November 2026)
+
+- No more black screen after a Power Star in the diorama. The game asks whether to save while the screen is still closed to black, and in the diorama that black covered the save window and the laser too, so you could not see or answer it. The save window now shows over the black, as on a TV, and so do the game's error and HOME windows.
+- The laser stays visible while you point at a menu, even when the game has faded the view out.
+- Thanks to Azurei2525 for the report.
+
 ## 1.1.1 (November 2026)
 
 - GalaxyFrame now runs on SteamOS Stable, Beta and Preview. 1.1.0 needed the Beta's newer glibc; this release is built against glibc 2.39, and the OpenXR loader it needs is packed with the game instead of being taken from SteamVR.
