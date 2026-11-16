@@ -31,7 +31,7 @@ Version 1.1.2 is the current release. It has been played on one Steam Frame (Ste
 
 **Step 5, `warm-shaders.sh`.** It boots the game into 20 galaxies one after another and fills the shader cache. Your saves are copied first and left alone. It runs headless; the game must not be running.
 
-**Updating.** To update, download the new tarball and run `install.sh` again. Your game files, saves and settings stay where they are.
+**Updating.** To update, run `git pull` in your clone, download the new tarball and run `install.sh` again. The installer copies the launch wrapper from the clone, so pull first. Your game files, saves and settings stay where they are.
 
 **Moving over from the old name.** If you ran this port under its old name GalaxyQuest, `install.sh` moves `~/.local/share/GalaxyQuest` to `~/.local/share/GalaxyFrame` and `~/Games/GalaxyQuest/app` to `~/Games/GalaxyFrame/app` once, removes the old `galaxyquest` program files and points the Steam entry at the new ones. It tells you what it moved.
 

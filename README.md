@@ -1,21 +1,19 @@
 # GalaxyFrame
 
-Super Mario Galaxy in VR, running natively on the Valve Steam Frame.
-It is a port of [GalaxyQuest](https://github.com/bigmak94/GalaxyQuest) by bigmak94, built on the [Petari](https://github.com/SMGCommunity/Petari) decompilation.
+Super Mario Galaxy in VR on the Valve Steam Frame.
+A port of [GalaxyQuest](https://github.com/bigmak94/GalaxyQuest) by bigmak94.
 
 ## Features
 
-- A diorama in front of you, or a giant virtual screen
+- Diorama in front of you, or a giant virtual screen
 - 120 Hz, both eyes drawn on every refresh
-- Steam Frame controllers with rumble
-- Smooth turning, faster Star Bits, flick to spin
+- Smooth turning, faster Star Bits, flick to spin, rumble
 - Cutscenes play in the diorama
 - Comfort vignette for motion sickness
 
 ## How it works
 
-The game runs on the Frame itself, inside SteamVR.
-You convert your own disc once, and the game reads those files.
+The game runs on the Frame itself, in SteamVR, from files you convert from your own disc.
 Nothing is streamed from a PC.
 
 ## Requirements
@@ -23,7 +21,6 @@ Nothing is streamed from a PC.
 - A Steam Frame with SteamOS (Stable, Beta or Preview) and SteamVR, and about 4 GB free
 - Your own Super Mario Galaxy disc as an ISO, RVZ or WBFS image (US disc RMGE01 tested)
 - A terminal on the Frame: SSH, or Konsole (SteamVR dashboard, Launch a program, Desktop)
-- Steam running while you install
 
 ## Install
 
@@ -34,14 +31,14 @@ Nothing is streamed from a PC.
    cd GalaxyFrame
    ```
 
-2. Download `galaxyframe-1.1.2-linux-arm64.tar.gz` and `SHA256SUMS` from [Releases](https://github.com/simplysanatori/GalaxyFrame/releases). Check and install:
+2. Download `galaxyframe-1.1.2-linux-arm64.tar.gz` and `SHA256SUMS` from [Releases](https://github.com/simplysanatori/GalaxyFrame/releases). With Steam running, check and install:
 
    ```sh
-   sha256sum -c --ignore-missing SHA256SUMS
+   (cd ~/Downloads && sha256sum -c --ignore-missing SHA256SUMS)
    steam-frame/install.sh ~/Downloads/galaxyframe-1.1.2-linux-arm64.tar.gz
    ```
 
-3. Convert your disc once (3.3 GB):
+3. Convert your disc:
 
    ```sh
    steam-frame/prepare-game.sh /path/to/SuperMarioGalaxy.rvz
@@ -49,7 +46,7 @@ Nothing is streamed from a PC.
 
 4. Launch **Super Mario Galaxy VR** from your Steam library.
 
-5. Optional, after your first save: compile shaders so new areas hitch less (about 45 minutes, game closed):
+5. Optional: after your first save, with the game closed, compile shaders so new areas hitch less (about 45 minutes):
 
    ```sh
    steam-frame/warm-shaders.sh
@@ -80,13 +77,12 @@ The game starts on a giant virtual screen. For the diorama:
 | Right stick | Turn the diorama |
 | Right controller aim | Collect Star Bits, point at menus |
 
-All controls: [user guide](docs/USER_GUIDE.md#controls).
-
 ## Update
 
-Download the new tarball and install it:
+Download the new tarball, then in your `GalaxyFrame` folder:
 
 ```sh
+git pull
 steam-frame/install.sh ~/Downloads/galaxyframe-<version>-linux-arm64.tar.gz
 ```
 
@@ -100,44 +96,40 @@ steam-frame/uninstall.sh
 
 ## Troubleshooting
 
-- **Steam's debugging port is not reachable.** Start Steam and run `install.sh` again.
 - **A setup screen asks for game files.** Run `steam-frame/prepare-game.sh` (step 3).
 - **Motion ghosts.** In SteamVR, check 120 Hz and motion smoothing off.
 - **Heavy scenes stutter.** Set **Resolution** to 0.8 on the **Display** tab.
-- **New areas hitch.** Run `steam-frame/warm-shaders.sh` once after your first save.
-
-More fixes: [user guide](docs/USER_GUIDE.md#troubleshooting).
 
 ## Reporting a problem
 
-Attach `petari_log.txt` and `launch.log` from `~/.local/share/GalaxyFrame` to an [issue](https://github.com/simplysanatori/GalaxyFrame/issues), with your disc's region.
-They hold no account names or serial numbers. Check them before sharing.
+Open an [issue](https://github.com/simplysanatori/GalaxyFrame/issues) with your disc's region.
+Check `petari_log.txt` and `launch.log` in `~/.local/share/GalaxyFrame`, then attach them.
 
 ## More
 
-- [User guide](docs/USER_GUIDE.md)
+- [User guide](docs/USER_GUIDE.md): all controls, settings and fixes
 - [AGENTS.md](AGENTS.md): for developers and AI agents
 - [Building from source](docs/TECHNICAL_NOTES.md#building)
 - [Changelog](docs/CHANGELOG.md)
 
 ## Support
 
-Support upstream first: star [GalaxyQuest](https://github.com/bigmak94/GalaxyQuest) and send game fixes there.
-For more Steam Frame ports, you can [buy me a coffee](https://ko-fi.com/sana748653).
+Support upstream first: [sponsor GalaxyQuest](https://buy.stripe.com/6oU4gB5450PZ18h8aK1wY00) and send game fixes there.
+For more Steam Frame ports: [buy me a coffee](https://ko-fi.com/sana748653).
 
 ## Credits
 
-- Built by [simplysanatori](https://github.com/simplysanatori)
-- [GalaxyQuest](https://github.com/bigmak94/GalaxyQuest) by bigmak94: the VR port this is built on
+- [simplysanatori](https://github.com/simplysanatori): built GalaxyFrame
+- [GalaxyQuest](https://github.com/bigmak94/GalaxyQuest) by bigmak94: the VR port
 - [Petari](https://github.com/SMGCommunity/Petari) by the SMGCommunity: the decompilation
 - [nod](https://github.com/encounter/nod) by encounter: disc extraction
 
-Full list: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Unofficial fan project, not affiliated with Nintendo, Valve, the Petari team or the GalaxyQuest author.
+Unofficial fan project, not affiliated with Nintendo, Valve, the Petari team or the GalaxyQuest author.
 
 ## Licence
 
-Public domain under [The Unlicense](LICENSE). Third-party parts keep their own licences.
+Public domain under [The Unlicense](LICENSE). Third-party parts keep their own licences: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## How this was made
 
-I started this project and used AI (Claude Opus 5.5 and Claude Fable 5.1, through Claude Code) to speed up development. I write, review and fix code by hand all the way through, keep the AI's work checked and reined in, and aim to keep the port as lightweight as possible. I test it on my own Steam Frame. GalaxyQuest, the upstream, is also AI-written.
+I started this project and used AI (Claude Opus 5.5 and Claude Fable 5.1, through Claude Code) to speed up development. I write, review and fix code by hand all the way through, keep the AI's work checked and reined in, and aim to keep the port as lightweight as possible. I test it on my own Steam Frame. Upstream GalaxyQuest is also AI-written.
