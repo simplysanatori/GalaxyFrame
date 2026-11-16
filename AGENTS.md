@@ -28,7 +28,7 @@ GalaxyQuest draws with OpenGL ES and runs on the Quest's own runtime. On the Fra
 
 ## Status
 
-Version 1.1.0 is the current release. It has been played on one Steam Frame (SteamOS 0.4.5, SteamVR 2.18) with the US disc.
+Version 1.1.2 is the current release. It has been played on one Steam Frame (SteamOS 0.4.5, SteamVR 2.18) with the US disc.
 
 Seen working in the headset: the diorama and the giant screen, 120 Hz with new eyes every refresh at resolution 0.9 and 1.0, the controls and rumble, smooth turning, Star Bits at 3x, cutscenes in the diorama, the VR settings panel, the comfort vignette, the 2D screens for menus and videos, saving and loading.
 

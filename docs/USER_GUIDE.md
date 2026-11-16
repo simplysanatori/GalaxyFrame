@@ -18,7 +18,7 @@ You need your own Super Mario Galaxy disc. No game data is in this repository or
 
 ## Known issues
 
-Version 1.1.0 is the current release. It has been played on one Steam Frame (SteamOS 0.4.5, SteamVR 2.18) with the US disc.
+Version 1.1.2 is the current release. It has been played on one Steam Frame (SteamOS 0.4.5, SteamVR 2.18) with the US disc.
 
 - Mario and the world move at the game's 60 frames a second. On the 120 Hz display an object your eye follows can look doubled along its movement. Head movement is not affected.
 - A new area still hitches briefly while its textures upload. Compiling the shaders ahead of play (Install, step 5 in the README) removes the shader part of it.

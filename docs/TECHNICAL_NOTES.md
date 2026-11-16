@@ -1,6 +1,6 @@
 # GalaxyFrame: technical notes
 
-GalaxyFrame is a port of [GalaxyQuest](https://github.com/bigmak94/GalaxyQuest) to the Valve Steam Frame. GalaxyQuest plays Super Mario Galaxy in VR as a native port of the game, built on the [Petari](https://github.com/SMGCommunity/Petari) decompilation, and ships as a Meta Quest app. GalaxyFrame builds the same code as a Linux Arm64 program that runs in the Frame's own SteamVR, without Lepton, an APK or adb. This document is for version 1.0.0.
+GalaxyFrame is a port of [GalaxyQuest](https://github.com/bigmak94/GalaxyQuest) to the Valve Steam Frame. GalaxyQuest plays Super Mario Galaxy in VR as a native port of the game, built on the [Petari](https://github.com/SMGCommunity/Petari) decompilation, and ships as a Meta Quest app. GalaxyFrame builds the same code as a Linux Arm64 program that runs in the Frame's own SteamVR, without Lepton, an APK or adb. This document was written for version 1.0.0; what has changed since is in the [changelog](CHANGELOG.md).
 
 Install, first run and the main controls are in the [README](../README.md); full controls, settings, troubleshooting and how to report problems are in the [user guide](USER_GUIDE.md). This one says how the port works, how to build it, and what I learned about SteamVR on the Frame. The setting-by-setting description of the VR panel and the ini file is in [CONTROLS.md](CONTROLS.md); the environment switches for testing are in [TECHNICAL.md](TECHNICAL.md), which is GalaxyQuest's own technical document and still describes the shared code.
 
