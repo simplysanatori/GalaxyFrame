@@ -326,11 +326,12 @@ struct Extent {
 };
 Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int width, int height);
 // Black frame insertion: the black_frames setting; whether it is in effect
-// for this refresh's eyes (their brightness boost); an eye image cleared to
-// black, for the refresh between two game frames.
+// for this refresh's eyes (their brightness boost); the eye image of the
+// refresh between two game frames: black round the gaze, the last picture
+// dimmed outside (or all black), and the size of it written.
 bool blackFramesWanted();
 void setBlackFrames(bool on);
-Extent darkEye(const gpu::EfbTarget& dst, int width, int height);
+Extent darkEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int width, int height);
 
 // SpaceWarp (Meta's XR_FB_space_warp).  setMotionSize: the size of the
 // motion vector and depth images, before the first frame with

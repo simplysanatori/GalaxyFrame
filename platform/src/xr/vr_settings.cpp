@@ -264,6 +264,7 @@ constexpr Item kDisplayItems[] = {
 #ifndef __ANDROID__
     {"black_frames", "Black frame insertion", "Clearer motion in the diorama; dimmer, flickers", kSwitch, 0, 0, 0, nullptr, giantOff},
     {"black_frame_boost", "Brightness boost", "Makes up for the black frames", kStepper, 1.0f, 2.0f, 0.1f, "%.1f", blackOn},
+    {"black_frame_area", "Black frame area", "Degrees round your gaze; 0 = whole view", kStepper, 0.0f, 60.0f, 5.0f, "%.0f", blackOn},
 #endif
 #ifdef __ANDROID__
     {"refresh_rate", "Refresh rate", "120 fits the game's 60 frames a second", kStepper, 0, 0, 0, "%.0f Hz", nullptr, nullptr, refreshOptions},

@@ -48,6 +48,17 @@ struct Composite {
     // Black frame insertion's brightness boost (1 = none): a gain that eases
     // into white instead of clipping (Vulkan only).
     float boost = 1.0f;
+    // Black frame insertion round the gaze (Vulkan only): the gaze as the
+    // tangents of its angles from the view's axis (as vigMap gives them), and
+    // the angles (radians) inside which it is in full and outside which not
+    // at all (bfiOuter 0: the whole view).  On the lit refresh the boost is
+    // round the gaze only; on the black one (bfiDark) the picture is black
+    // round the gaze and bfiPeriphery of itself outside, so the periphery,
+    // which sees flicker most, flickers far less, at the same mean light.
+    float bfiGaze[2] = {0.0f, 0.0f};
+    float bfiInner = 0.0f, bfiOuter = 0.0f;
+    bool bfiDark = false;
+    float bfiPeriphery = 0.0f;
     // The comfort vignette, 0 = off .. 1 = strongest.  Its shape is in the angle
     // from the view's axis, so it does not depend on how wide the eye image
     // is: clear in the middle, the edges darkening outside it, as displayed.
