@@ -920,10 +920,15 @@ void VkImpl::uploadTextures(const Frame& f) {
     static const bool keepPixels = debugEnv("PETARI_DUMP") != nullptr || debugEnv("PETARI_FRAMESAVE") != nullptr;
     const bool hostCopy = device().hostImageCopy;
     std::lock_guard<std::mutex> lock(texLock);
+    // Timed for perf1s (up_*): the decodes still waited for and the copies.
+    int64_t upStart = 0;
+    unsigned upCount = 0;
+    uint64_t upBytes = 0;
     for (const std::shared_ptr<TexImage>& img : f.textures) {
         if (img->gpuTex && img->gpuVersion == img->version) {
             continue;
         }
+        if (!upStart) upStart = port_host_time_ns();
         if (img->gpuTex) {
             queueTextureDelete(img->gpuTex);  // new pixels: a new image (the old one may be in use)
             img->gpuTex = 0;
@@ -938,6 +943,8 @@ void VkImpl::uploadTextures(const Frame& f) {
                          VK_IMAGE_USAGE_SAMPLED_BIT | (hostCopy ? VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT : VK_IMAGE_USAGE_TRANSFER_DST_BIT), ImgKind::Texture,
                          MemCat::Texture, "texture");
         if (!h) continue;
+        upCount++;
+        upBytes += texels * 4;
         Img& im = sImages[h];
         if (hostCopy) {
             VkHostImageLayoutTransitionInfoEXT ti{VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT};
@@ -980,6 +987,9 @@ void VkImpl::uploadTextures(const Frame& f) {
         }
         img->gpuTex = h;
         img->gpuVersion = img->version;
+    }
+    if (upCount) {
+        port_perf_tex_upload(port_host_time_ns() - upStart, upCount, upBytes);
     }
 }
 
