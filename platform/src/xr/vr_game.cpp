@@ -1390,6 +1390,43 @@ void init() {
 // refreshes), for port_perf_render.
 static int64_t sRenderNs = 0, sUploadNs = 0;
 
+// The eye targets of the sizes the dynamic resolution may step to (the
+// highest resolution and up to four steps under it, down to the lowest),
+// made ahead while nothing on show can stall: before the first game frame
+// and behind a closed wipe (a loading screen), one a refresh.  Made when
+// first stepped to, each stalled the render thread 10 ms and more in play.
+static void prewarmEyeTargets(const FrameInfo& frame) {
+    static bool sDoneLogged = false;
+    if (sSpareTargets.size() >= 10) return;
+    float lo = fminf(sMinScale, sResolution), hi = sResolution;
+    int n = 0;
+    for (float sc = hi; sc >= lo - 0.001f && n < 5; sc -= kScaleStep, n++) {
+        float f = sc / swapchainScale();
+        int w[2], h[2];
+        for (int e = 0; e < 2; e++) {
+            w[e] = (int)lroundf(frame.eyes[e].width * f);
+            h[e] = (int)lroundf(frame.eyes[e].height * f);
+        }
+        for (int e = 0; e < 2; e++) {
+            if (w[e] <= 0 || h[e] <= 0) return;
+            // Targets of this size the eyes would need, and spares there are.
+            int needed = 0, have = 0;
+            for (int k = 0; k < 2; k++) needed += w[k] == w[e] && h[k] == h[e] && !(sEye[k].width == w[e] && sEye[k].height == h[e]);
+            for (const gpu::EfbTarget& t : sSpareTargets) have += t.width == w[e] && t.height == h[e];
+            if (have < needed) {
+                sSpareTargets.push_back(gpu::renderer().createTarget(w[e], h[e]));
+                port_log("vr: eye target %dx%d made ahead (scale %.2f; %zu spare)", w[e], h[e], sc, sSpareTargets.size());
+                sDoneLogged = false;
+                return;
+            }
+        }
+    }
+    if (!sDoneLogged) {
+        port_log("vr: eye targets made ahead for scales %.2f-%.2f", fmaxf(lo, hi - 4.0f * kScaleStep), hi);
+        sDoneLogged = true;
+    }
+}
+
 void beginFrame(const FrameInfo& frame) {
     int64_t frameStartNs = port_host_time_ns();
     sOverlayFrame = frame;
@@ -1535,6 +1572,7 @@ void beginFrame(const FrameInfo& frame) {
         float f = sScale / swapchainScale();
         ensureTarget(sEye[e], (int)lroundf(frame.eyes[e].width * f), (int)lroundf(frame.eyes[e].height * f));
     }
+    if (!r.hasFrame() || sWipeDim > 0.95f) prewarmEyeTargets(frame);
     // SpaceWarp: this frame's view of the world, for its motion vectors.
     sMotionOn = frame.motion && sMotionW > 0;
     if (sMotionOn) {
