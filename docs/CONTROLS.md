@@ -364,6 +364,15 @@ it (`GameScene.cpp`), so a scene the words miss counts as *Other scenes*.
   contrast adaptive sharpening as the app puts it into the eye images (and
   scales it up there when Super Resolution is off). **Sharpening strength** goes
   from 0 (least) to 1 (most), 0.5 by default.
+- **Black frame insertion** (Steam Frame, off by default; dimmed on the
+  giant screen): in the diorama each game frame is shown on one refresh
+  and the refresh after it is black, so Mario and anything else your eyes
+  follow look sharp instead of doubled. The view is dimmer and flickers at
+  60 Hz, and it only works while the game renders a new image every
+  refresh (at the lowest resolution and still too much for the GPU, each
+  frame is shown on two refreshes again). **Brightness boost** (1.0 to 2.0,
+  1.5 by default) makes up for the black refreshes; bright colours ease
+  into white instead of clipping.
 - **Language**: the language of the game's texts, among those your disc
   has: English, French, German, Spanish and Italian on the European disc,
   English, French and Spanish on the American one. English by default. The
@@ -459,6 +468,12 @@ super_resolution = 1
 # strength from 0 (least) to 1 (most).
 sharpening = 0
 sharpening_strength = 0.5
+# Steam Frame: black frame insertion in the diorama (1; 0, the default):
+# each game frame on one refresh and black on the next, so moving things
+# look sharp instead of doubled, dimmer and with a 60 Hz flicker; and the
+# brightness boost that makes up for it (1.0 to 2.0).
+black_frames = 0
+black_frame_boost = 1.5
 # Play on a giant 16:9 screen from the game's own camera (1, the default)
 # or in the diorama (0), and how far away that screen is, in metres (it is
 # 5.33 m wide: 61 degrees across at 4.5 m, 30 degrees at 10 m).

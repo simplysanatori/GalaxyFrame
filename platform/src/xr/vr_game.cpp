@@ -132,6 +132,12 @@ bool sSpaceWarp = true;       // Application SpaceWarp at 120 Hz
 bool sSuperRes = true;        // Meta Quest Super Resolution (eye at render size)
 bool sSharpen = false;        // AMD FidelityFX CAS in the composite
 float sSharpness = 0.5f;      // its strength, 0..1
+// Black frame insertion (black_frames, Vulkan at 120 Hz in the diorama): each
+// game frame lit on one refresh, black on the next (xr_app.cpp), and the
+// picture boosted by black_frame_boost to make up for the light.
+bool sBlackFrames = false;
+float sBlackBoost = 1.5f;
+bool sBlackFramesOn = false;  // in effect for this refresh (vr::setBlackFrames)
 #ifdef __ANDROID__
 float sMinScale = 0.8f;       // lowest render scale (min_resolution)
 #else
@@ -720,6 +726,8 @@ vr::Setting sSettings[] = {
     {"super_resolution", 0.0f, 1.0f, 0.0f, FLAG(sSuperRes)},
     {"sharpening", 0.0f, 1.0f, 0.0f, FLAG(sSharpen)},
     {"sharpening_strength", 0.0f, 1.0f, 0.0f, NUMBER(sSharpness)},
+    {"black_frames", 0.0f, 1.0f, 0.0f, FLAG(sBlackFrames)},
+    {"black_frame_boost", 1.0f, 2.0f, 0.0f, NUMBER(sBlackBoost)},
     {"giant_screen", 0.0f, 1.0f, 0.0f, FLAG(sGiantScreen)},
     {"screen_distance", 1.0f, 20.0f, 0.0f, NUMBER(sScreenDistance)},
     {"passthrough", 0.0f, 1.0f, 0.0f, FLAG(sPassthrough)},
@@ -1323,6 +1331,18 @@ void notePerformance(float appGpuMs, float compositorGpuMs, float gpuUtilization
 }
 
 float renderScale() { return sScale; }
+bool blackFramesWanted() { return sBlackFrames; }
+void setBlackFrames(bool on) {
+    if (on != sBlackFramesOn) port_log("vr: black frame insertion %s (boost %.1f)", on ? "on" : "off", sBlackBoost);
+    sBlackFramesOn = on;
+}
+Extent darkEye(const gpu::EfbTarget& dst, int width, int height) {
+    vrdraw::Draw& draw = vrdraw::draw();
+    draw.beginTarget(dst, width, height, true);
+    draw.clear(0.0f, 0.0f, 0.0f, 1.0f);
+    draw.endTarget();
+    return Extent{width, height};
+}
 void setHalfRate(bool half) { sHalfRate = half; }
 bool renderScaleAtMin() { return sScaled == kNoScale || activeScale() <= scaleMin() + 0.001f; }
 int sRecommendedEyeWidth = 0;
@@ -1606,6 +1626,7 @@ Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int
         comp.usedW = used.width;
         comp.usedH = used.height;
         comp.brightness = (1.0f - sFade) * (1.0f - sSkipDim);
+        comp.boost = sBlackFramesOn ? sBlackBoost : 1.0f;
         comp.vignette = sVignette;
         {
             // Image position -> tangent of the angle from the view's axis (see vr_draw.h).

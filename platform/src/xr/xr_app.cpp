@@ -2001,6 +2001,16 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
     // The refresh that starts a game frame (all of them but every second one
     // at 120 Hz with eyes every refresh): input, the game's retrace.
     bool gameRefresh = !paired || !a.vkEvery || (a.vkPhase++ & 1) == 0;
+    // Black frame insertion (black_frames): with eyes every refresh at
+    // 120 Hz in the diorama, the refresh that picks up a game frame renders
+    // it and the one between goes out black, so each game frame is lit on
+    // one refresh only and nothing the eye follows shows twice.  The black
+    // refresh costs the GPU a clear.  Not at every second refresh (the
+    // compositor shows each set twice then) nor on the giant screen (its
+    // picture is a layer of its own).
+    bool black = paired && a.vkEvery && vr::blackFramesWanted() && vr::dioramaShown();
+    vr::setBlackFrames(black);
+    bool dark = black && !gameRefresh;
     int64_t tIn0 = port_host_time_ns();
     // For the next refresh's display time (the runtime's frame period away
     // when it is not pacing at 120 Hz).
@@ -2035,7 +2045,7 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
     int64_t t2 = port_host_time_ns();
     for (int e = 0; e < 2; e++) {
         Swapchain& sc = a.eyes[p.set][e];
-        vr::Extent used = vr::renderEye(e, frame, sc.images[idx[e]], sc.width, sc.height);
+        vr::Extent used = dark ? vr::darkEye(sc.images[idx[e]], sc.width, sc.height) : vr::renderEye(e, frame, sc.images[idx[e]], sc.width, sc.height);
         p.rect[e] = {used.width, used.height};
         p.pose[e] = views[e].pose;
         p.fov[e] = views[e].fov;

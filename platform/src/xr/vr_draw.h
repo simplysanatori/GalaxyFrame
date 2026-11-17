@@ -45,6 +45,9 @@ struct Composite {
     int usedW = 0, usedH = 0;  // the part of the eye image written (from its lower left corner)
     CompositeKind kind = CompositeKind::Plain;
     float brightness = 1.0f;
+    // Black frame insertion's brightness boost (1 = none): a gain that eases
+    // into white instead of clipping (Vulkan only).
+    float boost = 1.0f;
     // The comfort vignette, 0 = off .. 1 = strongest.  Its shape is in the angle
     // from the view's axis, so it does not depend on how wide the eye image
     // is: clear in the middle, the edges darkening outside it, as displayed.

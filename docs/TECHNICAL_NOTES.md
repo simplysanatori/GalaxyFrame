@@ -22,7 +22,7 @@ Checked in the headset, on one Steam Frame (SteamOS 0.4.5, SteamVR 2.18) with th
 
 Only tested headless or by automated checks: the European disc and other discs than the US one, long sessions, and the OpenGL ES fallback in the headset.
 
-Known: Mario and the world move at the game's 60 frames a second, so on the 120 Hz display an object your eye follows can look doubled along its movement; head movement is not affected. A new area still hitches briefly while its textures upload. The game's own foveated rendering is gone (it saved little on this GPU and blurred much of the view); SteamVR's eye-tracked foveation applies as for any app.
+Known: Mario and the world move at the game's 60 frames a second, so on the 120 Hz display an object your eye follows can look doubled along its movement; head movement is not affected. Black frame insertion (`black_frames`, off by default) shows each game frame on one refresh and black on the next in the diorama, which takes the doubling away at the cost of brightness (`black_frame_boost` makes up for part of it) and a 60 Hz flicker. A new area still hitches briefly while its textures upload. The game's own foveated rendering is gone (it saved little on this GPU and blurred much of the view); SteamVR's eye-tracked foveation applies as for any app.
 
 Some GalaxyQuest features do nothing on the Frame, because SteamVR does not provide what they need:
 

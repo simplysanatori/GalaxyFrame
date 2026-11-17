@@ -68,7 +68,7 @@ layout(push_constant) uniform PC {
     vec4 params;     // brightness, vignette, CAS peak, height of the part drawn
     vec4 wipe;       // closed (0..1), kind (0 fade, 1 ring), ring centre uv
     vec4 wipeColor;  // linear colour, w = width / height of the eye
-    vec4 casScale;   // xy: diorama pixels per eye image pixel
+    vec4 casScale;   // xy: diorama pixels per eye image pixel; z: the boost (1 = none)
     vec4 vigMap;     // image position to the tangent of the view angle
 } pc;
 #define uBrightness pc.params.x
@@ -77,6 +77,7 @@ layout(push_constant) uniform PC {
 #define uWipe pc.wipe
 #define uWipeColor pc.wipeColor
 #define uCasScale pc.casScale.xy
+#define uBoost pc.casScale.z
 #define uVigMap pc.vigMap
 #define FRAG_GL vec2(gl_FragCoord.x, pc.params.w - gl_FragCoord.y)
 layout(location = 0) in vec2 vUv;
@@ -101,6 +102,14 @@ void main() {
         float r = (1.0 - uWipe.x) * 1.6;
         float inside = 1.0 - smoothstep(r - 0.015, r, length((vUv - uWipe.zw) * vec2(uWipeColor.w, 1.0)));
         c = mix(uWipeColor.rgb, c, inside);
+    }
+    if (uBoost > 1.0) {
+        // Black frame insertion's boost: the gain up to a knee (linear 0.75),
+        // then a shoulder that eases into white with the same slope there,
+        // so bright colours keep their shading instead of clipping.
+        vec3 x = c * uBoost;
+        const float k = 0.75;
+        c = min(x, vec3(k)) + (1.0 - k) * (1.0 - exp(-max(x - k, 0.0) / (1.0 - k)));
     }
     oColor = vec4(c * uBrightness, 1.0);
 }
@@ -475,6 +484,7 @@ public:
         pc.params[1] = c.vignette;
         pc.params[2] = c.casPeak;
         pc.params[3] = (float)mH;
+        pc.casScale[2] = c.boost;
         memcpy(pc.vigMap, c.vigMap, sizeof(pc.vigMap));
         memcpy(pc.wipe, c.wipe, sizeof(pc.wipe));
         memcpy(pc.wipeColor, c.wipeColor, sizeof(pc.wipeColor));
