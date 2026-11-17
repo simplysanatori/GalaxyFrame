@@ -345,17 +345,21 @@ it (`GameScene.cpp`), so a scene the words miss counts as *Other scenes*.
 
 **Display**
 
-- **Resolution** (0.80 by default): the size the eyes are rendered at,
-  1.00 being the eye size SteamVR's resolution setting gives the game (its
-  per-app or global render resolution; 1728 px per eye at SteamVR's 100 % on
-  the Frame), so the panel shows both the value and the pixels; "Now" shows what it is. Higher stays
-  sharper, but when the GPU cannot keep up frames come late and the view
-  stutters. It is one value for the session: the lowest and the highest
-  resolution of the ini file (`min_resolution` and `resolution`) are both
-  set to it. On the giant screen the screen's picture is drawn at its full
-  size (2048x1152) while the GPU keeps up, and smaller when it does not
-  (the stereoscopic 3D takes GPU time), down to three quarters of this
-  setting.
+- **Lowest resolution** (0.80 by default) and **Highest resolution** (0.90
+  by default): the size the eyes are rendered at, 1.00 being the eye size
+  SteamVR's resolution setting gives the game (its per-app or global render
+  resolution; 1728 px per eye at SteamVR's 100 % on the Frame); the hint
+  shows the size now in pixels too. The eyes render at the highest
+  resolution while the GPU has time to spare. In a scene that needs more,
+  the resolution comes down a step at a time, as far as the lowest, so the
+  game keeps a new image on every refresh; only if the lowest is still too
+  much does it render every second refresh, where moving things look
+  doubled. The same value for both holds one size. A settings file from
+  before 1.2.0, where the panel had one Resolution row that set both, gets
+  its lowest resolution 0.1 below the highest when it is read. On the giant screen the
+  screen's picture is drawn at its full size (2048x1152) while the GPU
+  keeps up, and smaller when it does not (the stereoscopic 3D takes GPU
+  time), down to three quarters of the lowest resolution.
 - **Sharpening** (off by default) sharpens the world with AMD's
   contrast adaptive sharpening as the app puts it into the eye images (and
   scales it up there when Super Resolution is off). **Sharpening strength** goes
@@ -368,8 +372,7 @@ it (`GameScene.cpp`), so a scene the words miss counts as *Other scenes*.
 
 On the Quest the Screen tab also has **Passthrough** (your room around the
 giant screen), and the Display tab **Smooth motion** (SpaceWarp),
-**Super resolution**, **Refresh rate**, **High clocks** and the lowest and
-highest resolution as two rows.
+**Super resolution**, **Refresh rate** and **High clocks**.
 
 The paused scene behind the menu changes as you change a setting, so you
 can judge it before you carry on. When the menu closes, the settings you

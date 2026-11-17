@@ -119,19 +119,13 @@ float sVignetteSlow = 0.3f, sVignetteFast = 0.5f;
 #ifdef __ANDROID__
 float sResolution = 1.6f;     // largest eye size, relative to the headset's recommended one
 #else
-// Steam Frame: held at one size for the session (min_resolution =
-// resolution), since each step of the dynamic resolution was a visible
-// change in sharpness.  0.9 of SteamVR's recommended size renders both eyes
-// every refresh at 120 Hz with some headroom; the pacing drops to every
-// second refresh in a scene the GPU cannot keep up with and comes back.
+// Steam Frame: 0.9 of SteamVR's recommended size renders both eyes every
+// refresh at 120 Hz with some headroom.  A scene that needs more GPU lowers
+// the size (down to min_resolution) before the pacing gives up a refresh:
+// a step in sharpness shows less than every image doubling at 60 Hz.
 float sResolution = 0.9f;
 #endif
 float sRefreshRate = 120.0f;  // requested display refresh rate, Hz
-// Foveation of the eye renders round the eye-tracked gaze (foveation,
-// foveation_radius, foveation_edge; see vr_renderer.h).  Never without gaze.
-float sFoveation = 0.0f;       // 0 off, 1 low, 2 medium, 3 high, 4 custom (off: see vr_renderer.h)
-float sFoveaRadiusPct = 30.0f;  // custom: full-resolution radius, % of the half field of view
-float sFoveaEdgePct = 50.0f;    // custom: resolution at the fringes, % of full
 bool sHighClocks = true;      // ask for Meta's SustainedHigh CPU/GPU levels
 bool sHaptics = true;         // controller haptics: rumble and pointer ticks (haptics)
 bool sSpaceWarp = true;       // Application SpaceWarp at 120 Hz
@@ -141,7 +135,7 @@ float sSharpness = 0.5f;      // its strength, 0..1
 #ifdef __ANDROID__
 float sMinScale = 0.8f;       // lowest render scale (min_resolution)
 #else
-float sMinScale = 0.9f;       // lowest render scale (min_resolution): the Frame holds one size
+float sMinScale = 0.8f;       // lowest render scale (min_resolution)
 #endif
 bool sGiantScreen = true;     // gameplay on the giant virtual screen (giant_screen; the default at first start)
 bool sStereoScreen = false;   // the giant screen's picture as a stereo pair (stereo_screen)
@@ -720,9 +714,6 @@ vr::Setting sSettings[] = {
     {"resolution", 0.5f, 2.0f, 0.0f, NUMBER(sResolution)},
     {"min_resolution", 0.5f, 2.0f, 0.0f, NUMBER(sMinScale)},
     {"refresh_rate", 60.0f, 144.0f, 0.0f, NUMBER(sRefreshRate)},
-    {"foveation", 0.0f, 4.0f, 0.0f, NUMBER(sFoveation)},
-    {"foveation_radius", 10.0f, 60.0f, 0.0f, NUMBER(sFoveaRadiusPct)},
-    {"foveation_edge", 25.0f, 100.0f, 0.0f, NUMBER(sFoveaEdgePct)},
     {"high_clocks", 0.0f, 1.0f, 0.0f, FLAG(sHighClocks)},
     {"haptics", 0.0f, 1.0f, 0.0f, FLAG(sHaptics)},
     {"space_warp", 0.0f, 1.0f, 0.0f, FLAG(sSpaceWarp)},
@@ -774,9 +765,15 @@ void loadSettings(const char* path) {
     // the old one: its values are multiplied by 0.3, where 1.0 was what 0.3
     // is now); the panel writes the marker with the values.
     bool newVignetteScale = false;
+    // Before 1.2.0 the Frame's panel had one Resolution row that wrote it as
+    // both min_resolution and resolution; a file without
+    // `resolution_range = 1` and the two equal gets the lowest a step pair
+    // below (0.1), so the dynamic resolution has room.
+    bool resolutionRange = false;
     while (fgets(line, sizeof(line), f)) {
         float scale;
         if (sscanf(line, " vignette_scale = %f", &scale) == 1 && scale >= 2.0f) newVignetteScale = true;
+        if (sscanf(line, " resolution_range = %f", &scale) == 1 && scale >= 1.0f) resolutionRange = true;
     }
     rewind(f);
     while (fgets(line, sizeof(line), f)) {
@@ -791,15 +788,6 @@ void loadSettings(const char* path) {
         }
         if (sscanf(line, " renderer = %31[A-Za-z0-9_]", text) == 1) {
             continue;  // the graphics API, read by gpu::selectRenderer
-        }
-        // foveation = off | low | medium | high | custom (or 0 to 4).
-        if (sscanf(line, " foveation = %31[a-z]", text) == 1) {
-            static const char* const kNames[] = {"off", "low", "medium", "high", "custom"};
-            for (int i = 0; i < 5; i++) {
-                if (!strcmp(text, kNames[i])) sFoveation = (float)i;
-            }
-            port_log("%s: foveation = %s", path, text);
-            continue;
         }
         // gravity_turns = smooth | steps | off (or 0 to 2).
         if (sscanf(line, " gravity_turns = %31[a-z]", text) == 1) {
@@ -818,7 +806,7 @@ void loadSettings(const char* path) {
         if (line[0] == '#' || sscanf(line, " %63[a-z_] = %f", key, &value) != 2) {
             continue;
         }
-        if (!strcmp(key, "vignette_scale")) continue;
+        if (!strcmp(key, "vignette_scale") || !strcmp(key, "resolution_range")) continue;
         if (!newVignetteScale && (!strcmp(key, "vignette") || !strcmp(key, "vignette_slow") || !strcmp(key, "vignette_fast"))) value *= 0.3f;
         // `vignette` is the old name of vignette_fast; the new key wins when both are there.
         if (!strcmp(key, "vignette_fast")) fastInFile = true;
@@ -840,6 +828,12 @@ void loadSettings(const char* path) {
         }
     }
     fclose(f);
+#ifndef __ANDROID__
+    if (!resolutionRange && fabsf(sMinScale - sResolution) < 0.001f) {
+        sMinScale = fmaxf(0.5f, sResolution - 0.1f);
+        port_log("%s: min_resolution %g (one resolution from the old panel: room for the dynamic resolution)", path, sMinScale);
+    }
+#endif
     if (sVignetteFast < sVignetteSlow) {
         port_log("%s: vignette_fast raised to the slow value %g (it is never below it)", path, sVignetteSlow);
         sVignetteFast = sVignetteSlow;
@@ -974,7 +968,7 @@ float& activeScale() { return sScaled == kScreenScale ? sScreenScale : sScale; }
 // picture: 1 is all there is to show, and its lowest is three quarters of
 // min_resolution (0.6 at the default 0.8: 1229 pixels across, where the
 // display has about 1500 for the giant screen 4.5 m away).
-float scaleMin() { return sScaled == kScreenScale ? fminf(1.0f, fmaxf(0.5f, 0.75f * sMinScale)) : sMinScale; }
+float scaleMin() { return sScaled == kScreenScale ? fminf(1.0f, fmaxf(0.5f, 0.75f * sMinScale)) : fminf(sMinScale, sResolution); }
 float scaleMax() { return sScaled == kScreenScale ? 1.0f : sResolution; }
 
 struct EyeTimer {
@@ -992,6 +986,9 @@ bool sTimersOk = false;
 int sTimedEyes = 0, sSlowEyes = 0;
 float sWorstMs = 0.0f, sSecondMs = 0.0f;  // the two slowest
 double sChangedAt = 0.0, sLastBusyAt = 0.0, sNow = 0.0;
+// The Vulkan pacing renders every second refresh (vr::setHalfRate): the
+// scale does not go up then, or the eyes would not fit one refresh again.
+bool sHalfRate = false;
 // Frames that missed refreshes in the diorama (noteMissedRefreshes), counted
 // while they come less than a second apart: one hitch (a shader compile) may
 // miss two refreshes at once, an overloaded GPU keeps missing them.
@@ -1174,7 +1171,7 @@ void updateScale(const vr::FrameInfo& frame, int scaled) {
             // second slowest: the slowest may be a one-off).
             float s = floorf(scale * sqrtf(target / sSecondMs) / kScaleStep + 0.001f) * kScaleStep;
             setScale(fminf(s, scale - kScaleStep));
-        } else if (sTimedEyes >= 24 && sNow - fmax(sChangedAt, fmax(sLastBusyAt, sLastMissAt)) > 1.5 &&
+        } else if (!sHalfRate && sTimedEyes >= 24 && sNow - fmax(sChangedAt, fmax(sLastBusyAt, sLastMissAt)) > 1.5 &&
                    (scale + kScaleStep <= sCeiling + 0.001f || sNow > sCeilingUntil)) {
             setScale(scale + kScaleStep);  // headroom for a while: up a step
         }
@@ -1304,7 +1301,9 @@ void notePerformance(float appGpuMs, float compositorGpuMs, float gpuUtilization
     sLogAppGpuSum += appGpuMs;
     sLogAppGpuMax = fmaxf(sLogAppGpuMax, appGpuMs);
     sLogAppGpuCount++;
-    float compositor = compositorGpuMs > 0.0f ? compositorGpuMs : 0.0f;
+    // Without the compositor's counter (SteamVR has none), its usual share
+    // on the Frame: about 1 ms of each refresh.
+    float compositor = compositorGpuMs > 0.0f ? compositorGpuMs : 1.0f;
     sMetricBudgetMs = (refreshMs - compositor) * refreshesPerFrame / eyesPerFrame;
     sMetricsAt = sNow;
     // Frames drawn at a scale that follows the load only (the diorama, the
@@ -1324,6 +1323,8 @@ void notePerformance(float appGpuMs, float compositorGpuMs, float gpuUtilization
 }
 
 float renderScale() { return sScale; }
+void setHalfRate(bool half) { sHalfRate = half; }
+bool renderScaleAtMin() { return sScaled == kNoScale || activeScale() <= scaleMin() + 0.001f; }
 int sRecommendedEyeWidth = 0;
 void setRecommendedEyeWidth(int pixels) { sRecommendedEyeWidth = pixels; }
 int recommendedEyeWidth() { return sRecommendedEyeWidth; }
@@ -1541,33 +1542,12 @@ void beginFrame(const FrameInfo& frame) {
     sRenderNs = port_host_time_ns() - frameStartNs;
 }
 
-bool foveationWanted() { return lroundf(sFoveation) > 0; }
-
 float recentEyeGpuMs(int* count) {
     float avg = sRecentEyes ? (float)(sRecentEyeMs / sRecentEyes) : 0.0f;
     *count = sRecentEyes;
     sRecentEyeMs = 0.0;
     sRecentEyes = 0;
     return avg;
-}
-
-// The foveation setting as the full-resolution radius (normalized device
-// coordinates: a fraction of the half field of view; 0 = off) and the
-// density at the fringes (fraction of full per axis).
-void foveationLevel(float* radius, float* edge) {
-    // Presets: low, medium, high.
-    static const float kRadius[3] = {0.45f, 0.30f, 0.20f}, kEdge[3] = {0.5f, 0.5f, 0.25f};
-    int level = (int)lroundf(sFoveation);
-    if (level <= 0) {
-        *radius = 0.0f;
-        *edge = 1.0f;
-    } else if (level <= 3) {
-        *radius = kRadius[level - 1];
-        *edge = kEdge[level - 1];
-    } else {
-        *radius = fminf(0.6f, fmaxf(0.1f, sFoveaRadiusPct / 100.0f));
-        *edge = fminf(1.0f, fmaxf(0.25f, sFoveaEdgePct / 100.0f));
-    }
 }
 
 Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int width, int height) {
@@ -1602,24 +1582,6 @@ Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int
         ev.eyePos[1] = viewFromEye.at(1, 3);
         ev.eyePos[2] = viewFromEye.at(2, 3);
         ev.depthSnapshot = sMotionOn ? &sSnap[eye] : nullptr;
-        // Foveation follows the eye's gaze, and only the gaze: without eye
-        // tracking the eyes render at full density.
-        float radius, edge;
-        foveationLevel(&radius, &edge);
-        static bool sFoveated[2] = {false, false};
-        static int sFoveaLogged = -1;
-        bool foveate = frame.gazeValid && radius > 0.0f;
-        if (radius > 0.0f && !frame.gazeValid && sFoveaLogged != 0) {
-            port_log("vr: foveation %.0f wanted, but no eye-tracked gaze: the eyes render at full resolution", sFoveation);
-            sFoveaLogged = 0;
-        } else if (foveate && sFoveaLogged != 1) {
-            port_log("vr: foveation round the gaze: full resolution within %.0f%% of the half field of view, %.0f%% at the fringes", radius * 100.0f,
-                     edge * 100.0f);
-            sFoveaLogged = 1;
-        }
-        if (foveate || sFoveated[eye]) {
-            sFoveated[eye] = r.setFoveation(sEye[eye], frame.gaze[eye][0], frame.gaze[eye][1], foveate ? edge : 0.0f, radius) && foveate;
-        }
         r.render(sEye[eye], &ev, &sHud, eye == 0 ? gpu::HudMode::Target : gpu::HudMode::Skip);
         if (eye == 0) {
             // A HUD target left as it was (the frame's HUD already in it)

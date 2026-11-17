@@ -252,13 +252,11 @@ constexpr Item kComfortItems[] = {
      percentText},
 };
 constexpr Item kDisplayItems[] = {
-#ifdef __ANDROID__
     {"min_resolution", "Lowest resolution", nullptr, kStepper, 0.5f, 1.25f, 0.05f, "%.2f", nullptr, hintScale},
     {"resolution", "Highest resolution", "Used while the GPU has time to spare", kStepper, 0.5f, 2.0f, 0.05f, "%.2f"},
+#ifdef __ANDROID__
     {"space_warp", "Smooth motion", "SpaceWarp: 120 frames a second", kSwitch},
     {"super_resolution", "Super resolution", "Sharper upscaling by the headset", kSwitch},
-#else
-    {"resolution", "Resolution", nullptr, kStepper, 0.5f, 2.0f, 0.05f, "%.2f", nullptr, hintScale, nullptr, nullptr, nullptr, nullptr, nullptr, "min_resolution"},
 #endif
     {"sharpening", "Sharpening", "A sharper picture (FidelityFX CAS)", kSwitch},
     {"sharpening_strength", "Sharpening strength", "From 0 (least) to 1 (most)", kStepper, 0.0f, 1.0f, 0.1f, "%.1f", sharpenOn},
@@ -626,6 +624,21 @@ void save() {
                 lines.emplace_back(item.alsoKey, text);
             }
         }
+    }
+    // The two resolutions go together, with the marker that they are two
+    // (see vr::loadSettings).
+    bool resolution = false;
+    for (const auto& l : lines) resolution |= l.first == "resolution" || l.first == "min_resolution";
+    if (resolution) {
+        for (const char* key : {"min_resolution", "resolution"}) {
+            bool have = false;
+            for (const auto& l : lines) have |= l.first == key;
+            if (!have) {
+                snprintf(text, sizeof(text), "%g", vr::findSetting(key)->get());
+                lines.emplace_back(key, text);
+            }
+        }
+        lines.emplace_back("resolution_range", "1");
     }
     // The vignette's two values go together, with the marker of their scale
     // (see vr::loadSettings).

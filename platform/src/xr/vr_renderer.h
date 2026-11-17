@@ -77,24 +77,6 @@ void init();
 //                     up for exactly two refreshes; 90 is possible on the
 //                     Steam Frame but not recommended: the game's 60 frames
 //                     then stay up for one or two refreshes in turn)
-//   foveation         off | low | medium | high | custom (or 0 to 4; off):
-//                     lower resolution away from where the eyes look, by
-//                     eye tracking only (Vulkan); without a gaze the eyes
-//                     render at full resolution.  Presets (radius, edge):
-//                     low 45 %, 50 %; medium 30 %, 50 %; high 20 %, 25 %.
-//                     Off by default: Turnip applies the density per tile
-//                     of its tiled rendering (a third of an eye's width) at
-//                     the tile's lowest density, so the sharp region does
-//                     not follow the gaze closely, and the eyes' GPU time
-//                     drops 8 % at best (xr_sim, resolution 0.8, all at a
-//                     quarter density; none at 1.0)
-//   foveation_radius  custom: radius of the full-resolution region round the
-//                     gaze, % of the half field of view (10 to 60; 30)
-//   foveation_edge    custom: resolution at the fringes, % of full per axis
-//                     (25 to 100; 50).  The GPU makes fragments of 1, 2 or 4
-//                     pixels a side, so 50 % and 25 % are the steps that save
-//                     work.  Between the radius and 1.6 times it the
-//                     resolution is at least 50 %
 //   high_clocks       1 to ask for Meta's SustainedHigh CPU/GPU levels (1),
 //                     0 to leave the clocks to the system (saves battery)
 //   space_warp        1 to show the game's 60 frames a second at 120 Hz with
@@ -263,6 +245,11 @@ void saveSetting(const char* key);
 // pictures (the giant screen's gameplay): 1 is the full picture, and the
 // GPU's load moves it down to three quarters of min_resolution.
 float renderScale();
+// The render scale cannot go lower (at min_resolution, or not scaled by the
+// load now): the Vulkan pacing gives up a refresh only then for a full GPU.
+bool renderScaleAtMin();
+// The Vulkan pacing renders every second refresh (true) or every refresh.
+void setHalfRate(bool half);
 // The runtime's recommended eye width in pixels (SteamVR's resolution
 // setting for the app): what render scale 1.00 means.  0 until known.
 void setRecommendedEyeWidth(int pixels);
@@ -297,8 +284,6 @@ enum { kHudLayer, kSettingsLayer, kScreenLayer, kSetupLayer, kScreenRightLayer, 
 // The UI layers from the bottom one to the top one.
 const int kUiLayerOrder[kUiLayerCount] = {kScreenLayer, kScreenRightLayer, kHudLayer, kSettingsLayer, kSetupLayer, kBeamLayer, kReticleLayer, kSkipLayer};
 void setUiLayers(bool on);
-// The foveation setting is on (it takes effect only with an eye-tracked gaze).
-bool foveationWanted();
 // The average GPU time of an eye (render, composite, overlays) over the eyes
 // timed since the last call, and how many (`count`).
 float recentEyeGpuMs(int* count);

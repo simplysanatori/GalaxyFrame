@@ -22,7 +22,7 @@ Checked in the headset, on one Steam Frame (SteamOS 0.4.5, SteamVR 2.18) with th
 
 Only tested headless or by automated checks: the European disc and other discs than the US one, long sessions, and the OpenGL ES fallback in the headset.
 
-Known: Mario and the world move at the game's 60 frames a second, so on the 120 Hz display an object your eye follows can look doubled along its movement; head movement is not affected. A new area still hitches briefly while its textures upload. Eye-tracked foveated rendering is built in (`foveation` in the ini) but off: on this GPU it saves little and blurs much of the view.
+Known: Mario and the world move at the game's 60 frames a second, so on the 120 Hz display an object your eye follows can look doubled along its movement; head movement is not affected. A new area still hitches briefly while its textures upload. The game's own foveated rendering is gone (it saved little on this GPU and blurred much of the view); SteamVR's eye-tracked foveation applies as for any app.
 
 Some GalaxyQuest features do nothing on the Frame, because SteamVR does not provide what they need:
 
@@ -91,7 +91,7 @@ Things I tried that did not work: a CPU wait before release (the loop missed ref
 
 ### Resolution
 
-The default eye size is 0.9 of the size SteamVR's own resolution setting gives the game (1728 by 1728 per eye at 100 % on the Frame), held steady for the session (`min_resolution = resolution`), since each step of a dynamic resolution was a visible change in sharpness. At 0.9 both eyes render every refresh with some headroom, and 1.0 in most scenes; the pacing drops to every second refresh where the GPU cannot keep up and comes back on its own. Render targets of sizes no longer in use are kept and reused, so changing the size does not stall the render thread. The sharpening pass is AMD FidelityFX CAS.
+The eyes render at 0.9 of the size SteamVR's own resolution setting gives the game (1728 by 1728 per eye at 100 % on the Frame) while the GPU keeps up, and down to 0.8 (`min_resolution`) in a scene that needs more: the dynamic resolution goes by SteamVR's measure of the app's GPU time against what both eyes may take in one refresh, beside about 1 ms for the compositor. The pacing drops to every second refresh only when the lowest size is still too much, or when sets miss their display while the GPU is busy; late sets beside an idle GPU (a load on the game thread) do not count. It comes back on its own. Render targets of sizes no longer in use are kept and reused, so changing the size does not stall the render thread. The sharpening pass is AMD FidelityFX CAS.
 
 ### Controls and haptics
 

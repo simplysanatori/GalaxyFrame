@@ -1701,7 +1701,9 @@ void renderPair(App& a, int s, const vr::FrameInfo& frame, const XrView views[2]
 // up: a pair costs 4.5 to 8 ms on the headset beside the compositor's
 // 1 ms, against 8.3 ms.  When more than 5 % of the sets of the last 2 s
 // missed their display (went out with a later display time than they were
-// rendered for), or both eyes took over 85 % of a refresh on the GPU, only
+// rendered for) while the GPU was busy (over 75 % of a refresh: late sets
+// beside a GPU with room are the game thread's), or both eyes took over 85 % of
+// a refresh on the GPU with the dynamic resolution at its lowest, only
 // the refresh that picks up a game frame renders, and the one in between
 // shows its set again for the compositor to reproject ("every second
 // refresh"); back to every refresh after 10 s with at most 1 % of the sets
@@ -1880,8 +1882,14 @@ void updatePaceVk(App& a, bool late) {
     if (a.vkEvery && a.vkWinSets >= 240) {
         int eyes = 0;
         float pair = 2.0f * vr::recentEyeGpuMs(&eyes);
-        bool gpuFull = eyes >= 60 && pair > 0.85f * refreshMs;
-        if (a.vkWinLate > 12 || gpuFull) {
+        // A full GPU gives up a refresh only once the resolution is as low as
+        // it goes (until then the dynamic resolution lowers it).  Late sets
+        // with the GPU under what lets the pacing return (75 % of a refresh)
+        // are the game thread's or a load's, which rendering half as often
+        // does not help, and it would come straight back: they do not count.
+        bool gpuFull = eyes >= 60 && pair > 0.85f * refreshMs && vr::renderScaleAtMin();
+        bool gpuLate = eyes < 60 || pair > 0.75f * refreshMs;
+        if ((a.vkWinLate > 12 && gpuLate) || gpuFull) {
             port_log("vr: Vulkan pacing: new eyes every second refresh (60 Hz): %d of the last %d sets missed their display, both eyes %.1f ms of GPU a refresh "
                      "(%.1f ms the limit)",
                      a.vkWinLate, a.vkWinSets, pair, 0.85f * refreshMs);
@@ -1982,6 +1990,7 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
         return;
     }
     bool every = !paired || a.vkEvery;
+    vr::setHalfRate(!every);
     if (!every && a.vkPending.valid) {
         // Every second refresh: this one puts out the set of the last.  The
         // game starts its next frame here with PETARI_RETRACE_STEP=2.
@@ -2005,8 +2014,9 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
     frame.newFrameDue = gameRefresh;
     locateGaze(a, time, frame);
     // One eye's share of the GPU: both eyes on every refresh beside the
-    // compositor, or one refresh each as with the paired GLES steps.
-    frame.eyeBudgetMs = every ? (paired ? refresh : period) * 0.4f / 1e6f : refresh * 0.65f / 1e6f;
+    // compositor.  At 120 Hz that holds while the pacing renders every second
+    // refresh too, so the resolution comes down to what lets it return.
+    frame.eyeBudgetMs = every || paired ? (paired ? refresh : period) * 0.4f / 1e6f : refresh * 0.65f / 1e6f;
     int64_t t0 = port_host_time_ns();
     vr::beginFrame(frame);
     int64_t t1 = port_host_time_ns();
@@ -2548,8 +2558,10 @@ void renderFrame(App& a) {
     a.workCount++;
     // The runtime's measure of the GPU (for the dynamic resolution): an app
     // frame spans two eyes and two refreshes with SpaceWarp, one eye and one
-    // refresh when the eyes take alternate refreshes, both eyes and one
-    // refresh otherwise.
+    // refresh when the eyes take alternate refreshes (GLES), both eyes and
+    // one refresh otherwise.  The Vulkan pacing renders both eyes in a frame
+    // and is judged against one refresh even at every second refresh, the
+    // rate it returns to.
     if (a.hasPerfMetrics && fs.shouldRender) {
         static bool sUnitsLogged = false;
         XrPerformanceMetricsCounterUnitMETA units[3] = {};
@@ -2561,7 +2573,7 @@ void renderFrame(App& a) {
             port_log("XR performance metrics: app GPU %.2f (unit %d), compositor GPU %.2f (unit %d), GPU utilization %.1f (unit %d)", app, (int)units[0],
                      compositor, (int)units[1], util, (int)units[2]);
         }
-        int eyes = warpFrame ? 2 : a.paired ? 1 : 2;
+        int eyes = warpFrame || a.vk ? 2 : a.paired ? 1 : 2;
         int refreshes = warpFrame ? 2 : 1;
         vr::notePerformance(app, compositor, util, eyes, refreshes, refresh / 1e6f);
     }
@@ -2725,10 +2737,9 @@ extern "C" __attribute__((visibility("default"))) void port_linux_main(const cha
 #ifndef __ANDROID__
     // Turnip renders the eyes 7-8 % faster without its tiled (GMEM) mode
     // (xr_sim: both eyes 6.6 -> 6.1 ms at resolution 0.8, 8.0 -> 7.4 ms at
-    // 1.0); foveation needs the tiles.  Read by the driver when the instance
-    // is made.  PETARI_VKSYSMEM=0 keeps the driver's own choice.
-    if (gpu::requestedApi() == gpu::Api::Vulkan && !vr::foveationWanted() &&
-        !(getenv("PETARI_VKSYSMEM") && !strcmp(getenv("PETARI_VKSYSMEM"), "0"))) {
+    // 1.0).  Read by the driver when the instance is made.
+    // PETARI_VKSYSMEM=0 keeps the driver's own choice.
+    if (gpu::requestedApi() == gpu::Api::Vulkan && !(getenv("PETARI_VKSYSMEM") && !strcmp(getenv("PETARI_VKSYSMEM"), "0"))) {
         std::string tu = getenv("TU_DEBUG") ? std::string(getenv("TU_DEBUG")) + ",sysmem" : "sysmem";
         setenv("TU_DEBUG", tu.c_str(), 1);
         port_log("vk: TU_DEBUG=%s (direct rendering, no tiles: faster for these eyes)", tu.c_str());
