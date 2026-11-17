@@ -131,3 +131,15 @@ void PlayerLeft::exeDisappear() {
         setNerve(GET_NERVE(PlayerLeft, PlayerLeftNrvHide));
     }
 }
+
+#ifdef TARGET_PC
+extern "C" int port_vr_hide_counters(void);  // vr_game.cpp
+
+// In the VR diorama the counters and the health meter are left out while
+// its Counters switch (diorama_counters) is off or the save window is up.
+void PlayerLeft::draw() const {
+    if (!port_vr_hide_counters()) {
+        LayoutActor::draw();
+    }
+}
+#endif

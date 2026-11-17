@@ -199,6 +199,7 @@ constexpr Item kDioramaItems[] = {
     {"follow_smoothing", "Follow smoothing", "How gently the world follows Mario", kStepper, 0.0f, 0.5f, 0.02f, "%.2f s"},
     {"cutaway", "See through scenery", "Fade what hides Mario from you", kSwitch},
     {"turn_with_camera", "Turn with the camera", "The world swings with the game camera", kSwitch},
+    {"diorama_counters", "Counters", "When Mario stands still, as on a TV", kSwitch, 0, 0, 0, nullptr, giantOff},
 };
 constexpr Item kScreenItems[] = {
     {"giant_screen", "Giant screen", "Play on a big screen, no diorama", kSwitch},

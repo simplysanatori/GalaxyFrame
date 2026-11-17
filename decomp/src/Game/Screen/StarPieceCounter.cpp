@@ -308,3 +308,16 @@ void StarPieceCounter::exeDisappear() {
         setNerve(GET_NERVE(StarPieceCounter, StarPieceCounterNrvHide));
     }
 }
+
+#ifdef TARGET_PC
+extern "C" int port_vr_hide_counters(void);  // vr_game.cpp
+
+// In the VR diorama the counters and the health meter are left out while
+// its Counters switch (diorama_counters) is off or the save window is up.  While a Luma is being fed
+// the Star Bit counter stays: it shows how many it still wants.
+void StarPieceCounter::draw() const {
+    if (mMode != 0 || !port_vr_hide_counters()) {
+        LayoutActor::draw();
+    }
+}
+#endif

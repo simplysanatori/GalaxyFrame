@@ -13,6 +13,9 @@ public:
 
     virtual void init(const JMapInfoIter& rIter);
     virtual void control();
+#ifdef TARGET_PC
+    virtual void draw() const;  // left out of the VR diorama with its Counters switch off or a save window up
+#endif
 
     void requestActive();
     void requestDeactivate();

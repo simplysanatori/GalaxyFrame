@@ -241,16 +241,21 @@ void GameSystem::frameLoop() {
 #ifdef TARGET_PC
 // vr_game.cpp.  Declared here, not in port/compat.h: every decomp file
 // includes that header, so a change there rebuilds it all.
-extern "C" void port_vr_system_window(int up);
+extern "C" void port_vr_system_window(int which);
 #endif
 
 void GameSystem::draw() {
+#ifdef TARGET_PC
+    // A save (1), error (2) or HOME (4) window drawn over the scene in this
+    // frame: in VR it stays visible over a closed wipe (after a Power Star
+    // the save window comes up on one), as it does over the black on a TV.
+    // Told before the scene is drawn, so the diorama's counters, drawn with
+    // the scene, are left out around a save window in this same frame.
+    port_vr_system_window((GameSequenceFunction::isActiveSaveDataHandleSequence() ? 1 : 0) | (mErrorWatcher->isWarning() ? 2 : 0) |
+                          (mHomeButtonLayout->isActive() ? 4 : 0));
+#endif
     mSceneController->drawScene();
 #ifdef TARGET_PC
-    // A save, error or HOME window drawn over the scene in this frame: in VR
-    // it stays visible over a closed wipe (after a Power Star the save window
-    // comes up on one), as it does over the black on a TV.
-    port_vr_system_window(GameSequenceFunction::isActiveSaveDataHandleSequence() || mErrorWatcher->isWarning() || mHomeButtonLayout->isActive());
     // Everything drawn over the scene is 2D too: the save and error windows,
     // the pointer's cursor, the system wipe.  In VR it goes on the HUD panel
     // with the scene's own 2D, where the pointer aims (drawn into the eyes'

@@ -174,6 +174,12 @@ left out (*Passthrough*, *Smooth motion*, *Super resolution*, *Refresh rate*,
   keeps its facing and the right stick turns it (see *Smooth turning*).
   With this on the stick turns the game camera, as on the giant screen,
   and *Smooth turning* has no effect.
+- **Counters** (on by default): the coin, Star Bit, lives and star
+  counters and the health meter in the diorama. On, they come up when
+  Mario stands still and go when he moves, as on a TV. Off, the diorama
+  shows none of them; while you feed a Luma its Star Bit count still
+  shows. Either way they are left out around the save window in the
+  diorama. The giant screen and the flat screen always show them.
 
 **Screen**
 
@@ -410,6 +416,10 @@ vignette_fast = 0.5
 vignette_scale = 2
 # Fade out scenery that hides Mario (0 = off)
 cutaway = 1
+# Show the coin, Star Bit, lives and star counters and the health meter in
+# the diorama when Mario stands still (0 = left out; the giant screen always
+# shows them)
+diorama_counters = 1
 # Seconds to hold A to skip a cutscene (0 = never skip)
 skip_hold = 1
 # 1: pushing the right stick right turns the view to the right (the camera

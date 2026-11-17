@@ -41,6 +41,7 @@ float sWipeDim = 0.0f;  // how far the current eye's wipe has closed (panel, las
 // The last game frame recorded with a save, error or HOME window up (see
 // port_vr_system_window), and whether the frame on show has one.
 std::atomic<uint64_t> sSystemWindowFrame{0};
+std::atomic<bool> sSaveWindowNow{false};  // the frame the game is drawing has a save window (game thread)
 bool sSystemWindow = false;
 bool sMenuPointer = false;  // the frame on show has the pointer on menus
 
@@ -156,6 +157,7 @@ bool sComfortVignette = true;  // a gentle vignette for every smooth movement of
 // the kinds in GameScene.cpp (stars, bosses, observatory, storybook, friends,
 // mario, other, event camera).
 bool sCutsceneDiorama[8] = {true, true, true, true, false, true, true, true};  // Lumas and friends off by default
+bool sDioramaCounters = true;      // the coin, Star Bit, lives and star counters and the health meter show in the diorama (diorama_counters)
 bool sDioramaTransitions = false;  // launch stars, pipes and arrivals stay in the diorama (diorama_transitions; off and off the panel for now)
 float sStarBitSpeed = 3.0f;   // how fast shot Star Bits fly, 1 = as in the game (star_bit_speed)
 bool sSmoothTurn = true;      // the right stick turns the diorama smoothly, not in steps (smooth_turn)
@@ -538,8 +540,9 @@ extern "C" int port_vr_diorama(void) { return sDioramaShown.load(); }
 
 // Called by GameSystem::draw on every frame it records: whether a save, error
 // or HOME window is drawn over the scene in it.
-extern "C" void port_vr_system_window(int up) {
-    if (up) sSystemWindowFrame.store(port_gx_recording_frame());
+extern "C" void port_vr_system_window(int which) {
+    if (which) sSystemWindowFrame.store(port_gx_recording_frame());
+    sSaveWindowNow.store((which & 1) != 0);
 }
 
 namespace {
@@ -555,6 +558,14 @@ extern "C" void port_vr_transit_end(const void* host) {
 
 extern "C" const void* port_vr_transit_host(void) { return sTransitHost.load(); }
 
+// 1 while the counters and the health meter are left out (CoinCounter.cpp and
+// the others): the diorama is on show and its Counters switch is off, or the
+// save window is up there.  Over the closed wipe after a Power Star the save
+// window is lit on the HUD panel, and the counters ringed it on the black.
+// Menus keep them as the game has them.
+extern "C" int port_vr_hide_counters(void) {
+    return sDioramaShown.load() && (!sDioramaCounters || sSaveWindowNow.load()) ? 1 : 0;
+}
 extern "C" int port_vr_diorama_transitions(void) { return sDioramaTransitions ? 1 : 0; }
 // Speed factor of a Star Bit the player shoots (StarPieceDirector.cpp).
 extern "C" float port_vr_star_bit_speed(void) { return sStarBitSpeed; }
@@ -636,6 +647,7 @@ vr::Setting sSettings[] = {
          sSkipHold = x;
          port_skip_set_hold_seconds(x);
      }},
+    {"diorama_counters", 0.0f, 1.0f, 0.0f, FLAG(sDioramaCounters)},
     {"diorama_transitions", 0.0f, 1.0f, 0.0f, FLAG(sDioramaTransitions)},
     {"cutscene_stars", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[0])},
     {"cutscene_bosses", 0.0f, 1.0f, 0.0f, FLAG(sCutsceneDiorama[1])},
