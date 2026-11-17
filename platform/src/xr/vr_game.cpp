@@ -1176,8 +1176,13 @@ void updateScale(const vr::FrameInfo& frame, int scaled) {
             setScale(scale - 2.0f * kScaleStep);
         } else if (sSlowEyes >= 2) {
             // Down at once, by about the pixel share the eyes are over (the
-            // second slowest: the slowest may be a one-off).
+            // second slowest: the slowest may be a one-off), and this scale
+            // left alone for a while as after a miss: back up 1.5 s later it
+            // went up and down every few seconds, each step a visible change
+            // in sharpness.
             float s = floorf(scale * sqrtf(target / sSecondMs) / kScaleStep + 0.001f) * kScaleStep;
+            sCeiling = scale - kScaleStep;
+            sCeilingUntil = sNow + 20.0;
             setScale(fminf(s, scale - kScaleStep));
         } else if (!sHalfRate && sTimedEyes >= 24 && sNow - fmax(sChangedAt, fmax(sLastBusyAt, sLastMissAt)) > 1.5 &&
                    (scale + kScaleStep <= sCeiling + 0.001f || sNow > sCeilingUntil)) {

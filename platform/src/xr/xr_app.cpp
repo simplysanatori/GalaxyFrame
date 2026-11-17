@@ -169,6 +169,7 @@ struct App {
     int64_t workSumNs = 0, workMaxNs = 0;  // the refreshes' work since the last pacing log
     int workCount = 0;
     int waitRefreshes = 0, stallRefreshes = 0;  // ... and its waits for the GPU (at a release, while recording)
+    int bfiLit = 0, bfiDark = 0, bfiLateLit = 0;  // black frame insertion's sets shown (5 s): lit, black, lit but late
     int64_t waitNs = 0, stallNs = 0;  // the last refresh's work, from xrWaitFrame to xrEndFrame
     bool warp = false;          // SpaceWarp: each frame goes out with motion vectors
     int warpFrames = 0;         // frames since SpaceWarp started (the first few are logged)
@@ -200,6 +201,8 @@ struct App {
         XrExtent2Di rect[2];
         XrSpace space = XR_NULL_HANDLE;  // the app space the poses are in
         XrTime time = 0;                 // the display time they were located for
+        bool dark = false;               // black frame insertion: the black refresh's set
+        bool lit = false;                // ... a game frame's one lit set
     };
     VkSet vkPending;              // rendered on the last refresh, released on this one
     VkSet vkNew;                  // rendered on this refresh
@@ -1763,6 +1766,11 @@ void notePoses(App& a, const App::VkSet& set, XrTime displayTime) {
                      "1 ms: %d at a release (%.1f ms), %d while recording (%.1f ms)",
                      a.vkEvery || !a.paired ? "every refresh" : "every second refresh", k, a.workCount ? a.workSumNs / 1e6 / a.workCount : 0.0,
                      a.workMaxNs / 1e6, a.waitRefreshes, a.waitNs / 1e6, a.stallRefreshes, a.stallNs / 1e6);
+            if (a.bfiLit + a.bfiDark > 0) {
+                port_log("vr: black frame insertion: %d sets lit, %d black, %d lit but late (a black refresh shown again in their place)", a.bfiLit,
+                         a.bfiDark, a.bfiLateLit);
+            }
+            a.bfiLit = a.bfiDark = a.bfiLateLit = 0;
             a.workSumNs = a.workMaxNs = 0;
             a.workCount = 0;
             a.waitRefreshes = a.stallRefreshes = 0;
@@ -2058,6 +2066,8 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
     p.submitted = false;
     p.space = a.appSpace;
     p.time = time;
+    p.dark = dark;
+    p.lit = black && !dark;
     // A late first step, broken down as on GLES (a few per 10 s).
     static int lateLogged = 0;
     static int64_t lateLogWindow = 0;
@@ -2092,6 +2102,11 @@ void settleVk(App& a, const XrFrameState& fs) {
     }
     if (a.vkPending.valid) {
         bool late = showPendingVk(a, fs.predictedDisplayTime, fs.shouldRender);
+        // A lit set late misses its refresh: the compositor shows the black
+        // one again in its place (a flicker), so these are counted.
+        a.bfiDark += a.vkPending.dark;
+        a.bfiLit += a.vkPending.lit;
+        a.bfiLateLit += a.vkPending.lit && late;
         if (a.paired && fs.shouldRender) updatePaceVk(a, late);
     }
 }
