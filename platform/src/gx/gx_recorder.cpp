@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -667,7 +668,19 @@ struct TexEntry {
     std::shared_ptr<TexImage> image;
     u64 dataHash = 0;
     u64 checkedFrame = ~0ull;
+    bool preloaded = false;  // made from a model as it loaded, not yet drawn
 };
+
+// Textures of models being loaded (port_gx_preload_texture), made ahead of
+// their first draw: a new area otherwise decodes and uploads a few hundred
+// textures (~18 MB) at its first frame, a hitch of ~30 ms.  The models load
+// on a loader thread while the game keeps presenting frames, so the
+// recorder makes them a few at a time at each frame end.
+struct TexPreload {
+    u32 addr, fmt, width, height, minFilter, maxLod;
+};
+std::mutex sPreloadLock;
+std::deque<TexPreload> sPreloads;
 
 struct EfbCopyInfo {
     u32 id;
@@ -1178,6 +1191,10 @@ struct Recorder final : Backend {
             }
             port_perf_tex_check(port_host_time_ns() - t0);
         }
+        if (e.preloaded) {
+            e.preloaded = false;
+            preloadHits++;
+        }
 
         auto it = frameTexIndex.find(e.image.get());
         if (it != frameTexIndex.end()) {
@@ -1231,6 +1248,105 @@ struct Recorder final : Backend {
             madvise((void*)start, end - start, MADV_POPULATE_WRITE);
         }
 #endif
+    }
+
+    // Texture preloading (TexPreload): images made at the last frame end go
+    // into this frame's texture list (their decodes have had a frame to
+    // run), so the renderer uploads them; then more are made, up to
+    // ~1.5 ms of the game thread a frame.
+    std::vector<std::shared_ptr<TexImage>> preloadUpload;
+    u64 preloadHits = 0, preloadMade = 0, preloadBytes = 0, preloadStartFrame = 0, preloadLoggedHits = 0;
+    int64_t preloadNs = 0;
+    bool preloadOn = getenv("PETARI_NOPRELOAD") == nullptr;
+
+    u32 texLevels(u32 width, u32 height, u32 minFilter, u32 maxLod) {
+        u32 levels = 1;
+        if (minFilter != 0 && minFilter != 4) {  // mipmapped filter (as resolveUnit)
+            levels = maxLod / 16 + 1;
+            u32 maxLevels = 1;
+            for (u32 w = width, h = height; w > 1 || h > 1; w = w > 1 ? w / 2 : 1, h = h > 1 ? h / 2 : 1) {
+                maxLevels++;
+            }
+            if (levels > maxLevels) {
+                levels = maxLevels;
+            }
+        }
+        return levels;
+    }
+
+    void drainPreloads() {
+        for (std::shared_ptr<TexImage>& img : preloadUpload) {
+            if (frameTexIndex.find(img.get()) == frameTexIndex.end()) {
+                frameTexIndex[img.get()] = (u32)frame->textures.size();
+                frame->textures.push_back(img);
+            }
+        }
+        preloadUpload.clear();
+        int64_t t0 = port_host_time_ns();
+        bool any = false;
+        for (;;) {
+            TexPreload p;
+            {
+                std::lock_guard<std::mutex> lock(sPreloadLock);
+                if (sPreloads.empty()) {
+                    break;
+                }
+                if (!preloadOn) {
+                    sPreloads.clear();
+                    break;
+                }
+                p = sPreloads.front();
+                sPreloads.pop_front();
+            }
+            any = true;
+            if (!preloadMade) {
+                preloadStartFrame = frameNumber;
+            }
+            TexKey key{p.addr, p.fmt, p.width, p.height, texLevels(p.width, p.height, p.minFilter, p.maxLod), 0u, 0u};
+            size_t total = 0;
+            for (u32 l = 0, w = key.width, h = key.height; l < key.levels; l++, w = w > 1 ? w / 2 : 1, h = h > 1 ? h / 2 : 1) {
+                total += texLevelSize(key.fmt, w, h);
+            }
+            const u8* src = memPtr(key.addr);
+            if (!src || !port_is_game_memory(src) || !port_is_game_memory(src + total - 1)) {
+                continue;
+            }
+            u64 hash = hashBytes(src, total);
+            TexEntry& e = texCache[key];
+            if (e.image && e.dataHash == hash) {
+                continue;  // already made (a shared texture, or still cached from before)
+            }
+            e.dataHash = hash;
+            e.checkedFrame = frameNumber;
+            e.preloaded = true;
+            e.image = std::make_shared< TexImage >();
+            capture(*e.image, src, total, key);
+            if (decodeOnGameThread()) {
+                ensureDecoded(*e.image);
+            } else {
+                queueDecode(e.image);
+            }
+            preloadUpload.push_back(e.image);
+            preloadMade++;
+            preloadBytes += total;
+            if (port_host_time_ns() - t0 > 1500000) {
+                break;
+            }
+        }
+        if (any) {
+            preloadNs += port_host_time_ns() - t0;
+            std::lock_guard<std::mutex> lock(sPreloadLock);
+            if (sPreloads.empty() && preloadMade) {
+                port_log("gx: preloaded %llu textures (%llu KB) in %.1f ms over %llu frames", (unsigned long long)preloadMade,
+                         (unsigned long long)(preloadBytes >> 10), preloadNs / 1e6, (unsigned long long)(frameNumber - preloadStartFrame + 1));
+                preloadMade = preloadBytes = 0;
+                preloadNs = 0;
+            }
+        }
+        if (preloadHits != preloadLoggedHits && frameNumber % 600 == 0) {
+            port_log("gx: preloaded textures drawn so far: %llu", (unsigned long long)preloadHits);
+            preloadLoggedHits = preloadHits;
+        }
     }
 
     // Called when the game presents a frame (VI flip).  A frame is complete
@@ -1288,6 +1404,7 @@ struct Recorder final : Backend {
         }
         resetBindings();
         snapshot();
+        drainPreloads();
         // Drop EFB copy associations that were not refreshed recently.
         for (auto it = efbCopies.begin(); it != efbCopies.end();) {
             if (frameNumber - it->second.frame > 8) {
@@ -1299,7 +1416,9 @@ struct Recorder final : Backend {
         // Keep the texture cache bounded.
         if (texCache.size() > 1024) {  // a scene uses a few hundred
             for (auto it = texCache.begin(); it != texCache.end();) {
-                if (frameNumber - it->second.checkedFrame > 600) {
+                // Preloaded textures not drawn yet are kept longer: an area
+                // can wait on a menu (star select) after it has loaded.
+                if (frameNumber - it->second.checkedFrame > (it->second.preloaded ? 7200u : 600u)) {
                     it = texCache.erase(it);
                 } else {
                     ++it;
@@ -1333,6 +1452,20 @@ extern "C" void port_gx_recorder_end_frame(void) {
     PortHostAllocScope hostAlloc;
     if (gpu::sRecorder && gpu::backend() == gpu::sRecorder) {
         gpu::sRecorder->endFrame();
+    }
+}
+
+// A texture of a model being loaded (any thread): made ahead of its first
+// draw (TexPreload).  Palette (CI) formats are left out: their palette is
+// loaded per texture unit at draw time.
+extern "C" void port_gx_preload_texture(uint32_t addr, uint32_t fmt, uint32_t width, uint32_t height, uint32_t minFilter, uint32_t maxLod) {
+    if (fmt == gpu::TF_CI4 || fmt == gpu::TF_CI8 || fmt == gpu::TF_CI14X2 || width == 0 || height == 0) {
+        return;
+    }
+    PortHostAllocScope hostAlloc;  // the loader is a game thread: the queue lives in the host heap
+    std::lock_guard<std::mutex> lock(gpu::sPreloadLock);
+    if (gpu::sPreloads.size() < 8192) {
+        gpu::sPreloads.push_back(gpu::TexPreload{addr, fmt, width, height, minFilter, maxLod});
     }
 }
 

@@ -11,6 +11,34 @@
 #include "JSystem/JUtility/JUTNameTab.hpp"
 #include <stdint.h>
 
+#ifdef TARGET_PC
+#include <revolution/os.h>
+#include "port/port.h"
+extern "C" void port_gx_preload_texture(uint32_t addr, uint32_t fmt, uint32_t width, uint32_t height, uint32_t minFilter, uint32_t maxLod);
+
+// The model's textures, handed to the GX recorder to be decoded and uploaded
+// before their first draw.  The values are the ones loadTexNo (J3DTevs.cpp)
+// writes to the texture registers, so they match the recorder's cache key.
+static void preloadTextures(const J3DTexture* tex) {
+    static const u8 filt[6] = {0x00, 0x04, 0x01, 0x05, 0x02, 0x06};  // GX2HWFiltConv
+    for (u16 i = 0; tex != NULL && i < tex->getNum(); i++) {
+        const ResTIMG* r = tex->getResTIMG(i);
+        if (r->mImageDataOffset == 0) {
+            continue;
+        }
+        const u8* image = (const u8*)r + r->mImageDataOffset;
+        if (!port_is_game_memory(image)) {
+            continue;
+        }
+        u32 addr = ((OSCachedToPhysical(image) >> 5) & 0xFFFFFF) << 5;
+        u32 minFilter = r->mMinType < 6 ? filt[r->mMinType] : 0;
+        f32 maxLod = 16.0f * (static_cast< s8 >(r->mMaxLod) * 0.125f);
+        port_gx_preload_texture(addr, r->mFormat & 0x0f, ((r->mWidth - 1) & 0x3FF) + 1, ((r->mHeight - 1) & 0x3FF) + 1, minFilter,
+                                maxLod > 0.0f ? (u8)maxLod : 0);
+    }
+}
+#endif
+
 J3DModelLoader::J3DModelLoader()
     : mpModelData(NULL), mpMaterialTable(NULL), mpShapeBlock(NULL), mpMaterialBlock(NULL), mpModelHierarchy(NULL), field_0x18(0), mEnvelopeSize(0) {
     /* empty function */
@@ -464,6 +492,9 @@ void J3DModelLoader::readTexture(J3DTextureBlock const* i_block) {
         mpMaterialTable->mTextureName = NULL;
     }
     mpMaterialTable->mTexture = new J3DTexture(texture_num, texture_res);
+#ifdef TARGET_PC
+    preloadTextures(mpMaterialTable->mTexture);
+#endif
 }
 
 void J3DModelLoader_v26::readMaterialTable(J3DMaterialBlock const* i_block, u32 i_flags) {
@@ -510,6 +541,9 @@ void J3DModelLoader::readTextureTable(J3DTextureBlock const* i_block) {
         mpMaterialTable->mTextureName = NULL;
     }
     mpMaterialTable->mTexture = new J3DTexture(texture_num, texture_res);
+#ifdef TARGET_PC
+    preloadTextures(mpMaterialTable->mTexture);
+#endif
 }
 
 void J3DModelLoader::readPatchedMaterial(J3DMaterialBlock const* i_block, u32 i_flags) {

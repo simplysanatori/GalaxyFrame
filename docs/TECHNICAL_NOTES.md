@@ -109,7 +109,7 @@ The diorama puts the game's world in front of you at a scale and height you set.
 
 ### Area loads and thread priority
 
-Textures are decoded on two helper threads instead of the game thread, and the frame buffers are allocated and mapped ahead of use. The slowest game frame at an area load dropped from about 35 ms to about 20 ms.
+Textures are decoded on two helper threads instead of the game thread, and the frame buffers are allocated and mapped ahead of use. The slowest game frame at an area load dropped from about 35 ms to about 20 ms. Model textures are also made ahead: as a model loads (`J3DModelLoader`), its textures go to the recorder, which decodes and uploads a few of them at each frame while the area loads, so its first frame finds most of them ready. Palette (CI) textures are left to their first draw, since their palette is loaded per texture unit. `PETARI_NOPRELOAD=1` turns this off for comparison; the log reports `gx: preloaded N textures` per load.
 
 The game threads, the frame loop and the frame preparation worker ask RealtimeKit (over D-Bus) for nice -15 and fall back to nice -8, the lowest the system allows without it (`platform/src/port/thread_prio.cpp`). Without a raised priority the game thread sometimes lost the CPU for 10 ms or more, which showed as a repeated frame. `PETARI_THREADPRIO=rt` makes the main game thread real-time (SCHED_RR 5, dropped back before RealtimeKit's CPU limit); `nice` and `off` are also accepted. The default stays at nice -15 because SteamVR's compositor threads are not real-time.
 
