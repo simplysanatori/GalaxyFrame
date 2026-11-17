@@ -1072,7 +1072,14 @@ void GlImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         } else {
             setBlend(false, 0, 0, 0, 0, 0, 0, 0.0f);
         }
-        setDepth(it.depthTest, toGlCompareFunc(it.depthFunc), it.depthTest && it.depthWrite);
+        // A sky in VR writes no depth: its layers all stand at one depth
+        // just short of the far plane (the vertex shader), where the division
+        // by w rounds by about a step of the 24-bit depth, so a layer over
+        // another (Sweet Sweet Galaxy's clouds over its sea) failed the depth
+        // test a triangle or a row at a time and the layer below showed.
+        // Without depth they keep their draw order, behind the scenery
+        // (upstream 3d55c35).
+        setDepth(it.depthTest, toGlCompareFunc(it.depthFunc), it.depthTest && it.depthWrite && !(vrEye && it.sky));
         setCull(it.cull, toGlCullFace(it.cullFace));
         if (tagPlayer) {
             setStencil(!toHudTarget && it.depthTest && it.depthWrite, it.player ? 1 : 0);

@@ -36,7 +36,7 @@ inline float s11(u32 v) {
 }
 
 bool sameBatchState(const Item& a, const Item& b) {
-    if (a.uid != b.uid || a.prim != b.prim || a.useVr != b.useVr || a.hud != b.hud || a.player != b.player || a.flags != b.flags) return false;
+    if (a.uid != b.uid || a.prim != b.prim || a.useVr != b.useVr || a.hud != b.hud || a.player != b.player || a.sky != b.sky || a.flags != b.flags) return false;
     if (a.blend != b.blend || a.colorMask != b.colorMask || a.depthTest != b.depthTest || a.depthWrite != b.depthWrite || a.cull != b.cull ||
         a.dstAlpha != b.dstAlpha)
         return false;
@@ -637,6 +637,7 @@ void Builder::build(std::shared_ptr<const Frame> frame, Prepared& out) {
             it.flags = flags;
             it.hud = inHud;
             it.player = inPlayer;
+            it.sky = inSky;
             it.prim = topo;
             // Viewport (native EFB coordinates, top-left origin).
             float sx = bitsToFloat(xfRegs[0x1A]), sy = bitsToFloat(xfRegs[0x1B]);

@@ -1196,7 +1196,7 @@ int VkImpl::deadDraws(const VkPrepared& P, HudMode hudMode, bool tagPlayer, bool
         BlendState bs;
         blendState(it, false, bs);
         u8 writes = ((bs.colorMask & 7) ? kRgb : 0) | ((bs.colorMask & 8) ? kA : 0);
-        if (it.depthTest && it.depthWrite) writes |= kZ | (tagPlayer ? kS : 0);
+        if (it.depthTest && it.depthWrite && !it.sky) writes |= kZ | (tagPlayer ? kS : 0);  // only run for VR eyes: a sky writes no depth there
         if (!(writes & live)) {
             deadItem[k] = 1;
             n++;
@@ -1890,7 +1890,14 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
             vkCmdSetColorBlendEquationEXT(cmd, 0, 1, &eq);
             ds.eq = eq;
         }
-        u32 depthOn = it.depthTest ? 1 : 0, depthWrite = it.depthTest && it.depthWrite ? 1 : 0;
+        // A sky in VR writes no depth: its layers all stand at one depth
+        // just short of the far plane (the vertex shader), where the division
+        // by w rounds by about a step of the 24-bit depth, so a layer over
+        // another (Sweet Sweet Galaxy's clouds over its sea) failed the depth
+        // test a triangle or a row at a time and the layer below showed.
+        // Without depth they keep their draw order, behind the scenery
+        // (upstream 3d55c35; the GLES renderer does the same).
+        u32 depthOn = it.depthTest ? 1 : 0, depthWrite = it.depthTest && it.depthWrite && !(vrEye && it.sky) ? 1 : 0;
         if (ds.depthTest != depthOn) {
             vkCmdSetDepthTestEnableEXT(cmd, depthOn);
             pc.dyn++;
@@ -1921,7 +1928,7 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
             pc.dyn++;
             ds.stencilTest = stencilOn;
         }
-        bool stencilWrite = tagPlayer && !toHudTarget && it.depthTest && it.depthWrite;
+        bool stencilWrite = tagPlayer && !toHudTarget && depthWrite;
         u32 wmask = stencilWrite ? 0xFF : 0;
         if (ds.stencilWrite != wmask) {
             vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, wmask);

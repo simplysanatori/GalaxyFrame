@@ -58,6 +58,7 @@ struct Item {
     Prim prim;
     u8 useVr, hud;
     u8 player;         // between the player markers (SpaceWarp stencil tag)
+    u8 sky;            // a 3D draw between the sky markers (VR: drawn round the eye, at the far plane)
     u32 flags;
     u32 firstWord;     // first vertex, as a word offset into the frame's vertex data
     u32 endWord;       // end of the last merged draw's vertices
