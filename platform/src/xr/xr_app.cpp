@@ -165,6 +165,7 @@ struct App {
     int lateRefreshes = 0;     // of those, missed while the frame loop's own work ran late
     int64_t skipLogAt = 0;
     int64_t workStartNs = 0, lastWorkNs = 0;
+    int64_t beginDoneNs = 0;  // after xrBeginFrame (the late first step's breakdown)
     int64_t workSumNs = 0, workMaxNs = 0;  // the refreshes' work since the last pacing log
     int workCount = 0;
     int waitRefreshes = 0, stallRefreshes = 0;  // ... and its waits for the GPU (at a release, while recording)
@@ -2000,6 +2001,7 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
     // The refresh that starts a game frame (all of them but every second one
     // at 120 Hz with eyes every refresh): input, the game's retrace.
     bool gameRefresh = !paired || !a.vkEvery || (a.vkPhase++ & 1) == 0;
+    int64_t tIn0 = port_host_time_ns();
     // For the next refresh's display time (the runtime's frame period away
     // when it is not pacing at 120 Hz).
     XrTime time = fs.predictedDisplayTime + (paired ? refresh : period);
@@ -2008,10 +2010,12 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
     } else {
         updateAimVk(a, time);
     }
+    int64_t tIn1 = port_host_time_ns();
     XrView views[2];
     locateViews(a, time, views);
     vr::FrameInfo frame = frameInfo(a, views, time);
     frame.newFrameDue = gameRefresh;
+    int64_t tViews = port_host_time_ns();
     locateGaze(a, time, frame);
     // One eye's share of the GPU: both eyes on every refresh beside the
     // compositor.  At 120 Hz that holds while the pacing renders every second
@@ -2053,8 +2057,13 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
             lateLogged = 0;
         }
         if (lateLogged++ < 3) {
-            port_log("vr: late first step: %.1f ms (before pickup %.1f, pickup %.1f, acquire %.1f, both eyes %.1f)", (t3 - a.workStartNs) / 1e6,
-                     (t0 - a.workStartNs) / 1e6, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6);
+            // Before pickup: xrBeginFrame, the frame's setup (space,
+            // passthrough), input (xrSyncActions and its locates), the views,
+            // the gaze.
+            port_log("vr: late first step: %.1f ms (before pickup %.1f: begin %.1f, setup %.1f, input %.1f, views %.1f, gaze %.1f; pickup %.1f, acquire %.1f, "
+                     "both eyes %.1f)",
+                     (t3 - a.workStartNs) / 1e6, (t0 - a.workStartNs) / 1e6, (a.beginDoneNs - a.workStartNs) / 1e6, (tIn0 - a.beginDoneNs) / 1e6,
+                     (tIn1 - tIn0) / 1e6, (tViews - tIn1) / 1e6, (t0 - tViews) / 1e6, (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t3 - t2) / 1e6);
         }
     }
     maybeSaveShot(a, a.eyes[p.set], p.rect, idx);
@@ -2138,6 +2147,7 @@ void renderFrame(App& a) {
     a.workStartNs = port_host_time_ns();
     XrFrameBeginInfo bi{XR_TYPE_FRAME_BEGIN_INFO};
     XR_CHECK(xrBeginFrame(a.session, &bi));
+    a.beginDoneNs = port_host_time_ns();
     updateAppSpace(a, fs.predictedDisplayTime);
     updatePassthrough(a);
     // The refresh_rate setting changed on the settings panel.
