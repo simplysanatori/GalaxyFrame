@@ -70,8 +70,6 @@ layout(push_constant) uniform PC {
     vec4 wipeColor;  // linear colour, w = width / height of the eye
     vec4 casScale;   // xy: diorama pixels per eye image pixel; z: the boost (1 = none)
     vec4 vigMap;     // image position to the tangent of the view angle
-    vec4 bfi;        // black frame insertion: gaze tangents, inner and outer angle (outer 0: the whole view)
-    vec4 bfi2;       // x: the black refresh (1), y: the periphery's share on it
 } pc;
 #define uBrightness pc.params.x
 #define uVignette pc.params.y
@@ -105,24 +103,13 @@ void main() {
         float inside = 1.0 - smoothstep(r - 0.015, r, length((vUv - uWipe.zw) * vec2(uWipeColor.w, 1.0)));
         c = mix(uWipeColor.rgb, c, inside);
     }
-    if (uBoost > 1.0 || pc.bfi2.x > 0.5) {
-        // Black frame insertion (vr_draw.h): m is 0 round the gaze, 1 outside.
-        float m = 0.0;
-        if (pc.bfi.w > 0.0) {
-            vec3 here = normalize(vec3(d.x * uVigMap.x + uVigMap.y, d.y * uVigMap.z + uVigMap.w, 1.0));
-            vec3 gaze = normalize(vec3(pc.bfi.xy, 1.0));
-            m = smoothstep(pc.bfi.z, pc.bfi.w, acos(clamp(dot(here, gaze), -1.0, 1.0)));
-        }
-        if (pc.bfi2.x > 0.5) {
-            c *= m * pc.bfi2.y;  // the black refresh
-        } else {
-            // The boost: the gain up to a knee (linear 0.75), then a shoulder
-            // that eases into white with the same slope there, so bright
-            // colours keep their shading instead of clipping.
-            vec3 x = c * uBoost;
-            const float k = 0.75;
-            c = mix(min(x, vec3(k)) + (1.0 - k) * (1.0 - exp(-max(x - k, 0.0) / (1.0 - k))), c, m);
-        }
+    if (uBoost > 1.0) {
+        // Black frame insertion's boost: the gain up to a knee (linear 0.75),
+        // then a shoulder that eases into white with the same slope there,
+        // so bright colours keep their shading instead of clipping.
+        vec3 x = c * uBoost;
+        const float k = 0.75;
+        c = min(x, vec3(k)) + (1.0 - k) * (1.0 - exp(-max(x - k, 0.0) / (1.0 - k)));
     }
     oColor = vec4(c * uBrightness, 1.0);
 }
@@ -386,10 +373,7 @@ struct BlitPush {
     float wipeColor[4];
     float casScale[4];
     float vigMap[4];
-    float bfi[4];
-    float bfi2[4];
 };
-static_assert(sizeof(BlitPush) <= 128, "the push constant range is 128 bytes");
 struct QuadPush {
     float mvp[16];
     float params[4];
@@ -501,12 +485,6 @@ public:
         pc.params[2] = c.casPeak;
         pc.params[3] = (float)mH;
         pc.casScale[2] = c.boost;
-        pc.bfi[0] = c.bfiGaze[0];
-        pc.bfi[1] = c.bfiGaze[1];
-        pc.bfi[2] = c.bfiInner;
-        pc.bfi[3] = c.bfiOuter;
-        pc.bfi2[0] = c.bfiDark ? 1.0f : 0.0f;
-        pc.bfi2[1] = c.bfiPeriphery;
         memcpy(pc.vigMap, c.vigMap, sizeof(pc.vigMap));
         memcpy(pc.wipe, c.wipe, sizeof(pc.wipe));
         memcpy(pc.wipeColor, c.wipeColor, sizeof(pc.wipeColor));

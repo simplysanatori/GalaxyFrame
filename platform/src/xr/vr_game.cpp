@@ -155,16 +155,6 @@ struct InBetween {
     double loggedAt = 0.0;
 } sIb;
 float sBlackBoost = 1.5f;
-// black_frame_area: the black covers this many degrees round the eye-tracked
-// gaze (fading out over 10 more); outside, the black refresh shows the lit
-// picture again at (boost - 1) of its light, which flickers far less at the
-// same mean light.  0, or no gaze: the whole view.
-float sBlackArea = 15.0f;
-// The lit refresh's composite of each eye, for the black refresh after it.
-vrdraw::Composite sLitComp[2];
-vr::Extent sLitUsed[2];
-int sLitSize[2][2] = {};  // the eye target's size it was drawn from
-bool sLitValid[2] = {false, false};
 bool sBlackFramesOn = false;  // in effect for this refresh (vr::setBlackFrames)
 #ifdef __ANDROID__
 float sMinScale = 0.8f;       // lowest render scale (min_resolution)
@@ -757,7 +747,6 @@ vr::Setting sSettings[] = {
     {"in_between_frames", 0.0f, 1.0f, 0.0f, FLAG(sInBetween)},
     {"black_frames", 0.0f, 1.0f, 0.0f, FLAG(sBlackFrames)},
     {"black_frame_boost", 1.0f, 2.0f, 0.0f, NUMBER(sBlackBoost)},
-    {"black_frame_area", 0.0f, 60.0f, 0.0f, NUMBER(sBlackArea)},
     {"giant_screen", 0.0f, 1.0f, 0.0f, FLAG(sGiantScreen)},
     {"screen_distance", 1.0f, 20.0f, 0.0f, NUMBER(sScreenDistance)},
     {"passthrough", 0.0f, 1.0f, 0.0f, FLAG(sPassthrough)},
@@ -1371,6 +1360,13 @@ void setBlackFrames(bool on) {
     if (on != sBlackFramesOn) port_log("vr: black frame insertion %s (boost %.1f)", on ? "on" : "off", sBlackBoost);
     sBlackFramesOn = on;
 }
+Extent darkEye(const gpu::EfbTarget& dst, int width, int height) {
+    vrdraw::Draw& draw = vrdraw::draw();
+    draw.beginTarget(dst, width, height, true);
+    draw.clear(0.0f, 0.0f, 0.0f, 1.0f);
+    draw.endTarget();
+    return Extent{width, height};
+}
 void setHalfRate(bool half) { sHalfRate = half; }
 bool renderScaleAtMin() { return sScaled == kNoScale || activeScale() <= scaleMin() + 0.001f; }
 int sRecommendedEyeWidth = 0;
@@ -1657,49 +1653,6 @@ float recentEyeGpuMs(int* count) {
     return avg;
 }
 
-// Black frame insertion round the gaze: the eye's gaze as the tangents the
-// composite's vigMap gives, and the angles of black_frame_area (the whole
-// view without a gaze or at 0).
-void setBlackFrameGaze(vrdraw::Composite& c, const FrameInfo& frame, int eye) {
-    static int sLogged = -1;
-    bool round = frame.gazeValid && sBlackArea > 0.5f;
-    if ((int)round != sLogged) {
-        port_log("vr: black frame insertion %s", round ? "round the eye-tracked gaze" : "over the whole view (no gaze, or black_frame_area 0)");
-        sLogged = round;
-    }
-    if (!round) {
-        c.bfiOuter = 0.0f;
-        return;
-    }
-    c.bfiGaze[0] = frame.gaze[eye][0] * c.vigMap[0] + c.vigMap[1];
-    c.bfiGaze[1] = frame.gaze[eye][1] * c.vigMap[2] + c.vigMap[3];
-    c.bfiInner = sBlackArea * (float)M_PI / 180.0f;
-    c.bfiOuter = (sBlackArea + 10.0f) * (float)M_PI / 180.0f;
-}
-
-Extent darkEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int width, int height) {
-    vrdraw::Draw& draw = vrdraw::draw();
-    // The lit refresh's picture again, black round the gaze and dimmed
-    // outside (vr_draw.h), when the eye target still holds it; else all black.
-    bool again = sLitValid[eye] && sLitComp[eye].bfiOuter > 0.0f && sLitSize[eye][0] == sEye[eye].width && sLitSize[eye][1] == sEye[eye].height &&
-                 sLitUsed[eye].width <= width && sLitUsed[eye].height <= height;
-    Extent used = again ? sLitUsed[eye] : Extent{width, height};
-    draw.beginTarget(dst, used.width, used.height, true);
-    if (again) {
-        vrdraw::Composite c = sLitComp[eye];
-        setBlackFrameGaze(c, frame, eye);
-        c.bfiDark = true;
-        c.bfiPeriphery = fminf(1.0f, fmaxf(0.0f, sBlackBoost - 1.0f));
-        if (c.bfiOuter <= 0.0f) c.bfiPeriphery = 0.0f;
-        draw.composite(c);
-    } else {
-        draw.clear(0.0f, 0.0f, 0.0f, 1.0f);
-    }
-    draw.endTarget();
-    sLitValid[eye] = false;  // one black refresh per lit one
-    return used;
-}
-
 Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int width, int height) {
     int64_t eyeStartNs = port_host_time_ns();
     sWipeDim = 0.0f;
@@ -1832,14 +1785,6 @@ Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int
         comp.wipeColor[1] = lin((wipeRgb >> 8) & 255);
         comp.wipeColor[2] = lin(wipeRgb & 255);
         comp.wipeColor[3] = (float)used.width / (float)used.height;
-        if (sBlackFramesOn) {
-            setBlackFrameGaze(comp, frame, eye);
-            sLitComp[eye] = comp;
-            sLitUsed[eye] = used;
-            sLitSize[eye][0] = sEye[eye].width;
-            sLitSize[eye][1] = sEye[eye].height;
-            sLitValid[eye] = true;
-        }
         draw.composite(comp);
         draw.profileMark("panels");
         if (!sUiLayers) {

@@ -169,9 +169,7 @@ struct App {
     int64_t workSumNs = 0, workMaxNs = 0;  // the refreshes' work since the last pacing log
     int workCount = 0;
     int waitRefreshes = 0, stallRefreshes = 0;  // ... and its waits for the GPU (at a release, while recording)
-    int bfiLit = 0, bfiDark = 0, bfiLateLit = 0;
-    XrPosef litPose[2] = {{{0, 0, 0, 1}, {0, 0, 0}}, {{0, 0, 0, 1}, {0, 0, 0}}};  // the last rendered eyes' views
-    XrFovf litFov[2] = {};  // black frame insertion's sets shown (5 s): lit, black, lit but late
+    int bfiLit = 0, bfiDark = 0, bfiLateLit = 0;  // black frame insertion's sets shown (5 s): lit, black, lit but late
     int64_t waitNs = 0, stallNs = 0;  // the last refresh's work, from xrWaitFrame to xrEndFrame
     bool warp = false;          // SpaceWarp: each frame goes out with motion vectors
     int warpFrames = 0;         // frames since SpaceWarp started (the first few are logged)
@@ -2058,16 +2056,10 @@ void renderEyesVk(App& a, const XrFrameState& fs, XrDuration refresh, XrDuration
     int64_t t2 = port_host_time_ns();
     for (int e = 0; e < 2; e++) {
         Swapchain& sc = a.eyes[p.set][e];
-        vr::Extent used = dark ? vr::darkEye(e, frame, sc.images[idx[e]], sc.width, sc.height) : vr::renderEye(e, frame, sc.images[idx[e]], sc.width, sc.height);
+        vr::Extent used = dark ? vr::darkEye(sc.images[idx[e]], sc.width, sc.height) : vr::renderEye(e, frame, sc.images[idx[e]], sc.width, sc.height);
         p.rect[e] = {used.width, used.height};
-        // The black refresh's picture outside the gaze is the lit one's: it
-        // goes out with the lit one's views, for the compositor to move.
-        p.pose[e] = dark ? a.litPose[e] : views[e].pose;
-        p.fov[e] = dark ? a.litFov[e] : views[e].fov;
-        if (!dark) {
-            a.litPose[e] = views[e].pose;
-            a.litFov[e] = views[e].fov;
-        }
+        p.pose[e] = views[e].pose;
+        p.fov[e] = views[e].fov;
         if (e == 0) {
             xrgfx::gfx().submit();  // the GPU starts on the left eye while the right one is recorded
         }
