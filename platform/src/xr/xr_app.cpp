@@ -1143,7 +1143,10 @@ void updateInput(App& a, XrTime time) {
     xm::Vec3 aimFrom{0, 0, 0}, aimDir{0, 0, 0};
     bool aimOriented = XR_SUCCEEDED(xrLocateSpace(a.aimSpace[hm], a.appSpace, time, &loc)) &&
                        (loc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT);
-    bool aimTracked = aimOriented && (loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT);
+    // Without input focus (SteamVR's menu is open) the runtime still tracks
+    // the controller, but the ray is the menu's: ours goes, or it was drawn
+    // through the game picture over SteamVR's own.
+    bool aimTracked = a.focused && aimOriented && (loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT);
     xm::Quat aimQ{loc.pose.orientation.x, loc.pose.orientation.y, loc.pose.orientation.z, loc.pose.orientation.w};
     if (aimOriented) {
         const xm::Vec3 down{0.0f, -1.0f, 0.0f};  // the app space is gravity aligned
@@ -1162,7 +1165,7 @@ void updateInput(App& a, XrTime time) {
         // the laser goes (rather than freezing where it was) and the game's
         // pointer leaves the screen until it is back.
         a.aimTracked = aimTracked;
-        port_log("vr: %s controller aim %s", hm ? "right" : "left", aimTracked ? "tracked again" : "lost");
+        port_log("vr: %s controller aim %s", hm ? "right" : "left", aimTracked ? "tracked again" : a.focused ? "lost" : "handed to the system menu");
         if (!aimTracked) {
             vr::pointerLost();
         }
