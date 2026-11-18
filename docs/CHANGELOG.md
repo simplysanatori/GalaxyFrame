@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.2.0 (November 2026)
+
+Smoother motion, the diorama through Launch Star flights, and the clean-up promised in #1.
+
+### Refresh rate fixes
+
+- *In-between frames* (Display tab, on by default). The game makes 60 frames a second and the Frame shows 120, so Mario moved in steps while the world around him glided, and he looked doubled or soft when he ran or flew. Mario is now drawn moving on the refreshes in between. Enemies, platforms and effects move at the game's 60.
+- *Black frame insertion* (Display tab, off by default). Each game frame is followed by a black refresh, so everything that moves looks sharp, not only Mario. The view is dimmer and flickers at 60 Hz.
+- Dynamic resolution. In busy scenes the resolution drops between *Lowest resolution* and *Highest resolution* (0.8 and 0.9 by default) before the game falls back to 60 Hz. The two rows replace the single *Resolution* row on the Display tab.
+- The game's built-in foveated rendering is removed. It blurred the edges of the view too much. GalaxyFrame now relies on SteamVR's eye-tracked foveation.
+
+### Diorama view changes
+
+- Launch Star flights, pipes and galaxy arrivals stay in the diorama. Mario stays in the middle, and the view follows the game camera's shots, taking each new shot behind a short blink. *Diorama in flights* on the Cutscenes tab puts them back on the flat screen.
+- The Comet Observatory's canopy and tower, and other things behind the game camera, no longer show up flat grey or black (a fog fix from GalaxyQuest 0.1.10).
+- The coin, Star Bit, life and star counters no longer ring the save window. *Counters* on the Diorama tab hides them in the diorama altogether.
+
+### Optimizations
+
+- A new area's textures are made while it loads, so its first moments no longer hitch.
+- Changing the resolution no longer hitches: the sizes it can switch to are made behind the loading screen.
+
+### Fixed
+
+- The game's laser no longer shows over SteamVR's menu, so the menu's own pointer can be used.
+
+### From GalaxyQuest 0.1.10
+
+- Fur, grass, particles, sky layers and effect colours are drawn right.
+- The fog fix above.
+
 ## 1.1.2 (November 2026)
 
 A quick fix for a black screen after getting a Power Star in the diorama.

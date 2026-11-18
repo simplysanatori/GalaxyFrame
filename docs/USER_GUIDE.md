@@ -18,7 +18,7 @@ You need your own Super Mario Galaxy disc. No game data is in this repository or
 
 ## Known issues
 
-Version 1.1.2 is the current release. It has been played on one Steam Frame (SteamOS 0.4.5, SteamVR 2.18) with the US disc.
+Version 1.2.0 is the current release. It has been played on one Steam Frame (SteamOS 0.5.9, SteamVR 2.19) with the US disc.
 
 - Mario and the world move at the game's 60 frames a second. On the 120 Hz display an object your eye follows can look doubled along its movement. Head movement is not affected.
 - A new area still hitches briefly while its textures upload. Compiling the shaders ahead of play (Install, step 5 in the README) removes the shader part of it.
@@ -83,11 +83,11 @@ More on the controls (tilt, pointing, the diorama's height and size, left-handed
 
 ## Settings
 
-Press Menu or View in the game. The pause menu opens, with the VR settings panel to its right. Aim the right controller at it and press A. The panel has six tabs: Diorama, Screen, Cutscenes, Controls, Comfort and Display. The Cutscenes tab has a switch per kind of scene (Power Stars, bosses and enemies, the Comet Observatory, the storybook, Lumas and friends, Mario's changes, other scenes): on, the scene plays in the diorama following its own camera; off, on the flat screen. Lumas and friends is off by default. Launch Star flights, pipes and arrivals are shown on the flat screen. The Controls tab has *Shake to spin* (on by default) and *Shake strength* (20 % to 160 %, 100 % by default; lower needs a gentler flick). Each setting has a short description under it, and everything on the panel is also in `~/.local/share/GalaxyFrame/petari_vr.ini`, with a comment on each line.
+Press Menu or View in the game. The pause menu opens, with the VR settings panel to its right. Aim the right controller at it and press A. The panel has six tabs: Diorama, Screen, Cutscenes, Controls, Comfort and Display. The Cutscenes tab has a switch per kind of scene (Power Stars, bosses and enemies, the Comet Observatory, the storybook, Lumas and friends, Mario's changes, other scenes): on, the scene plays in the diorama following its own camera; off, on the flat screen. Lumas and friends is off by default. *Diorama in flights* keeps Launch Star flights, pipes and arrivals in the diorama (on by default), following the game camera's shots. The Controls tab has *Shake to spin* (on by default) and *Shake strength* (20 % to 160 %, 100 % by default; lower needs a gentler flick). Each setting has a short description under it, and everything on the panel is also in `~/.local/share/GalaxyFrame/petari_vr.ini`, with a comment on each line.
 
 Two settings matter most:
 
-- **Resolution** (Display tab), 0.90 by default. 1.00 is the eye size SteamVR's own resolution setting gives the game (1728 pixels per eye at SteamVR's 100 % on the Frame); the panel shows the pixels. At 0.90 the game renders both eyes on every refresh with some headroom. If the GPU falls behind in a heavy scene, it renders new eyes every second refresh until the scene is lighter again, and the log says when.
+- **Lowest resolution** and **Highest resolution** (Display tab), 0.80 and 0.90 by default. 1.00 is the eye size SteamVR's own resolution setting gives the game (1728 pixels per eye at SteamVR's 100 % on the Frame); the panel shows the pixels. The game renders at the highest while the GPU has time to spare and steps down towards the lowest in heavy scenes. If it still falls behind at the lowest, it renders new eyes every second refresh until the scene is lighter again, and the log says when.
 - **Comfort vignette** (Comfort tab). It darkens the edges of the view whenever it moves: a clear circle around where you look, closing in with speed. The two sliders set how dark it gets at the slowest and at the fastest movement; the fast value is never below the slow one. 0 turns it off.
 
 Every setting, tab by tab, and every line of `petari_vr.ini` is described in [CONTROLS.md](CONTROLS.md#vr-settings).

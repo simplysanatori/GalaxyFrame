@@ -31,11 +31,11 @@ Nothing is streamed from a PC.
    cd GalaxyFrame
    ```
 
-2. Download `galaxyframe-1.1.2-linux-arm64.tar.gz` and `SHA256SUMS` from [Releases](https://github.com/simplysanatori/GalaxyFrame/releases). With Steam running, check and install:
+2. Download `galaxyframe-1.2.0-linux-arm64.tar.gz` and `SHA256SUMS` from [Releases](https://github.com/simplysanatori/GalaxyFrame/releases). With Steam running, check and install:
 
    ```sh
    (cd ~/Downloads && sha256sum -c --ignore-missing SHA256SUMS)
-   steam-frame/install.sh ~/Downloads/galaxyframe-1.1.2-linux-arm64.tar.gz
+   steam-frame/install.sh ~/Downloads/galaxyframe-1.2.0-linux-arm64.tar.gz
    ```
 
 3. Convert your disc:
@@ -98,7 +98,7 @@ steam-frame/uninstall.sh
 
 - **A setup screen asks for game files.** Run `steam-frame/prepare-game.sh` (step 3).
 - **Motion ghosts.** In SteamVR, check 120 Hz and motion smoothing off.
-- **Heavy scenes stutter.** Set **Resolution** to 0.8 on the **Display** tab.
+- **Heavy scenes stutter.** Lower **Lowest resolution** on the **Display** tab.
 
 ## Reporting a problem
 
