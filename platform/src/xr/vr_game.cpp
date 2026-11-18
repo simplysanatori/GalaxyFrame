@@ -168,7 +168,7 @@ bool sComfortVignette = true;  // a gentle vignette for every smooth movement of
 // mario, other, event camera).
 bool sCutsceneDiorama[8] = {true, true, true, true, false, true, true, true};  // Lumas and friends off by default
 bool sDioramaCounters = true;      // the coin, Star Bit, lives and star counters and the health meter show in the diorama (diorama_counters)
-bool sDioramaTransitions = false;  // launch stars, pipes and arrivals stay in the diorama (diorama_transitions; off and off the panel for now)
+bool sDioramaTransitions = true;  // launch stars, pipes and arrivals stay in the diorama (diorama_transitions)
 float sStarBitSpeed = 3.0f;   // how fast shot Star Bits fly, 1 = as in the game (star_bit_speed)
 bool sSmoothTurn = true;      // the right stick turns the diorama smoothly, not in steps (smooth_turn)
 // The stick's smooth turn (rad/s) and when it was set (host ns): input comes

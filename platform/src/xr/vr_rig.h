@@ -49,6 +49,8 @@ struct RigParams {
     float landingHalfLife = 0.25f;           // seconds: back on Mario after landing
     float minPitch = -1.0472f;               // radians (-60 deg): the view from below Mario's level
     float maxPitch = 1.309f;                 // radians (75 deg): from above; also kept under 88 deg of eye elevation
+    float transitCutAngle = 0.5f;            // radians (29 deg) the game camera turns in one frame: a cut in a transit
+    float transitPosHalfLife = 0.04f;        // seconds: Mario held close in a flight
 };
 
 struct RigState {
@@ -90,6 +92,11 @@ struct RigState {
     // The extra tilt (radians, like pitch) that gives the game camera's height
     // during a transit; eases back to 0 afterwards.
     float transitPitch = 0.0f;
+    // The game camera's back axis at the last update: in a transit, a jump
+    // of more than transitCutAngle is one of its cuts, which the diorama
+    // takes at once (behind a blink) instead of swinging the world there.
+    xm::Vec3 lastCamBack{0, 0, 1};
+    bool camSeen = false;
     float floorLeft = 0.0f;  // seconds the tilt may still rise to the minimum eye elevation after a scene
     // The stick's click: the stick tilt eases back to level over half a
     // second, unless the stick tilts again.  Set by the caller, cleared here.

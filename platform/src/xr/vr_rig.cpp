@@ -59,9 +59,11 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
     }
     // A transit or an arrival kept in the diorama (diorama_transitions): the
     // game camera drives the view as the screen would show it: its up, its
-    // watch point as the pivot, its yaw and its pitch, all smoothed.  When it
-    // ends the pivot returns to Mario and the up settles to his without
-    // blinks; the yaw and the tilt stay as the scene left them.
+    // yaw and its pitch, smoothed between its cuts and taken at once (behind
+    // a blink) on each cut, with Mario held at the pivot.  Swinging the world
+    // after every cut at a comfortable speed left the view on an old shot
+    // for seconds, away from Mario.  When it ends the up settles to Mario's
+    // without blinks; the yaw and the tilt stay as the scene left them.
     const bool transit = (cam.flags & kCameraTransit) != 0;
     if (!rig.valid) {
         rig.inTransit = rig.settle = false;
@@ -97,6 +99,12 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
         if (rig.settleLeft <= 0.0f || acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(rig.up, up)))) < 0.1f) rig.settle = false;
     }
     const bool quiet = transit || rig.settle;  // no blink for a change of up: it glides
+    // One of the game camera's cuts during a transit (or the transit
+    // starting on a new shot).
+    const bool camCut = transit && rig.valid && rig.camSeen &&
+                        acosf(fminf(1.0f, fmaxf(-1.0f, xm::dot(xm::normalize(camBack), rig.lastCamBack)))) > params.transitCutAngle;
+    rig.lastCamBack = xm::normalize(camBack);
+    rig.camSeen = true;
     // The game camera's facing along the ground: the yaw the diorama takes on
     // a cut.  The more the camera looks down, the more its up vector (the top
     // of the picture) says it: seen from straight above, as over the Dino
@@ -120,11 +128,12 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
     bool centre = player && (cam.flags & PORT_GX_CAMERA_CENTRE_PLAYER) != 0;
     if (centre) {
         xm::Vec3 p = vec(cam.player);
-        if (rig.valid && rig.centred && !(cam.flags & PORT_GX_CAMERA_GROUNDED)) {
+        if (rig.valid && rig.centred && !transit && !(cam.flags & PORT_GX_CAMERA_GROUNDED)) {
             rig.lift = fminf(params.jumpDeadZone, fmaxf(0.0f, rig.lift + xm::dot(p - rig.lastPlayer, up)));
         } else {
             rig.lift -= rig.lift * blend(dt, params.landingHalfLife);
         }
+        if (transit) rig.lift = 0.0f;  // a flight: Mario himself
         rig.lastPlayer = p;
         target = p - up * rig.lift;
     }
@@ -153,7 +162,7 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
     rig.relevel = false;
     flip = flip && !quiet;
     bool snapTurn = rig.valid && rig.pendingTurn != 0.0f;
-    rig.snapped = cut || flip || snapTurn;
+    rig.snapped = cut || flip || snapTurn || camCut;
     rig.recentUp = rig.snapped || quiet ? up : xm::normalize(rig.recentUp + (up - rig.recentUp) * blend(dt, 0.07f));
     if (cut) {
         if (centre) {
@@ -171,6 +180,13 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
         rig.forward = xm::length(f) > 1e-3f ? xm::normalize(f) : fwd;
         rig.up = up;
     }
+    if (camCut && !cut) {
+        // The new shot as the game frames it: its facing and up, Mario at
+        // the pivot (the tilt below).
+        rig.pivot = target;
+        rig.up = up;
+        rig.forward = fwd;
+    }
     if (snapTurn) {
         rig.forward = xm::normalize(flatten(turn(rig.forward, rig.up, rig.pendingTurn), rig.up));
     }
@@ -184,7 +200,7 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
         float n = xm::length(along);
         const float deadZone = transit ? 0.0f : params.followDeadZone;  // the camera's framing, exactly
         xm::Vec3 goal = rig.pivot + (d - along) + (n > deadZone ? along * (1.0f - deadZone / n) : xm::Vec3{0, 0, 0});
-        rig.pivot = rig.pivot + (goal - rig.pivot) * blend(dt, params.posHalfLife);
+        rig.pivot = rig.pivot + (goal - rig.pivot) * blend(dt, transit ? params.transitPosHalfLife : params.posHalfLife);
         // The up follows Mario's gently.  While he runs round a small planet
         // away from the player it trails behind, and the eye (placed from the
         // trailing up) sank towards his horizon, then below it and into the
@@ -276,7 +292,11 @@ xm::Mat4 updateRig(RigState& rig, const RigParams& params, const gpu::CameraInfo
             float camElevation = asinf(fminf(1.0f, fmaxf(-1.0f, xm::dot(camBack, rig.up))));
             wantTilt = camElevation - baseElevation;
         }
-        rig.transitPitch += (wantTilt - rig.transitPitch) * blend(dt, transit ? params.rotHalfLife : 2.0f * params.rotHalfLife);  // back more gently
+        if (camCut) {
+            rig.transitPitch = wantTilt;  // with the cut's blink
+        } else {
+            rig.transitPitch += (wantTilt - rig.transitPitch) * blend(dt, transit ? params.rotHalfLife : 2.0f * params.rotHalfLife);  // back more gently
+        }
         rig.transitPitch = fminf(top, fmaxf(params.minPitch, rig.pitch + rig.transitPitch)) - rig.pitch;
         if (dt > 0.0f) rig.turnRate = fmaxf(rig.turnRate, fabsf(rig.pitch + rig.transitPitch - prevPitch) / dt);
     }

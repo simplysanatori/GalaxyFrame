@@ -947,7 +947,9 @@ void GameScene::draw3D() const {
             // watching a point far from him (a door opening elsewhere).  An
             // event camera near him, like the one on the Dino Piranha after
             // each hit, still centres him: the diorama shows that anyway.
-            if (!sShowingElsewhere && !isNerve(GET_NERVE(GameScene, GameSceneScenarioOpeningCamera)) && !(flags & kCameraTransit)) {
+            // Flights (launch stars, pipes, the flight in) centre him too:
+            // the camera's watch point there trails or leads him.
+            if (!sShowingElsewhere && !isNerve(GET_NERVE(GameScene, GameSceneScenarioOpeningCamera))) {
                 flags |= PORT_GX_CAMERA_CENTRE_PLAYER;
             }
             // Is level geometry between the headset and Mario?  The VR layer

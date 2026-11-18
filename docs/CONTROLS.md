@@ -214,22 +214,18 @@ left out (*Passthrough*, *Smooth motion*, *Super resolution*, *Refresh rate*,
 
 **Cutscenes** (dimmed with the giant screen: a cutscene is on the flat screen there anyway)
 
-- **Diorama in flights** (off by default, and not on the panel;
-  `diorama_transitions = 1` in `petari_vr.ini` turns it on): launch stars,
-  pipes and other transits that carry Mario, and the flight into a galaxy,
-  stay in the diorama instead of going back to the flat screen. The world follows the
-  game camera as the screen would show it: its up, the point it watches,
-  its facing and how high it looks from, smoothed (the pivot follows within
-  about 0.12 s, the facing and tilt with the *Turn smoothing* time), with the
-  edges of the view darkened while it swings, and the scenery between you
-  and Mario fading as usual. When it ends the pivot goes back to Mario and
-  the up settles to his without a blink (*Planet turns* smooth; with Steps
-  or Off, one step behind a blink if he landed on another planet), but the
-  view's facing and tilt stay as the flight left them: the diorama carries
-  on from there instead of returning to the old position (a tilt from below
-  Mario rises to just above his horizon over a couple of seconds). Off, the
-  transits and the flight in are shown on the flat screen. The Cutscenes tab
-  does the same for cutscenes.
+- **Diorama in flights** (on by default): launch stars, pipes and other
+  transits that carry Mario, and the flight into a galaxy, stay in the
+  diorama instead of going to the flat screen. Mario stays at the centre,
+  and the world follows the game camera as the screen would show it: when
+  the camera cuts to a new shot, the diorama takes it at once behind a short
+  blink; between cuts it turns with the camera, smoothed with the *Turn
+  smoothing* time. When the flight ends the up settles to Mario's without a
+  blink (*Planet turns* smooth; with Steps or Off, one step behind a blink if
+  he landed on another planet), and the view's facing and tilt stay as the
+  flight left them (a tilt from below Mario rises to just above his horizon
+  over a couple of seconds). Off, the flights are shown on the flat screen.
+  The Cutscenes tab does the same for cutscenes.
 
 Every cutscene the game plays itself, except the videos, can stay in the
 diorama (a switch on, the default) or go to the flat screen (off), by kind.
@@ -517,8 +513,8 @@ turn_with_camera = 0
 # and a transit that lands on another planet does). Also 0, 1, 2.
 gravity_turns = smooth
 # 1: launch stars, pipes and the flight into a galaxy stay in the diorama,
-# following the game camera; 0: they are shown on the flat screen
-diorama_transitions = 0
+# following the game camera's shots; 0: they are shown on the flat screen
+diorama_transitions = 1
 # 1: the edges darken a little at once whenever the view moves smoothly
 # (more the faster); 0: only for turns faster than about 20 degrees a second
 comfort_vignette = 1
