@@ -256,6 +256,7 @@ constexpr Item kDisplayItems[] = {
     {"sharpening", "Sharpening", "A sharper picture (FidelityFX CAS)", kSwitch},
     {"sharpening_strength", "Sharpening strength", "From 0 (least) to 1 (most)", kStepper, 0.0f, 1.0f, 0.1f, "%.1f", sharpenOn},
 #ifndef __ANDROID__
+    {"in_between_frames", "In-between frames", "Mario drawn moving between game frames", kSwitch, 0, 0, 0, nullptr, giantOff},
     {"black_frames", "Black frame insertion", "Clearer motion in the diorama; dimmer, flickers", kSwitch, 0, 0, 0, nullptr, giantOff},
     {"black_frame_boost", "Brightness boost", "Makes up for the black frames", kStepper, 1.0f, 2.0f, 0.1f, "%.1f", blackOn},
     {"black_frame_area", "Black frame area", "Degrees round your gaze; 0 = whole view", kStepper, 0.0f, 60.0f, 5.0f, "%.0f", blackOn},

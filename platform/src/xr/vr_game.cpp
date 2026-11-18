@@ -136,6 +136,24 @@ float sSharpness = 0.5f;      // its strength, 0..1
 // game frame lit on one refresh, black on the next (xr_app.cpp), and the
 // picture boosted by black_frame_boost to make up for the light.
 bool sBlackFrames = false;
+// In-between frames (in_between_frames): the eyes are drawn on every 120 Hz
+// refresh but the game makes 60 frames a second.  The world already moves
+// on every refresh (the rig runs per refresh and the game's draws go back to
+// world space through their own frame's camera), but Mario was drawn where
+// his game frame put him, so the eye following him saw him twice.  His
+// draws (the player markers) are moved along his last step, as far as the
+// time since his frame came says (extrapolated: no added delay).
+bool sInBetween = true;
+struct InBetween {
+    bool have = false;        // the last two game frames had Mario
+    uint64_t frame = 0;       // the newest game frame's number
+    double shownAt = 0.0;     // display time of its first refresh, seconds
+    double period = 1.0 / 60.0;
+    xm::Vec3 pos{0, 0, 0}, step{0, 0, 0};  // Mario's centre (world) and his last step
+    bool ok = false;          // the step may be extrapolated
+    int moved = 0, refreshes = 0, refused = 0;  // for the log
+    double loggedAt = 0.0;
+} sIb;
 float sBlackBoost = 1.5f;
 // black_frame_area: the black covers this many degrees round the eye-tracked
 // gaze (fading out over 10 more); outside, the black refresh shows the lit
@@ -736,6 +754,7 @@ vr::Setting sSettings[] = {
     {"super_resolution", 0.0f, 1.0f, 0.0f, FLAG(sSuperRes)},
     {"sharpening", 0.0f, 1.0f, 0.0f, FLAG(sSharpen)},
     {"sharpening_strength", 0.0f, 1.0f, 0.0f, NUMBER(sSharpness)},
+    {"in_between_frames", 0.0f, 1.0f, 0.0f, FLAG(sInBetween)},
     {"black_frames", 0.0f, 1.0f, 0.0f, FLAG(sBlackFrames)},
     {"black_frame_boost", 1.0f, 2.0f, 0.0f, NUMBER(sBlackBoost)},
     {"black_frame_area", 0.0f, 60.0f, 0.0f, NUMBER(sBlackArea)},
@@ -1447,6 +1466,27 @@ void beginFrame(const FrameInfo& frame) {
     if (r.update()) {
         sLastFrame = r.frameNumber();
         sNewSinceDue = true;
+        // In-between frames: Mario's step from the last game frame.  Not
+        // after a gap, nor a step too long (a warp, a respawn) or too
+        // different from the one before (a launch, a landing, a wall).
+        const gpu::CameraInfo& cam = r.camera();
+        bool player = cam.valid && (cam.flags & PORT_GX_CAMERA_PLAYER);
+        xm::Vec3 pos{cam.player[0], cam.player[1], cam.player[2]};
+        double since = frame.time - sIb.shownAt;
+        if (player && sIb.have && r.frameNumber() == sIb.frame + 1 && since < 0.05) {
+            xm::Vec3 step = pos - sIb.pos;
+            float len = xm::length(step), prevLen = xm::length(sIb.step);
+            sIb.ok = len < 400.0f && xm::length(step - sIb.step) <= fmaxf(40.0f, 0.75f * prevLen);
+            sIb.step = step;
+            sIb.period = fmin(0.05, fmax(1.0 / 90.0, since));
+        } else {
+            sIb.ok = false;
+            sIb.step = {0, 0, 0};
+        }
+        sIb.have = player;
+        sIb.pos = pos;
+        sIb.frame = r.frameNumber();
+        sIb.shownAt = frame.time;
     }
     if (frame.newFrameDue) {
         if (!sNewSinceDue && r.hasFrame()) sRepeats++;
@@ -1692,6 +1732,33 @@ Extent renderEye(int eye, const FrameInfo& frame, const gpu::EfbTarget& dst, int
         ev.eyePos[1] = viewFromEye.at(1, 3);
         ev.eyePos[2] = viewFromEye.at(2, 3);
         ev.depthSnapshot = sMotionOn ? &sSnap[eye] : nullptr;
+        // In-between frames: Mario along his last step, as far as the time
+        // since his game frame came (up to one step; none once the game has
+        // stopped making frames, or on the rig's cuts).
+        {
+            const gpu::CameraInfo& cam = r.camera();
+            double phase = (frame.time - sIb.shownAt) / sIb.period;
+            bool shift = sInBetween && sIb.ok && cam.valid && !sRig.snapped && phase > 0.01 && phase < 1.5;
+            if (shift) {
+                xm::Mat4 viewFromWorld = xm::fromRows3x4(cam.view);
+                xm::Mat4 move = xm::translation(sIb.step * (float)fmin(1.0, phase));
+                xm::Mat4 playerFromView = sStageFromView * viewFromWorld * move * xm::inverse(viewFromWorld);
+                toRowMajor(ei.view * playerFromView, ev.playerView);
+                ev.playerShift = true;
+            }
+            if (eye == 0) {
+                sIb.refreshes++;
+                if (shift) sIb.moved++;
+                if (sInBetween && !sIb.ok && sIb.have) sIb.refused++;
+                if (frame.time - sIb.loggedAt >= 10.0) {
+                    if (sIb.loggedAt > 0.0 && sInBetween) {
+                        port_log("vr: in-between frames: Mario moved on %d of %d refreshes (%d with no step to use)", sIb.moved, sIb.refreshes, sIb.refused);
+                    }
+                    sIb.loggedAt = frame.time;
+                    sIb.moved = sIb.refreshes = sIb.refused = 0;
+                }
+            }
+        }
         r.render(sEye[eye], &ev, &sHud, eye == 0 ? gpu::HudMode::Target : gpu::HudMode::Skip);
         if (eye == 0) {
             // A HUD target left as it was (the frame's HUD already in it)

@@ -1633,6 +1633,13 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
     // A VR eye, as opposed to a flat replay or one of its stereo pair.
     bool vrEye = eye && !eye->flatStereo;
     u32 eyeOffset = allocEye(eb);
+    // In-between frames: a second block for Mario's draws, bound around them.
+    u32 playerOffset = eyeOffset;
+    if (vrEye && eye->playerShift) {
+        EyeBlock pb = eb;
+        for (int i = 0; i < 16; i++) pb.vrView[i / 4][i % 4] = eye->playerView[i];
+        playerOffset = allocEye(pb);
+    }
     // With the cutaway on, 3D draws use their cutaway variants, compiled in
     // the background on first use (a draw keeps its plain pipeline until
     // then).  The variants are only used while needed: their discard costs
@@ -1735,6 +1742,7 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
     for (UnitMemo& m : memo) m.tr = ~0u;
     FrameData& fd = *P.data;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes.layout, kVkSetBuffers, 1, &fd.set, 1, &eyeOffset);
+    u32 boundEyeOffset = eyeOffset;
     vkCmdBindIndexBuffer(cmd, fd.buf.buffer, fd.off[kIndices], VK_INDEX_TYPE_UINT32);
     Img& dummyImg = sImages[dummy];
 
@@ -1796,6 +1804,13 @@ void VkImpl::execute(Target& efb, const EyeView* eye, Target* hud, HudMode hudMo
         if (!pipe) {
             skipped++;  // still compiling (GLES: program 0)
             continue;
+        }
+        if (playerOffset != eyeOffset) {
+            u32 want = it.player && it.useVr ? playerOffset : eyeOffset;
+            if (want != boundEyeOffset) {
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes.layout, kVkSetBuffers, 1, &fd.set, 1, &want);
+                boundEyeOffset = want;
+            }
         }
         // A batch of many small runs of pixel states (sprites, glyphs,
         // particles with their own colours) is drawn whole with the

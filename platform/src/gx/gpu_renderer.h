@@ -95,6 +95,11 @@ struct EyeView {
     // the scene depth marker the depth and stencil are copied into the
     // target (a depth-stencil target of any size, see createDepthTarget).
     Target* depthSnapshot = nullptr;
+    // In-between frames: the 3D draws between the player markers (Mario and
+    // what he wears) go through playerView instead of view, which moves him
+    // along his last step between two game frames.  Vulkan only.
+    bool playerShift = false;
+    float playerView[16];
 };
 
 // The graphics API behind the renderer.

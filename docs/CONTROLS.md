@@ -360,6 +360,13 @@ it (`GameScene.cpp`), so a scene the words miss counts as *Other scenes*.
   contrast adaptive sharpening as the app puts it into the eye images (and
   scales it up there when Super Resolution is off). **Sharpening strength** goes
   from 0 (least) to 1 (most), 0.5 by default.
+- **In-between frames** (Steam Frame, on by default; dimmed on the giant
+  screen): the eyes are drawn 120 times a second but the game makes 60
+  frames, so Mario moved in steps while the world around him glided, and
+  the eye following him saw him twice. On the refreshes between game
+  frames he is drawn further along his last step (with what he wears).
+  Other moving things (enemies, platforms, effects) still move in the
+  game's steps.
 - **Black frame insertion** (Steam Frame, off by default; dimmed on the
   giant screen): in the diorama each game frame is shown on one refresh
   and the refresh after it is black, so Mario and anything else your eyes
@@ -475,6 +482,8 @@ sharpening_strength = 0.5
 # brightness boost that makes up for it (1.0 to 2.0); with eye tracking the
 # black covers black_frame_area degrees round the gaze (0: the whole view),
 # and further out the picture shows again at (boost - 1) of its light.
+# 1: Mario is drawn moving on the refreshes between game frames (Steam Frame)
+in_between_frames = 1
 black_frames = 0
 black_frame_boost = 1.5
 black_frame_area = 15
